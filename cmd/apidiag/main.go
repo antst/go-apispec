@@ -22,6 +22,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -34,7 +35,78 @@ import (
 //go:embed server_ui.html
 var serverUITemplate embed.FS
 
-// ServerConfig holds configuration for the diagram server
+// Version info - can be injected at build time via -ldflags or detected at runtime
+var (
+	Version   = "0.0.1" // Default version, overridden by -ldflags or runtime detection
+	Commit    = "unknown"
+	BuildDate = "unknown"
+	GoVersion = "unknown"
+)
+
+// detectVersionInfo attempts to detect version information at runtime
+func detectVersionInfo() {
+	// If version info was already injected via -ldflags, don't override it
+	if Version != "0.0.1" {
+		return
+	}
+
+	// Try to get build info from runtime/debug
+	if info, ok := debug.ReadBuildInfo(); ok {
+		// Always get Go version from build info
+		if info.GoVersion != "" {
+			GoVersion = info.GoVersion
+		}
+
+		// Get version from build info (usually the module version or VCS tag)
+		if info.Main.Version != "" && info.Main.Version != "(devel)" {
+			Version = info.Main.Version
+		}
+
+		// Extract commit, build time, and other VCS info from build settings
+		hasVCSInfo := false
+		isModified := false
+		for _, setting := range info.Settings {
+			switch setting.Key {
+			case "vcs.revision":
+				hasVCSInfo = true
+				if len(setting.Value) >= 7 {
+					Commit = setting.Value[:7] // Short commit hash
+				} else {
+					Commit = setting.Value
+				}
+			case "vcs.time":
+				hasVCSInfo = true
+				BuildDate = setting.Value
+			case "vcs.modified":
+				if setting.Value == "true" {
+					isModified = true
+				}
+			}
+		}
+
+		// Add dirty flag if modified (but only if we don't already have it)
+		if isModified && !strings.Contains(Version, "+dirty") {
+			Version += "+dirty"
+		}
+
+		// If we have VCS info but no version, we're likely in development
+		if hasVCSInfo && Version == "0.0.1" {
+			Version = "dev"
+		}
+	}
+}
+
+func printVersion() {
+	// Detect version info if not already set via -ldflags
+	detectVersionInfo()
+
+	fmt.Printf("apidiag version: %s\n", Version)
+	fmt.Printf("Commit: %s\n", Commit)
+	fmt.Printf("Build date: %s\n", BuildDate)
+	fmt.Printf("Go version: %s\n", GoVersion)
+}
+
+// ServerConfig holds configuration for the API diagram server
 type ServerConfig struct {
 	Port             int
 	Host             string
@@ -47,6 +119,7 @@ type ServerConfig struct {
 	Verbose          bool
 	AutoExcludeTests bool
 	AutoExcludeMocks bool
+	ShowVersion      bool
 }
 
 // DiagramServer handles HTTP requests for paginated diagram data
@@ -79,6 +152,12 @@ type ErrorResponse struct {
 func main() {
 	config := parseFlags()
 
+	// Handle version flag early
+	if config.ShowVersion {
+		printVersion()
+		os.Exit(0)
+	}
+
 	// Create server
 	server := NewDiagramServer(config)
 
@@ -92,7 +171,7 @@ func main() {
 
 	// Start server
 	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
-	log.Printf("🚀 Diagram server starting on http://%s", addr)
+	log.Printf("🚀 API Diagram server starting on http://%s", addr)
 	log.Printf("📊 Serving paginated diagrams for: %s", config.InputDir)
 	log.Printf("⚙️  Page size: %d, Max depth: %d", config.PageSize, config.MaxDepth)
 
@@ -104,6 +183,10 @@ func main() {
 func parseFlags() *ServerConfig {
 	config := &ServerConfig{}
 
+	// Version flag
+	flag.BoolVar(&config.ShowVersion, "version", false, "Show version information")
+	flag.BoolVar(&config.ShowVersion, "V", false, "Shorthand for --version")
+
 	flag.IntVar(&config.Port, "port", 8080, "Server port")
 	flag.StringVar(&config.Host, "host", "localhost", "Server host")
 	flag.StringVar(&config.InputDir, "dir", ".", "Input directory containing Go source files")
@@ -113,13 +196,14 @@ func parseFlags() *ServerConfig {
 	flag.DurationVar(&config.CacheTimeout, "cache-timeout", 5*time.Minute, "Cache timeout for metadata")
 	flag.StringVar(&config.StaticDir, "static", "", "Directory to serve static files from")
 	flag.BoolVar(&config.Verbose, "verbose", false, "Enable verbose logging")
+	flag.BoolVar(&config.Verbose, "v", false, "Shorthand for --verbose")
 	flag.BoolVar(&config.AutoExcludeTests, "auto-exclude-tests", true, "Auto-exclude test files")
 	flag.BoolVar(&config.AutoExcludeMocks, "auto-exclude-mocks", true, "Auto-exclude mock files")
 	flag.BoolVar(&config.AutoExcludeTests, "aet", true, "Shorthand for --auto-exclude-tests")
 	flag.BoolVar(&config.AutoExcludeMocks, "aem", true, "Shorthand for --auto-exclude-mocks")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "APISpec Diagram Server - Serves paginated call graph diagrams\n\n")
+		fmt.Fprintf(os.Stderr, "APISpec API Diagram Server - Serves paginated call graph diagrams\n\n")
 		fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n\nFlags:\n", os.Args[0])
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
@@ -504,7 +588,12 @@ func (s *DiagramServer) handleExport(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, "Failed to generate JSON export", http.StatusInternalServerError)
 			return
 		}
-		w.Write(jsonData)
+		_, err = w.Write(jsonData)
+		if err != nil {
+			s.writeError(w, "Failed to write JSON export", http.StatusInternalServerError)
+			return
+		}
+		return
 
 	default:
 		// For other formats, return a message directing users to use the client-side export
@@ -854,7 +943,11 @@ func (s *DiagramServer) writeResponse(w http.ResponseWriter, data string, conten
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	}
 
-	w.Write([]byte(data))
+	_, err := w.Write([]byte(data))
+	if err != nil {
+		s.writeError(w, "Failed to write response", http.StatusInternalServerError)
+		return
+	}
 }
 
 // writeError writes an error response
@@ -874,5 +967,9 @@ func (s *DiagramServer) writeError(w http.ResponseWriter, message string, code i
 		Code:    code,
 	}
 
-	json.NewEncoder(w).Encode(errorResp)
+	err := json.NewEncoder(w).Encode(errorResp)
+	if err != nil {
+		s.writeError(w, "Failed to write error response", http.StatusInternalServerError)
+		return
+	}
 }
