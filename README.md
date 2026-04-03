@@ -1,6 +1,6 @@
 # go-apispec: Generate OpenAPI from Go code
 
-![Coverage](https://img.shields.io/badge/coverage-67.1%25-red.svg)
+![Coverage](https://img.shields.io/badge/coverage-67.0%25-red.svg)
 
 [![Go Version](https://img.shields.io/badge/go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/antst/go-apispec/blob/main/LICENSE)
