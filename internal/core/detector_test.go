@@ -116,12 +116,12 @@ var _ = ` + tt.name + `.New
 				t.Fatal(err)
 			}
 			detector := NewFrameworkDetector()
-			fw, err := detector.Detect(tempDir)
+			fws, err := detector.Detect(tempDir)
 			if err != nil {
 				t.Fatalf("Detect failed: %v", err)
 			}
-			if fw != tt.expected {
-				t.Errorf("Expected %s, got %s", tt.expected, fw)
+			if len(fws) == 0 || fws[0] != tt.expected {
+				t.Errorf("Expected [%s], got %v", tt.expected, fws)
 			}
 		})
 	}
@@ -133,12 +133,12 @@ func TestDetect_SkipsUnparsableFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	detector := NewFrameworkDetector()
-	fw, err := detector.Detect(tempDir)
+	fws, err := detector.Detect(tempDir)
 	if err != nil {
 		t.Fatalf("Detect failed: %v", err)
 	}
-	if fw != "net/http" {
-		t.Errorf("Expected net/http fallback, got %s", fw)
+	if len(fws) != 1 || fws[0] != "net/http" {
+		t.Errorf("Expected [net/http] fallback, got %v", fws)
 	}
 }
 
