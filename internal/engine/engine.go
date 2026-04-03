@@ -411,35 +411,44 @@ func (e *Engine) generateDiagram(meta *metadata.Metadata) error {
 	return nil
 }
 
+// defaultConfigForFramework returns the built-in config for a framework name.
+func defaultConfigForFramework(name string) *spec.APISpecConfig {
+	switch name {
+	case "gin":
+		return spec.DefaultGinConfig()
+	case "chi":
+		return spec.DefaultChiConfig()
+	case "echo":
+		return spec.DefaultEchoConfig()
+	case "fiber":
+		return spec.DefaultFiberConfig()
+	case "mux":
+		return spec.DefaultMuxConfig()
+	default:
+		return spec.DefaultHTTPConfig()
+	}
+}
+
 // loadOrDetectConfig loads or auto-detects the API spec configuration.
 // When a config file is provided, it is merged with the auto-detected
 // framework defaults — absent sections fall back to built-in patterns.
+// Supports multiple frameworks: patterns from all detected frameworks are merged.
 func (e *Engine) loadOrDetectConfig() (*spec.APISpecConfig, error) {
 	if e.config.APISpecConfig != nil {
 		return e.config.APISpecConfig, nil
 	}
 
-	// Always detect framework for defaults
+	// Detect all frameworks used in the project
 	detector := core.NewFrameworkDetector()
-	framework, err := detector.Detect(e.config.moduleRoot)
+	frameworks, err := detector.Detect(e.config.moduleRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect framework: %w", err)
 	}
 
-	var defaults *spec.APISpecConfig
-	switch framework {
-	case "gin":
-		defaults = spec.DefaultGinConfig()
-	case "chi":
-		defaults = spec.DefaultChiConfig()
-	case "echo":
-		defaults = spec.DefaultEchoConfig()
-	case "fiber":
-		defaults = spec.DefaultFiberConfig()
-	case "mux":
-		defaults = spec.DefaultMuxConfig()
-	default:
-		defaults = spec.DefaultHTTPConfig()
+	// Build merged defaults from all detected frameworks
+	defaults := defaultConfigForFramework(frameworks[0])
+	for _, fw := range frameworks[1:] {
+		appendFrameworkPatterns(defaults, defaultConfigForFramework(fw))
 	}
 
 	if e.config.ConfigFile == "" {
@@ -490,6 +499,17 @@ func mergeConfigWithDefaults(userCfg, defaults *spec.APISpecConfig) {
 	if userCfg.Defaults.ResponseStatus == 0 {
 		userCfg.Defaults.ResponseStatus = defaults.Defaults.ResponseStatus
 	}
+}
+
+// appendFrameworkPatterns appends all patterns from src into dst.
+// Used to merge multiple detected framework configs into one.
+func appendFrameworkPatterns(dst, src *spec.APISpecConfig) {
+	dst.Framework.RoutePatterns = append(dst.Framework.RoutePatterns, src.Framework.RoutePatterns...)
+	dst.Framework.RequestBodyPatterns = append(dst.Framework.RequestBodyPatterns, src.Framework.RequestBodyPatterns...)
+	dst.Framework.ResponsePatterns = append(dst.Framework.ResponsePatterns, src.Framework.ResponsePatterns...)
+	dst.Framework.ParamPatterns = append(dst.Framework.ParamPatterns, src.Framework.ParamPatterns...)
+	dst.Framework.MountPatterns = append(dst.Framework.MountPatterns, src.Framework.MountPatterns...)
+	dst.Framework.ContentTypePatterns = append(dst.Framework.ContentTypePatterns, src.Framework.ContentTypePatterns...)
 }
 
 // applyConfigDefaults fills in missing config fields from engine defaults
