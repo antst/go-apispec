@@ -7,8 +7,6 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/antst/go-apispec/blob/main/LICENSE)
 [![Go Reference](https://pkg.go.dev/badge/github.com/antst/go-apispec.svg)](https://pkg.go.dev/github.com/antst/go-apispec)
 
-> This project originated as a fork of [apispec](https://github.com/ehabterra/apispec) by Ehab Terra. It has since been substantially rewritten — the core analysis pipeline, pattern matching, type resolution, schema generation, and test infrastructure have been reworked. The original codebase provided the foundational architecture; the current implementation diverges significantly.
-
 **go-apispec** analyzes your Go source code and generates an OpenAPI 3.1 spec (YAML or JSON). Point it at your module — it detects the framework, follows the call graph from routes to handlers, and infers request/response types from real code.
 
 ## Quick Start
@@ -21,42 +19,11 @@ go install github.com/antst/go-apispec/cmd/apispec@latest
 apispec --dir ./your-project --output openapi.yaml
 ```
 
-That's it. The tool detects your framework (Gin, Echo, Chi, Fiber, Gorilla Mux, net/http), finds all routes, resolves handler types, and writes the spec.
+That's it. The tool detects your framework, finds all routes, resolves handler types, and writes the spec.
 
-## What's Different from the Original
+## Features
 
-| Area | Change |
-|------|--------|
-| **Deterministic output** | Sorted map keys in YAML/JSON — identical output across runs, safe for CI diffing |
-| **Short names** | operationIds and schema names strip Go module paths by default (`DocumentHandler.GetContent` not `github.com/org/.../http.Deps.DocumentHandler.GetContent`) |
-| **`[]byte` binary mapping** | `w.Write(data)` where data is `[]byte` produces `type: string, format: binary` |
-| **Multiple response types** | Same status code with different types produces `oneOf` schema |
-| **Required field inference** | Fields without `json:",omitempty"` are automatically `required` |
-| **Binding tag support** | Gin's `binding:"required"` parsed for required field detection |
-| **Implicit 200 inference** | Handlers that write a body without `WriteHeader` get `200`, not `default` |
-| **stdlib write detection** | `fmt.Fprintf`, `io.Copy`, `io.WriteString` detected as response writes |
-| **Bodyless status codes** | 1xx, 204, 304 never get body schemas (per RFC 7231) |
-| **WriteHeader+Encode merge** | `w.WriteHeader(201); json.Encode(user)` correctly produces 201 response with User schema |
-| **Config merging** | `--config` merges with auto-detected framework defaults instead of replacing them |
-| **Content-Type inference** | `w.Header().Set("Content-Type", "image/png")` → response uses `image/png` instead of default `application/json` |
-| **Status code variables** | `status := http.StatusCreated; w.WriteHeader(status)` → correctly resolves to 201 |
-| **Mux.Vars() params** | `vars["id"]` map index expressions detected as path parameter names |
-| **Validator `dive` tag** | `validate:"dive,email"` on `[]string` → items schema has `format: email` |
-| **Decode receiver tracing** | `json.NewDecoder(file).Decode(&cfg)` not misclassified as request body |
-| **io.Copy source tracing** | `io.Copy(w, strings.NewReader(...))` → `type: string`; `io.Copy(w, file)` → `format: binary` |
-| **Route path variables** | `path := "/users"; r.GET(path, h)` → resolves variable to literal path |
-| **Conditional HTTP methods** | `switch r.Method { case "GET": ... case "POST": ... }` produces separate operations per method via CFG analysis |
-| **Generic struct instantiation** | `APIResponse[User]` generates schema with `Data: $ref User, Error: string` |
-| **Interface resolution** | Handlers registered via interface are resolved to concrete implementations |
-| **Control-flow graph** | `golang.org/x/tools/go/cfg` provides branch context for conditional analysis |
-| **Cross-function status codes** | `w.WriteHeader(getStatus())` where `getStatus()` returns a constant → correctly resolved |
-| **Architecture cleanup** | Shared BasePattern/MatchNode/resolveTypeOrigin, unified visitor, decomposed processArguments |
-| **Bug fixes** | Mux spurious params, Fiber double mount paths, index expression types, `minimum: 0` serialization |
-| **Test coverage** | `internal/spec`: 46% → 81%. Golden-file regression tests for all frameworks. |
-
-Use `--short-names=false` to get the original fully-qualified naming if your tooling depends on it.
-
-## Supported Frameworks
+### Framework Support
 
 | Framework | Routes | Params | Request Body | Responses | Mounting/Groups |
 |-----------|--------|--------|-------------|-----------|-----------------|
@@ -67,7 +34,53 @@ Use `--short-names=false` to get the original fully-qualified naming if your too
 | **Gorilla Mux** | Full | Path template `{id}` | `json.Decode` | `json.Encode`, `w.Write` | `PathPrefix`, `Subrouter` |
 | **net/http** | Basic | Path template | `json.Decode` | `json.Encode`, `w.Write`, `http.Error` | — |
 
+Projects using **multiple frameworks** simultaneously are fully supported — all routes from all detected frameworks appear in the spec.
+
 All frameworks also detect `fmt.Fprintf`, `io.Copy`, and `io.WriteString` as response writes.
+
+### Analysis Capabilities
+
+**Response Detection**
+- Content-Type inference from `w.Header().Set("Content-Type", "image/png")`
+- `WriteHeader(201)` + `json.Encode(user)` merged into a single 201 response with schema
+- Status code variable resolution: `status := http.StatusCreated; w.WriteHeader(status)` → 201
+- Cross-function status codes: `w.WriteHeader(getStatus())` where `getStatus()` returns a constant
+- Multiple response types for the same status code → `oneOf` schema
+- `[]byte` responses → `type: string, format: binary`
+- Bodyless status codes (1xx, 204, 304) never get body schemas (per RFC 7231)
+- Implicit 200 for handlers that write a body without explicit `WriteHeader`
+
+**Type Resolution**
+- Generic struct instantiation: `APIResponse[User]` → schema with `Data: $ref User`
+- Interface resolution: handlers registered via interface → concrete implementation schemas
+- Conditional HTTP methods via CFG: `switch r.Method { case "GET": ... case "POST": ... }` → separate operations
+- Route path variables: `path := "/users"; r.GET(path, h)` → resolves variable to literal path
+- Decode receiver tracing: `json.NewDecoder(file).Decode(&cfg)` not misclassified as request body
+- io.Copy source tracing: `io.Copy(w, strings.NewReader(...))` → `type: string`; `io.Copy(w, file)` → `format: binary`
+
+**Schema Inference**
+- Required fields from `json:",omitempty"` absence and `binding:"required"` tags
+- Validator `dive` tag: `validate:"dive,email"` on `[]string` → items schema has `format: email`
+- `Mux.Vars()` map index expressions → path parameter names
+- Type mappings for `time.Time`, `uuid.UUID`, and custom types
+
+**Output Quality**
+- Deterministic YAML/JSON — sorted map keys, identical output across runs, safe for CI diffing
+- Short names by default — `DocumentHandler.GetContent` instead of `github.com/org/.../http.Deps.DocumentHandler.GetContent`
+- Config merging — `--config` extends auto-detected framework defaults instead of replacing them
+
+### Call Graph Visualization
+
+Interactive Cytoscape.js diagrams with:
+- Hierarchical tree layout with zoom, pan, and click-to-highlight
+- CFG branch coloring: green (if-then), red dashed (if-else), purple (switch-case)
+- Branch labels showing case values (e.g., "GET", "POST")
+- Paginated mode for large graphs (1000+ edges)
+- PNG/SVG export
+
+```bash
+apispec --dir ./my-project --output openapi.yaml --diagram diagram.html
+```
 
 ## Usage
 
@@ -163,7 +176,7 @@ externalTypes:
     openapiType: { type: object, additionalProperties: true }
 ```
 
-Full configuration examples for each framework: [docs/CONFIGURATION.md](docs/) (see the `Default*Config()` functions in `internal/spec/config.go` for the built-in patterns).
+Full configuration examples for each framework: see the `Default*Config()` functions in `internal/spec/config.go` for the built-in patterns.
 
 ## How It Works
 
@@ -174,7 +187,7 @@ Go source → Package loading & type-checking → Framework detection
 ```
 
 1. Loads and type-checks all Go packages in the module
-2. Detects the web framework from `go.mod` dependencies
+2. Detects web frameworks from imports (supports multiple frameworks simultaneously)
 3. Builds a call graph from router registrations to handlers
 4. Builds a control-flow graph (CFG) via `golang.org/x/tools/go/cfg` for branch analysis
 5. Matches route, request, response, and parameter patterns against the call graph
@@ -184,9 +197,7 @@ Go source → Package loading & type-checking → Framework detection
 
 ## Known Limitations
 
-### Static Analysis Limitations
-
-These are inherent to the approach of analyzing code without executing it:
+These are inherent to static analysis — analyzing code without executing it:
 
 | Limitation | Example | What Happens |
 |-----------|---------|-------------|
@@ -268,3 +279,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). In short:
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).
+
+Originally forked from [apispec](https://github.com/ehabterra/apispec) by Ehab Terra.
