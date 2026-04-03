@@ -1,9 +1,23 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
 	"testing"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 // TestExtractorWithMockTrackerTree demonstrates proper use of MockTrackerTree for extractor testing
@@ -35,11 +49,9 @@ func TestExtractorWithMockTrackerTree(t *testing.T) {
 	cfg := &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:      "NewRouter",
-					MethodFromCall: true,
-					PathFromArg:    true,
-					PathArgIndex:   0,
+				{BasePattern: BasePattern{CallRegex: "NewRouter"}, MethodFromCall: true,
+					PathFromArg:  true,
+					PathArgIndex: 0,
 				},
 			},
 		},
@@ -97,11 +109,9 @@ func TestPatternMatchersWithMockNodes(t *testing.T) {
 	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
 
 	// Test route pattern matcher
-	routePattern := RoutePattern{
-		CallRegex:      "Get",
-		MethodFromCall: true,
-		PathFromArg:    true,
-		PathArgIndex:   0,
+	routePattern := RoutePattern{BasePattern: BasePattern{CallRegex: "Get"}, MethodFromCall: true,
+		PathFromArg:  true,
+		PathArgIndex: 0,
 	}
 
 	matcher := NewRoutePatternMatcher(routePattern, cfg, contextProvider, typeResolver)
@@ -364,7 +374,7 @@ func TestMockTrackerTree_EdgeCases(t *testing.T) {
 
 	// Test traversal of empty tree
 	visitCount := 0
-	mockTree.TraverseTree(func(node TrackerNodeInterface) bool {
+	mockTree.TraverseTree(func(_ TrackerNodeInterface) bool {
 		visitCount++
 		return true
 	})
@@ -409,7 +419,7 @@ func TestMockTrackerTree_EarlyTermination(t *testing.T) {
 
 	// Test early termination after first node
 	visitCount := 0
-	mockTree.TraverseTree(func(node TrackerNodeInterface) bool {
+	mockTree.TraverseTree(func(_ TrackerNodeInterface) bool {
 		visitCount++
 		return false // Stop after first node
 	})
@@ -420,7 +430,7 @@ func TestMockTrackerTree_EarlyTermination(t *testing.T) {
 
 	// Test normal traversal
 	visitCount = 0
-	mockTree.TraverseTree(func(node TrackerNodeInterface) bool {
+	mockTree.TraverseTree(func(_ TrackerNodeInterface) bool {
 		visitCount++
 		return true // Continue traversal
 	})

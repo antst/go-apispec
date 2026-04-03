@@ -1,10 +1,24 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
 	"net/http"
 	"regexp"
 
-	"github.com/ehabterra/apispec/pkg/patterns"
+	"github.com/antst/go-apispec/pkg/patterns"
 )
 
 const (
@@ -29,6 +43,124 @@ type FrameworkConfig struct {
 
 	// Mount/subrouter patterns
 	MountPatterns []MountPattern `yaml:"mountPatterns"`
+
+	// Content-Type extraction patterns (matches Header().Set("Content-Type", value))
+	ContentTypePatterns []ContentTypePattern `yaml:"contentTypePatterns,omitempty"`
+}
+
+// BasePattern contains the shared matching fields used by all pattern types.
+type BasePattern struct {
+	CallRegex              string   `yaml:"callRegex,omitempty"`
+	FunctionNameRegex      string   `yaml:"functionNameRegex,omitempty"`
+	RecvType               string   `yaml:"recvType,omitempty"`
+	RecvTypeRegex          string   `yaml:"recvTypeRegex,omitempty"`
+	CallerPkgPatterns      []string `yaml:"callerPkgPatterns,omitempty"`
+	CallerRecvTypePatterns []string `yaml:"callerRecvTypePatterns,omitempty"`
+	CalleePkgPatterns      []string `yaml:"calleePkgPatterns,omitempty"`
+	CalleeRecvTypePatterns []string `yaml:"calleeRecvTypePatterns,omitempty"`
+}
+
+// ContentTypePattern defines how to extract Content-Type from header calls.
+type ContentTypePattern struct {
+	BasePattern         `yaml:",inline"`
+	HeaderNameArgIndex  int `yaml:"headerNameArgIndex,omitempty"`
+	HeaderValueArgIndex int `yaml:"headerValueArgIndex,omitempty"`
+}
+
+// RoutePattern defines how to extract route information
+type RoutePattern struct {
+	BasePattern `yaml:",inline"`
+
+	// Argument extraction hints
+	MethodArgIndex  int `yaml:"methodArgIndex,omitempty"`  // Which arg contains HTTP method
+	PathArgIndex    int `yaml:"pathArgIndex,omitempty"`    // Which arg contains path
+	HandlerArgIndex int `yaml:"handlerArgIndex,omitempty"` // Which arg contains handler
+
+	// Extraction hints
+	MethodFromCall    bool `yaml:"methodFromCall,omitempty"`    // Extract method from function name
+	MethodFromHandler bool `yaml:"methodFromHandler,omitempty"` // Extract method from handler function name
+	PathFromArg       bool `yaml:"pathFromArg,omitempty"`       // Extract path from argument
+	HandlerFromArg    bool `yaml:"handlerFromArg,omitempty"`    // Extract handler from argument
+
+	// Method extraction configuration
+	MethodExtraction *MethodExtractionConfig `yaml:"methodExtraction,omitempty"`
+}
+
+// RequestBodyPattern defines how to extract request body information
+type RequestBodyPattern struct {
+	BasePattern `yaml:",inline"`
+
+	// Argument extraction hints
+	TypeArgIndex int `yaml:"typeArgIndex,omitempty"` // Which arg contains type info
+
+	// Extraction hints
+	TypeFromArg    bool `yaml:"typeFromArg,omitempty"`    // Extract type from argument
+	TypeFromReturn bool `yaml:"typeFromReturn,omitempty"` // Extract type from return value
+	Deref          bool `yaml:"deref,omitempty"`          // Dereference pointer types
+
+	// Context-aware validation
+	AllowForGetMethods bool `yaml:"allowForGetMethods,omitempty"` // Allow this pattern for GET/HEAD methods
+}
+
+// ResponsePattern defines how to extract response information
+type ResponsePattern struct {
+	BasePattern `yaml:",inline"`
+
+	// Argument extraction hints
+	StatusArgIndex int `yaml:"statusArgIndex,omitempty"` // Which arg contains status code
+	TypeArgIndex   int `yaml:"typeArgIndex,omitempty"`   // Which arg contains type info
+
+	// Extraction hints
+	StatusFromArg bool `yaml:"statusFromArg,omitempty"` // Extract status from argument
+	TypeFromArg   bool `yaml:"typeFromArg,omitempty"`   // Extract type from argument
+	Deref         bool `yaml:"deref,omitempty"`         // Dereference pointer types
+	// DefaultStatus specifies a fallback status code when it can't be extracted from args
+	DefaultStatus int `yaml:"defaultStatus,omitempty"`
+	// DefaultContentType overrides the config default content type when set
+	DefaultContentType string `yaml:"defaultContentType,omitempty"`
+	// DefaultBodyType specifies a fixed body type when the function writes a
+	// response but has no type argument to extract (e.g., fmt.Fprintf → "string",
+	// io.Copy → "[]byte"). Used only when TypeFromArg is false.
+	DefaultBodyType string `yaml:"defaultBodyType,omitempty"`
+}
+
+// ParamPattern defines how to extract parameter information
+type ParamPattern struct {
+	BasePattern `yaml:",inline"`
+
+	// Parameter location and extraction
+	ParamIn       string `yaml:"paramIn,omitempty"`       // path, query, header, cookie
+	ParamArgIndex int    `yaml:"paramArgIndex,omitempty"` // Which arg contains parameter
+	TypeArgIndex  int    `yaml:"typeArgIndex,omitempty"`  // Which arg contains type info
+
+	// Extraction hints
+	TypeFromArg bool `yaml:"typeFromArg,omitempty"` // Extract type from argument
+	Deref       bool `yaml:"deref,omitempty"`       // Dereference pointer types
+}
+
+// MountPattern defines how to extract mount/subrouter information
+type MountPattern struct {
+	BasePattern `yaml:",inline"`
+
+	// Argument extraction hints
+	PathArgIndex   int `yaml:"pathArgIndex,omitempty"`   // Which arg contains mount path
+	RouterArgIndex int `yaml:"routerArgIndex,omitempty"` // Which arg contains router
+
+	// Extraction hints
+	PathFromArg   bool `yaml:"pathFromArg,omitempty"`   // Extract path from argument
+	RouterFromArg bool `yaml:"routerFromArg,omitempty"` // Extract router from argument
+	IsMount       bool `yaml:"isMount,omitempty"`       // This is a mount operation
+}
+
+// defaultContentTypePatterns returns the standard Content-Type extraction
+// patterns used by all framework configs.
+func defaultContentTypePatterns() []ContentTypePattern {
+	return []ContentTypePattern{
+		{BasePattern: BasePattern{CallRegex: `^Set$`,
+			RecvTypeRegex: `^net/http\.Header$`}, HeaderNameArgIndex: 0,
+			HeaderValueArgIndex: 1,
+		},
+	}
 }
 
 // MethodMapping defines how to extract HTTP methods from function names
@@ -51,137 +183,6 @@ type MethodExtractionConfig struct {
 	// Fallback behavior
 	DefaultMethod    string `yaml:"defaultMethod,omitempty"`    // Default method when none found
 	InferFromContext bool   `yaml:"inferFromContext,omitempty"` // Try to infer from call context
-}
-
-// RoutePattern defines how to extract route information
-type RoutePattern struct {
-	// Function call patterns to match
-	CallRegex         string `yaml:"callRegex,omitempty"`         // e.g., '^BindJSON$'
-	FunctionNameRegex string `yaml:"functionNameRegex,omitempty"` // e.g., '.*Handler$'
-	RecvType          string `yaml:"recvType,omitempty"`          // e.g., 'context.Context'
-	RecvTypeRegex     string `yaml:"recvTypeRegex,omitempty"`     // e.g., '^context\.Context$'
-
-	// Argument extraction hints
-	MethodArgIndex  int `yaml:"methodArgIndex,omitempty"`  // Which arg contains HTTP method
-	PathArgIndex    int `yaml:"pathArgIndex,omitempty"`    // Which arg contains path
-	HandlerArgIndex int `yaml:"handlerArgIndex,omitempty"` // Which arg contains handler
-
-	// Extraction hints
-	MethodFromCall    bool `yaml:"methodFromCall,omitempty"`    // Extract method from function name
-	MethodFromHandler bool `yaml:"methodFromHandler,omitempty"` // Extract method from handler function name
-	PathFromArg       bool `yaml:"pathFromArg,omitempty"`       // Extract path from argument
-	HandlerFromArg    bool `yaml:"handlerFromArg,omitempty"`    // Extract handler from argument
-
-	// Method extraction configuration
-	MethodExtraction *MethodExtractionConfig `yaml:"methodExtraction,omitempty"`
-
-	// Package/type filtering
-	CallerPkgPatterns      []string `yaml:"callerPkgPatterns,omitempty"`
-	CallerRecvTypePatterns []string `yaml:"callerRecvTypePatterns,omitempty"`
-	CalleePkgPatterns      []string `yaml:"calleePkgPatterns,omitempty"`
-	CalleeRecvTypePatterns []string `yaml:"calleeRecvTypePatterns,omitempty"`
-}
-
-// RequestBodyPattern defines how to extract request body information
-type RequestBodyPattern struct {
-	// Function call patterns to match
-	CallRegex         string `yaml:"callRegex,omitempty"`
-	FunctionNameRegex string `yaml:"functionNameRegex,omitempty"`
-	RecvType          string `yaml:"recvType,omitempty"`
-	RecvTypeRegex     string `yaml:"recvTypeRegex,omitempty"`
-
-	// Argument extraction hints
-	TypeArgIndex int `yaml:"typeArgIndex,omitempty"` // Which arg contains type info
-
-	// Extraction hints
-	TypeFromArg    bool `yaml:"typeFromArg,omitempty"`    // Extract type from argument
-	TypeFromReturn bool `yaml:"typeFromReturn,omitempty"` // Extract type from return value
-	Deref          bool `yaml:"deref,omitempty"`          // Dereference pointer types
-
-	// Context-aware validation
-	AllowForGetMethods bool `yaml:"allowForGetMethods,omitempty"` // Allow this pattern for GET/HEAD methods
-
-	// Package/type filtering
-	CallerPkgPatterns      []string `yaml:"callerPkgPatterns,omitempty"`
-	CallerRecvTypePatterns []string `yaml:"callerRecvTypePatterns,omitempty"`
-	CalleePkgPatterns      []string `yaml:"calleePkgPatterns,omitempty"`
-	CalleeRecvTypePatterns []string `yaml:"calleeRecvTypePatterns,omitempty"`
-}
-
-// ResponsePattern defines how to extract response information
-type ResponsePattern struct {
-	// Function call patterns to match
-	CallRegex         string `yaml:"callRegex,omitempty"`
-	FunctionNameRegex string `yaml:"functionNameRegex,omitempty"`
-	RecvType          string `yaml:"recvType,omitempty"`
-	RecvTypeRegex     string `yaml:"recvTypeRegex,omitempty"`
-
-	// Argument extraction hints
-	StatusArgIndex int `yaml:"statusArgIndex,omitempty"` // Which arg contains status code
-	TypeArgIndex   int `yaml:"typeArgIndex,omitempty"`   // Which arg contains type info
-
-	// Extraction hints
-	StatusFromArg bool `yaml:"statusFromArg,omitempty"` // Extract status from argument
-	TypeFromArg   bool `yaml:"typeFromArg,omitempty"`   // Extract type from argument
-	Deref         bool `yaml:"deref,omitempty"`         // Dereference pointer types
-	// DefaultStatus specifies a fallback status code when it can't be extracted from args
-	DefaultStatus int `yaml:"defaultStatus,omitempty"`
-	// DefaultContentType overrides the config default content type when set
-	DefaultContentType string `yaml:"defaultContentType,omitempty"`
-
-	// Package/type filtering
-	CallerPkgPatterns      []string `yaml:"callerPkgPatterns,omitempty"`
-	CallerRecvTypePatterns []string `yaml:"callerRecvTypePatterns,omitempty"`
-	CalleePkgPatterns      []string `yaml:"calleePkgPatterns,omitempty"`
-	CalleeRecvTypePatterns []string `yaml:"calleeRecvTypePatterns,omitempty"`
-}
-
-// ParamPattern defines how to extract parameter information
-type ParamPattern struct {
-	// Function call patterns to match
-	CallRegex         string `yaml:"callRegex,omitempty"`
-	FunctionNameRegex string `yaml:"functionNameRegex,omitempty"`
-	RecvType          string `yaml:"recvType,omitempty"`
-	RecvTypeRegex     string `yaml:"recvTypeRegex,omitempty"`
-
-	// Parameter location and extraction
-	ParamIn       string `yaml:"paramIn,omitempty"`       // path, query, header, cookie
-	ParamArgIndex int    `yaml:"paramArgIndex,omitempty"` // Which arg contains parameter
-	TypeArgIndex  int    `yaml:"typeArgIndex,omitempty"`  // Which arg contains type info
-
-	// Extraction hints
-	TypeFromArg bool `yaml:"typeFromArg,omitempty"` // Extract type from argument
-	Deref       bool `yaml:"deref,omitempty"`       // Dereference pointer types
-
-	// Package/type filtering
-	CallerPkgPatterns      []string `yaml:"callerPkgPatterns,omitempty"`
-	CallerRecvTypePatterns []string `yaml:"callerRecvTypePatterns,omitempty"`
-	CalleePkgPatterns      []string `yaml:"calleePkgPatterns,omitempty"`
-	CalleeRecvTypePatterns []string `yaml:"calleeRecvTypePatterns,omitempty"`
-}
-
-// MountPattern defines how to extract mount/subrouter information
-type MountPattern struct {
-	// Function call patterns to match
-	CallRegex         string `yaml:"callRegex,omitempty"`
-	FunctionNameRegex string `yaml:"functionNameRegex,omitempty"`
-	RecvType          string `yaml:"recvType,omitempty"`
-	RecvTypeRegex     string `yaml:"recvTypeRegex,omitempty"`
-
-	// Argument extraction hints
-	PathArgIndex   int `yaml:"pathArgIndex,omitempty"`   // Which arg contains mount path
-	RouterArgIndex int `yaml:"routerArgIndex,omitempty"` // Which arg contains router
-
-	// Extraction hints
-	PathFromArg   bool `yaml:"pathFromArg,omitempty"`   // Extract path from argument
-	RouterFromArg bool `yaml:"routerFromArg,omitempty"` // Extract router from argument
-	IsMount       bool `yaml:"isMount,omitempty"`       // This is a mount operation
-
-	// Package/type filtering
-	CallerPkgPatterns      []string `yaml:"callerPkgPatterns,omitempty"`
-	CallerRecvTypePatterns []string `yaml:"callerRecvTypePatterns,omitempty"`
-	CalleePkgPatterns      []string `yaml:"calleePkgPatterns,omitempty"`
-	CalleeRecvTypePatterns []string `yaml:"calleeRecvTypePatterns,omitempty"`
 }
 
 // TypeMapping maps Go types to OpenAPI schemas
@@ -357,6 +358,10 @@ type ExternalType struct {
 
 // APISpecConfig is the main configuration struct
 type APISpecConfig struct {
+	// Use short names for operationIds and schema names (strip module path).
+	// nil = true (default). Set to false to retain fully-qualified names.
+	ShortNames *bool `yaml:"shortNames,omitempty"`
+
 	// Framework-specific patterns
 	Framework FrameworkConfig `yaml:"framework"`
 
@@ -383,6 +388,11 @@ type APISpecConfig struct {
 	SecuritySchemes map[string]SecurityScheme `yaml:"securitySchemes"`
 	Tags            []Tag                     `yaml:"tags"`
 	ExternalDocs    *ExternalDocumentation    `yaml:"externalDocs"`
+}
+
+// UseShortNames returns true if short names should be used (default when nil).
+func (c *APISpecConfig) UseShortNames() bool {
+	return c.ShortNames == nil || *c.ShortNames
 }
 
 // ShouldIncludeFile checks if a file should be included based on include/exclude filters
@@ -451,161 +461,159 @@ func DefaultChiConfig() *APISpecConfig {
 	return &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:       `(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
-					MethodFromCall:  true,
+				{BasePattern: BasePattern{CallRegex: `(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
+
+					RecvTypeRegex: "^github.com/go-chi/chi(/v\\d)?\\.\\*?(Router|Mux)$"}, MethodFromCall: true,
 					PathFromArg:     true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
 					HandlerArgIndex: 1,
-					RecvTypeRegex:   "^github.com/go-chi/chi(/v\\d)?\\.\\*?(Router|Mux)$",
+				},
+				// HandleFunc registers a handler for all methods — method detection
+				// deferred to conditional method analysis via CFG.
+				{BasePattern: BasePattern{CallRegex: `^HandleFunc$`,
+					RecvTypeRegex: "^github.com/go-chi/chi(/v\\d)?\\.\\*?(Router|Mux)$"},
+					PathFromArg:    true,
+					HandlerFromArg: true,
+					PathArgIndex:   0, HandlerArgIndex: 1,
+					MethodExtraction: DefaultMethodExtractionConfig(),
 				},
 			},
 			RequestBodyPatterns: []RequestBodyPattern{
-				{
-					CallRegex:     `^DecodeJSON$`,
-					TypeArgIndex:  1,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: "^github\\.com/go-chi/render$",
+				{BasePattern: BasePattern{CallRegex: `^DecodeJSON$`,
+
+					RecvTypeRegex: "^github\\.com/go-chi/render$"}, TypeArgIndex: 1,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:     `^Decode$`,
-					TypeArgIndex:  0,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: ".*json(iter)?\\.\\*Decoder",
+				{BasePattern: BasePattern{CallRegex: `^Decode$`,
+
+					RecvTypeRegex: ".*json(iter)?\\.\\*Decoder"}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:     `^Unmarshal$`,
-					TypeArgIndex:  1,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: "json",
+				{BasePattern: BasePattern{CallRegex: `^Unmarshal$`,
+
+					RecvTypeRegex: "json"}, TypeArgIndex: 1,
+					TypeFromArg: true,
+					Deref:       true,
 				},
 			},
 			ResponsePatterns: []ResponsePattern{
-				{
-					CallRegex:      `^WriteHeader$`,
-					StatusArgIndex: 0,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http\.ResponseWriter$`,
+				{BasePattern: BasePattern{CallRegex: `^WriteHeader$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, StatusArgIndex: 0,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
 				},
-				{
-					CallRegex:     `^Write$`,
-					TypeArgIndex:  0,
+				{BasePattern: BasePattern{CallRegex: `^Write$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Error$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 2,
+					StatusFromArg: true,
 					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: `^net/http\.ResponseWriter$`,
-				},
-				{
-					CallRegex:          `^Error$`,
-					StatusArgIndex:     2,
-					StatusFromArg:      true,
-					TypeFromArg:        true,
-					TypeArgIndex:       1,
-					RecvTypeRegex:      `^net/http$`,
+					TypeArgIndex:  1,
+
 					DefaultContentType: "text/plain; charset=utf-8",
 				},
-				{
-					CallRegex:      `^NotFound$`,
-					StatusArgIndex: -1, // Always 404
-					StatusFromArg:  false,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
-					DefaultStatus:  http.StatusNotFound,
+				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
+					// Always 404
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: -1,
+					StatusFromArg: false,
+					TypeArgIndex:  -1,
+
+					DefaultStatus: http.StatusNotFound,
 				},
-				{
-					CallRegex:      `^Redirect$`,
-					StatusArgIndex: 3,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
+				{BasePattern: BasePattern{CallRegex: `^Redirect$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 3,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
 				},
-				{
-					CallRegex:     `^JSON$`,
-					TypeArgIndex:  2,
+				{BasePattern: BasePattern{CallRegex: `^JSON$`,
+
+					RecvTypeRegex: "^github\\.com/go-chi/render$"}, TypeArgIndex: 2,
 					TypeFromArg:   true,
 					StatusFromArg: false,
 					Deref:         true,
-					RecvTypeRegex: "^github\\.com/go-chi/render$",
 				},
-				{
-					CallRegex:      `^Status$`,
-					StatusArgIndex: 1,
-					StatusFromArg:  true,
-					RecvTypeRegex:  "^github\\.com/go-chi/render$",
+				{BasePattern: BasePattern{CallRegex: `^Status$`,
+
+					RecvTypeRegex: "^github\\.com/go-chi/render$"}, StatusArgIndex: 1,
+					StatusFromArg: true,
 				},
-				{
-					CallRegex:    `^Marshal$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^Marshal$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:     `^Encode$`,
-					TypeArgIndex:  0,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: ".*json(iter)?\\.\\*?Encoder",
+				{BasePattern: BasePattern{CallRegex: `^Encode$`,
+
+					RecvTypeRegex: ".*json(iter)?\\.\\*?Encoder"}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				// stdlib write functions that target io.Writer (often ResponseWriter)
+				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+				},
+				{BasePattern: BasePattern{CallRegex: `^Copy$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+				},
+				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
 				},
 			},
 			ParamPatterns: []ParamPattern{
-				{
-					CallRegex:     "^URLParam$",
-					ParamIn:       "path",
+				{BasePattern: BasePattern{CallRegex: "^URLParam$",
+
+					RecvTypeRegex: "^github\\.com/go-chi/chi(/v\\d)?$"}, ParamIn: "path",
 					ParamArgIndex: 1,
-					RecvTypeRegex: "^github\\.com/go-chi/chi(/v\\d)?$",
 				},
-				{
-					CallRegex:     "^URLParam$",
-					ParamIn:       "path",
+				{BasePattern: BasePattern{CallRegex: "^URLParam$",
+
+					RecvTypeRegex: "^github\\.com/go-chi/chi(/v\\d)?\\.\\*?Context$"}, ParamIn: "path",
 					ParamArgIndex: 0,
-					RecvTypeRegex: "^github\\.com/go-chi/chi(/v\\d)?\\.\\*?Context$",
 				},
-				{
-					CallRegex:     "^URLParamFromCtx$",
-					ParamIn:       "path",
+				{BasePattern: BasePattern{CallRegex: "^URLParamFromCtx$",
+
+					RecvTypeRegex: "^github\\.com/go-chi/chi(/v\\d)?$"}, ParamIn: "path",
 					ParamArgIndex: 1,
-					RecvTypeRegex: "^github\\.com/go-chi/chi(/v\\d)?$",
 				},
-				{
-					CallRegex:     "^FormValue$",
-					ParamIn:       "form",
+				{BasePattern: BasePattern{CallRegex: "^FormValue$"}, ParamIn: "form",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^Get$",
-					ParamIn:       "query",
+				{BasePattern: BasePattern{CallRegex: "^Get$",
+
+					RecvType: "net/url.Values"}, ParamIn: "query",
 					ParamArgIndex: 0,
-					RecvType:      "net/url.Values",
 				},
-				{
-					CallRegex:     "^PathValue$",
-					ParamIn:       "path",
+				{BasePattern: BasePattern{CallRegex: "^PathValue$",
+
+					RecvType: "net/http.*Request"}, ParamIn: "path",
 					ParamArgIndex: 0,
-					RecvType:      "net/http.*Request",
 				},
 			},
 			MountPatterns: []MountPattern{
-				{
-					CallRegex:      `^Mount$`,
-					PathFromArg:    true,
+				{BasePattern: BasePattern{CallRegex: `^Mount$`}, PathFromArg: true,
 					RouterFromArg:  true,
 					PathArgIndex:   0,
 					RouterArgIndex: 1,
 					IsMount:        true,
 				},
-				{
-					CallRegex:      `^Route$`,
-					PathFromArg:    true,
+				{BasePattern: BasePattern{CallRegex: `^Route$`}, PathFromArg: true,
 					RouterFromArg:  true,
 					PathArgIndex:   0,
 					RouterArgIndex: 1,
 					IsMount:        true,
 				},
 			},
+			ContentTypePatterns: defaultContentTypePatterns(),
 		},
 		Defaults: Defaults{
 			RequestContentType:  defaultRequestContentType,
@@ -620,142 +628,134 @@ func DefaultEchoConfig() *APISpecConfig {
 	return &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:       `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
-					MethodFromCall:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
+
+					RecvTypeRegex: "^github\\.com/labstack/echo(/v\\d)?\\.\\*(Echo|Group)$"}, MethodFromCall: true,
 					PathFromArg:     true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
 					HandlerArgIndex: 1,
-					RecvTypeRegex:   "^github\\.com/labstack/echo(/v\\d)?\\.\\*(Echo|Group)$",
 				},
 			},
 			RequestBodyPatterns: []RequestBodyPattern{
-				{
-					CallRegex:     `^(?i)(Bind)$`,
-					TypeArgIndex:  0,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: "github\\.com/labstack/echo/v\\d\\.Context",
+				{BasePattern: BasePattern{CallRegex: `^(?i)(Bind)$`,
+
+					RecvTypeRegex: "github\\.com/labstack/echo/v\\d\\.Context"}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:     `^Decode$`,
-					TypeArgIndex:  0,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: ".*json(iter)?\\.\\*Decoder",
+				{BasePattern: BasePattern{CallRegex: `^Decode$`,
+
+					RecvTypeRegex: ".*json(iter)?\\.\\*Decoder"}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:     `^Unmarshal$`,
-					TypeArgIndex:  1,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: "json",
+				{BasePattern: BasePattern{CallRegex: `^Unmarshal$`,
+
+					RecvTypeRegex: "json"}, TypeArgIndex: 1,
+					TypeFromArg: true,
+					Deref:       true,
 				},
 			},
 			ResponsePatterns: []ResponsePattern{
-				{
-					CallRegex:      `^WriteHeader$`,
-					StatusArgIndex: 0,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http\.ResponseWriter$`,
+				{BasePattern: BasePattern{CallRegex: `^WriteHeader$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, StatusArgIndex: 0,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
 				},
-				{
-					CallRegex:     `^Write$`,
-					TypeArgIndex:  0,
+				{BasePattern: BasePattern{CallRegex: `^Write$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Error$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 2,
+					StatusFromArg: true,
 					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: `^net/http\.ResponseWriter$`,
-				},
-				{
-					CallRegex:          `^Error$`,
-					StatusArgIndex:     2,
-					StatusFromArg:      true,
-					TypeFromArg:        true,
-					TypeArgIndex:       1,
-					RecvTypeRegex:      `^net/http$`,
+					TypeArgIndex:  1,
+
 					DefaultContentType: "text/plain; charset=utf-8",
 				},
-				{
-					CallRegex:      `^NotFound$`,
-					StatusArgIndex: -1, // Always 404
-					StatusFromArg:  false,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
-					DefaultStatus:  http.StatusNotFound,
+				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
+					// Always 404
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: -1,
+					StatusFromArg: false,
+					TypeArgIndex:  -1,
+
+					DefaultStatus: http.StatusNotFound,
 				},
-				{
-					CallRegex:      `^Redirect$`,
-					StatusArgIndex: 3,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
+				{BasePattern: BasePattern{CallRegex: `^Redirect$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 3,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
 				},
-				{
-					CallRegex:      `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`,
-					StatusArgIndex: 0,
-					TypeArgIndex:   1,
-					TypeFromArg:    true,
-					StatusFromArg:  true,
-					Deref:          true,
-					RecvTypeRegex:  "github\\.com/labstack/echo/v\\d\\.Context",
-				},
-				{
-					CallRegex:      `^(?i)(NoContent)$`,
-					StatusArgIndex: 0,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  "github\\.com/labstack/echo/v\\d\\.Context",
-				},
-				{
-					CallRegex:    `^Marshal$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
-				},
-				{
-					CallRegex:     `^Encode$`,
-					TypeArgIndex:  0,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`,
+
+					RecvTypeRegex: "github\\.com/labstack/echo/v\\d\\.Context"}, StatusArgIndex: 0,
+					TypeArgIndex:  1,
 					TypeFromArg:   true,
+					StatusFromArg: true,
 					Deref:         true,
-					RecvTypeRegex: ".*json(iter)?\\.\\*?Encoder",
+				},
+				{BasePattern: BasePattern{CallRegex: `^(?i)(NoContent)$`,
+
+					RecvTypeRegex: "github\\.com/labstack/echo/v\\d\\.Context"}, StatusArgIndex: 0,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Marshal$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Encode$`,
+
+					RecvTypeRegex: ".*json(iter)?\\.\\*?Encoder"}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				// stdlib write functions that target io.Writer (often ResponseWriter)
+				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+				},
+				{BasePattern: BasePattern{CallRegex: `^Copy$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+				},
+				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
 				},
 			},
 			ParamPatterns: []ParamPattern{
-				{
-					CallRegex:     "^Param$",
-					ParamIn:       "path",
+				{BasePattern: BasePattern{CallRegex: "^Param$"}, ParamIn: "path",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^QueryParam$",
-					ParamIn:       "query",
-					ParamArgIndex: 0,
-					RecvTypeRegex: "github\\.com/labstack/echo/v\\d\\.Context",
-				},
-				{
-					CallRegex:     "^FormValue$",
-					ParamIn:       "form",
+				{BasePattern: BasePattern{CallRegex: "^QueryParam$",
+
+					RecvTypeRegex: "github\\.com/labstack/echo/v\\d\\.Context"}, ParamIn: "query",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^Cookie$",
-					ParamIn:       "cookie",
+				{BasePattern: BasePattern{CallRegex: "^FormValue$"}, ParamIn: "form",
+					ParamArgIndex: 0,
+				},
+				{BasePattern: BasePattern{CallRegex: "^Cookie$"}, ParamIn: "cookie",
 					ParamArgIndex: 0,
 				},
 			},
 			MountPatterns: []MountPattern{
-				{
-					CallRegex:      `^Group$`,
-					PathFromArg:    true,
+				{BasePattern: BasePattern{CallRegex: `^Group$`,
+
+					RecvTypeRegex: "^github\\.com/labstack/echo(/v\\d)?\\.\\*(Echo|Group)$"}, PathFromArg: true,
 					RouterFromArg:  true,
 					PathArgIndex:   0,
 					RouterArgIndex: 1,
 					IsMount:        true,
-					RecvTypeRegex:  "^github\\.com/labstack/echo(/v\\d)?\\.\\*(Echo|Group)$",
 				},
 			},
+			ContentTypePatterns: defaultContentTypePatterns(),
 		},
 		Defaults: Defaults{
 			RequestContentType:  defaultRequestContentType,
@@ -770,172 +770,163 @@ func DefaultFiberConfig() *APISpecConfig {
 	return &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:       `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
-					MethodFromCall:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*?(App|Router|Group)$`}, MethodFromCall: true,
 					PathFromArg:     true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
 					HandlerArgIndex: 1,
-					RecvTypeRegex:   `^github\.com/gofiber/fiber(/v\d)?\.\*?(App|Router|Group)$`,
 				},
 			},
 			RequestBodyPatterns: []RequestBodyPattern{
-				{
-					CallRegex:     `^BodyParser$`,
-					TypeArgIndex:  0,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*?Ctx$`,
+				{BasePattern: BasePattern{CallRegex: `^BodyParser$`,
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*?Ctx$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:     `^Decode$`,
-					TypeArgIndex:  0,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: ".*json(iter)?\\.\\*?Decoder",
+				{BasePattern: BasePattern{CallRegex: `^Decode$`,
+
+					RecvTypeRegex: ".*json(iter)?\\.\\*?Decoder"}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:     `^Unmarshal$`,
-					TypeArgIndex:  1,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: "json",
+				{BasePattern: BasePattern{CallRegex: `^Unmarshal$`,
+
+					RecvTypeRegex: "json"}, TypeArgIndex: 1,
+					TypeFromArg: true,
+					Deref:       true,
 				},
 			},
 			ResponsePatterns: []ResponsePattern{
-				{
-					CallRegex:      `^WriteHeader$`,
-					StatusArgIndex: 0,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http\.ResponseWriter$`,
+				{BasePattern: BasePattern{CallRegex: `^WriteHeader$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, StatusArgIndex: 0,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
 				},
-				{
-					CallRegex:     `^Write$`,
-					TypeArgIndex:  0,
+				{BasePattern: BasePattern{CallRegex: `^Write$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Error$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 2,
+					StatusFromArg: true,
 					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: `^net/http\.ResponseWriter$`,
-				},
-				{
-					CallRegex:          `^Error$`,
-					StatusArgIndex:     2,
-					StatusFromArg:      true,
-					TypeFromArg:        true,
-					TypeArgIndex:       1,
-					RecvTypeRegex:      `^net/http$`,
+					TypeArgIndex:  1,
+
 					DefaultContentType: "text/plain; charset=utf-8",
 				},
-				{
-					CallRegex:      `^NotFound$`,
-					StatusArgIndex: -1, // Always 404
-					StatusFromArg:  false,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
-					DefaultStatus:  http.StatusNotFound,
+				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
+					// Always 404
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: -1,
+					StatusFromArg: false,
+					TypeArgIndex:  -1,
+
+					DefaultStatus: http.StatusNotFound,
 				},
-				{
-					CallRegex:      `^Redirect$`,
-					StatusArgIndex: 3,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
+				{BasePattern: BasePattern{CallRegex: `^Redirect$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 3,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
 				},
-				{
-					CallRegex:      `^JSON$`,
-					StatusArgIndex: -1, // Fiber's c.JSON does not take status, only data
-					TypeArgIndex:   0,
-					TypeFromArg:    true,
-					Deref:          true,
-					RecvTypeRegex:  `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`,
-				},
-				{
-					CallRegex:      `^Status$`,
-					StatusArgIndex: 0,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`,
-				},
-				{
-					CallRegex:      `^SendString$`,
-					StatusArgIndex: -1,
-					TypeArgIndex:   0,
-					TypeFromArg:    true,
-					RecvTypeRegex:  `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`,
-				},
-				{
-					CallRegex:      `^SendStatus$`,
-					StatusArgIndex: 0,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`,
-				},
-				{
-					CallRegex:    `^Marshal$`,
+				{BasePattern: BasePattern{CallRegex: `^JSON$`,
+					// Fiber's c.JSON does not take status, only data
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`}, StatusArgIndex: -1,
 					TypeArgIndex: 0,
 					TypeFromArg:  true,
 					Deref:        true,
 				},
-				{
-					CallRegex:     `^Encode$`,
-					TypeArgIndex:  0,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: ".*json(iter)?\\.\\*?Encoder",
+				{BasePattern: BasePattern{CallRegex: `^Status$`,
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`}, StatusArgIndex: 0,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
+				},
+				{BasePattern: BasePattern{CallRegex: `^SendString$`,
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`}, StatusArgIndex: -1,
+					TypeArgIndex: 0,
+					TypeFromArg:  true,
+				},
+				{BasePattern: BasePattern{CallRegex: `^SendStatus$`,
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`}, StatusArgIndex: 0,
+					TypeArgIndex: -1,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Marshal$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Encode$`,
+
+					RecvTypeRegex: ".*json(iter)?\\.\\*?Encoder"}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				// stdlib write functions that target io.Writer (often ResponseWriter)
+				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+				},
+				{BasePattern: BasePattern{CallRegex: `^Copy$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+				},
+				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
 				},
 			},
 			ParamPatterns: []ParamPattern{
-				{
-					CallRegex:     "^Params$",
-					ParamIn:       "path",
+				{BasePattern: BasePattern{CallRegex: "^Params$",
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`}, ParamIn: "path",
 					ParamArgIndex: 0,
-					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`,
 				},
-				{
-					CallRegex:     "^Query$",
-					ParamIn:       "query",
+				{BasePattern: BasePattern{CallRegex: "^Query$",
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`}, ParamIn: "query",
 					ParamArgIndex: 0,
-					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`,
 				},
-				{
-					CallRegex:     "^FormValue$",
-					ParamIn:       "form",
+				{BasePattern: BasePattern{CallRegex: "^FormValue$",
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`}, ParamIn: "form",
 					ParamArgIndex: 0,
-					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`,
 				},
-				{
-					CallRegex:     "^Cookies$",
-					ParamIn:       "cookie",
+				{BasePattern: BasePattern{CallRegex: "^Cookies$",
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`}, ParamIn: "cookie",
 					ParamArgIndex: 0,
-					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`,
 				},
 			},
 			MountPatterns: []MountPattern{
-				{
-					CallRegex:      `^Mount$`,
-					PathFromArg:    true,
+				{BasePattern: BasePattern{CallRegex: `^Mount$`}, PathFromArg: true,
 					RouterFromArg:  true,
 					PathArgIndex:   0,
 					RouterArgIndex: 1,
 					IsMount:        true,
 				},
-				{
-					CallRegex:      `^Group$`,
-					PathFromArg:    true,
+				{BasePattern: BasePattern{CallRegex: `^Group$`,
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*?(App|Router|Group)$`}, PathFromArg: true,
 					RouterFromArg:  true,
 					PathArgIndex:   0,
 					RouterArgIndex: 1,
 					IsMount:        true,
-					RecvTypeRegex:  `^github\.com/gofiber/fiber(/v\d)?\.\*?(App|Router|Group)$`,
 				},
-				{
-					CallRegex:     `^Use$`,
-					PathFromArg:   false,
+				{BasePattern: BasePattern{CallRegex: `^Use$`,
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*?(App|Router|Group)$`}, PathFromArg: false,
 					RouterFromArg: false,
 					IsMount:       false,
-					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*?(App|Router|Group)$`,
 				},
 			},
+			ContentTypePatterns: defaultContentTypePatterns(),
 		},
 		Defaults: Defaults{
 			RequestContentType:  defaultRequestContentType,
@@ -958,128 +949,115 @@ func DefaultGinConfig() *APISpecConfig {
 	return &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:       `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
-					MethodFromCall:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
+
+					RecvTypeRegex: "^github\\.com/gin-gonic/gin\\.\\*(Engine|RouterGroup)$"}, MethodFromCall: true,
 					PathFromArg:     true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
 					HandlerArgIndex: 1,
-					RecvTypeRegex:   "^github\\.com/gin-gonic/gin\\.\\*(Engine|RouterGroup)$",
 				},
 			},
 			RequestBodyPatterns: []RequestBodyPattern{
-				{
-					CallRegex:    `^(?i)(BindJSON|ShouldBindJSON|BindXML|BindYAML|BindForm|ShouldBind)$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(BindJSON|ShouldBindJSON|BindXML|BindYAML|BindForm|ShouldBind)$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:    `^Decode$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^Decode$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:    `^Unmarshal$`,
-					TypeArgIndex: 1,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^Unmarshal$`}, TypeArgIndex: 1,
+					TypeFromArg: true,
+					Deref:       true,
 				},
 			},
 			ResponsePatterns: []ResponsePattern{
-				{
-					CallRegex:      `^WriteHeader$`,
-					StatusArgIndex: 0,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http\.ResponseWriter$`,
+				{BasePattern: BasePattern{CallRegex: `^WriteHeader$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, StatusArgIndex: 0,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
 				},
-				{
-					CallRegex:     `^Write$`,
-					TypeArgIndex:  0,
+				{BasePattern: BasePattern{CallRegex: `^Write$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Error$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 2,
+					StatusFromArg: true,
 					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: `^net/http\.ResponseWriter$`,
-				},
-				{
-					CallRegex:          `^Error$`,
-					StatusArgIndex:     2,
-					StatusFromArg:      true,
-					TypeFromArg:        true,
-					TypeArgIndex:       1,
-					RecvTypeRegex:      `^net/http$`,
+					TypeArgIndex:  1,
+
 					DefaultContentType: "text/plain; charset=utf-8",
 				},
-				{
-					CallRegex:      `^NotFound$`,
-					StatusArgIndex: -1, // Always 404
-					StatusFromArg:  false,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
-					DefaultStatus:  http.StatusNotFound,
+				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
+					// Always 404
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: -1,
+					StatusFromArg: false,
+					TypeArgIndex:  -1,
+
+					DefaultStatus: http.StatusNotFound,
 				},
-				{
-					CallRegex:      `^Redirect$`,
-					StatusArgIndex: 3,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
+				{BasePattern: BasePattern{CallRegex: `^Redirect$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 3,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
 				},
-				{
-					CallRegex:      `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`,
-					StatusArgIndex: 0,
-					TypeArgIndex:   1,
-					TypeFromArg:    true,
-					StatusFromArg:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`}, StatusArgIndex: 0,
+					TypeArgIndex:  1,
+					TypeFromArg:   true,
+					StatusFromArg: true,
 				},
-				{
-					CallRegex:    `^Marshal$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^Marshal$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:    `^Encode$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^Encode$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				// stdlib write functions that target io.Writer (often ResponseWriter)
+				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+				},
+				{BasePattern: BasePattern{CallRegex: `^Copy$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+				},
+				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
 				},
 			},
 			ParamPatterns: []ParamPattern{
-				{
-					CallRegex:     "^Param$",
-					ParamIn:       "path",
+				{BasePattern: BasePattern{CallRegex: "^Param$"}, ParamIn: "path",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^Query$",
-					ParamIn:       "query",
+				{BasePattern: BasePattern{CallRegex: "^Query$"}, ParamIn: "query",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^DefaultQuery$",
-					ParamIn:       "query",
+				{BasePattern: BasePattern{CallRegex: "^DefaultQuery$"}, ParamIn: "query",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^GetHeader$",
-					ParamIn:       "header",
+				{BasePattern: BasePattern{CallRegex: "^GetHeader$"}, ParamIn: "header",
 					ParamArgIndex: 0,
 				},
 			},
 			MountPatterns: []MountPattern{
-				{
-					CallRegex:      `^Group$`,
-					PathFromArg:    true,
+				{BasePattern: BasePattern{CallRegex: `^Group$`,
+
+					RecvTypeRegex: "^github\\.com/gin-gonic/gin\\.\\*(Engine|RouterGroup)$"}, PathFromArg: true,
 					RouterFromArg:  true,
 					PathArgIndex:   0,
 					RouterArgIndex: 1,
 					IsMount:        true,
-					RecvTypeRegex:  "^github\\.com/gin-gonic/gin\\.\\*(Engine|RouterGroup)$",
 				},
 			},
+			ContentTypePatterns: defaultContentTypePatterns(),
 		},
 		Defaults: Defaults{
 			RequestContentType:  defaultRequestContentType,
@@ -1122,144 +1100,142 @@ func DefaultMuxConfig() *APISpecConfig {
 	return &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:        `^HandleFunc$`,
-					PathFromArg:      true,
-					HandlerFromArg:   true,
-					PathArgIndex:     0,
-					HandlerArgIndex:  1,
-					RecvTypeRegex:    `^github\.com/gorilla/mux\.\*?Router$`,
+				{BasePattern: BasePattern{CallRegex: `^HandleFunc$`,
+
+					RecvTypeRegex: `^github\.com/gorilla/mux\.\*?Router$`}, PathFromArg: true,
+					HandlerFromArg:  true,
+					PathArgIndex:    0,
+					HandlerArgIndex: 1,
+
 					MethodExtraction: DefaultMethodExtractionConfig(),
 				},
-				{
-					CallRegex:        `^Handle$`,
-					PathFromArg:      true,
-					HandlerFromArg:   true,
-					PathArgIndex:     0,
-					HandlerArgIndex:  1,
-					RecvTypeRegex:    `^github\.com/gorilla/mux\.\*?Router$`,
+				{BasePattern: BasePattern{CallRegex: `^Handle$`,
+
+					RecvTypeRegex: `^github\.com/gorilla/mux\.\*?Router$`}, PathFromArg: true,
+					HandlerFromArg:  true,
+					PathArgIndex:    0,
+					HandlerArgIndex: 1,
+
 					MethodExtraction: DefaultMethodExtractionConfig(),
 				},
-				{
-					CallRegex:        `^HandlerFunc$`,
-					HandlerFromArg:   true,
-					HandlerArgIndex:  0,
-					RecvTypeRegex:    `^github\.com/gorilla/mux\.\*?Route$`,
+				{BasePattern: BasePattern{CallRegex: `^HandlerFunc$`,
+
+					RecvTypeRegex: `^github\.com/gorilla/mux\.\*?Route$`}, HandlerFromArg: true,
+					HandlerArgIndex: 0,
+
 					MethodExtraction: DefaultMethodExtractionConfig(),
 				},
-				{
-					CallRegex:        `^Handler$`,
-					HandlerFromArg:   true,
-					HandlerArgIndex:  0,
-					RecvTypeRegex:    `^github\.com/gorilla/mux\.\*?Route$`,
+				{BasePattern: BasePattern{CallRegex: `^Handler$`,
+
+					RecvTypeRegex: `^github\.com/gorilla/mux\.\*?Route$`}, HandlerFromArg: true,
+					HandlerArgIndex: 0,
+
 					MethodExtraction: DefaultMethodExtractionConfig(),
 				},
-				{
-					CallRegex:        `^Path$`,
-					PathFromArg:      true,
-					PathArgIndex:     0,
-					RecvTypeRegex:    `^github\.com/gorilla/mux\.\*?(Router|Route)$`,
+				{BasePattern: BasePattern{CallRegex: `^Path$`,
+
+					RecvTypeRegex: `^github\.com/gorilla/mux\.\*?(Router|Route)$`}, PathFromArg: true,
+					PathArgIndex: 0,
+
 					MethodExtraction: DefaultMethodExtractionConfig(),
 				},
-				{
-					CallRegex:         `^Methods$`,
-					MethodFromHandler: true,
-					MethodArgIndex:    0,
-					RecvTypeRegex:     `^github\.com/gorilla/mux\.\*?(Router|Route)$`,
-					MethodExtraction:  DefaultMethodExtractionConfig(),
+				{BasePattern: BasePattern{CallRegex: `^Methods$`,
+
+					RecvTypeRegex: `^github\.com/gorilla/mux\.\*?(Router|Route)$`}, MethodFromHandler: true,
+					MethodArgIndex: 0,
+
+					MethodExtraction: DefaultMethodExtractionConfig(),
 				},
 			},
 			RequestBodyPatterns: []RequestBodyPattern{
-				{
-					CallRegex:     `^Decode$`,
-					TypeArgIndex:  0,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: ".*json(iter)?\\.\\*?Decoder",
+				{BasePattern: BasePattern{CallRegex: `^Decode$`,
+
+					RecvTypeRegex: ".*json(iter)?\\.\\*?Decoder"}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:     `^Unmarshal$`,
-					TypeArgIndex:  1,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: "json",
+				{BasePattern: BasePattern{CallRegex: `^Unmarshal$`,
+
+					RecvTypeRegex: "json"}, TypeArgIndex: 1,
+					TypeFromArg: true,
+					Deref:       true,
 				},
 			},
 			ResponsePatterns: []ResponsePattern{
-				{
-					CallRegex:      `^WriteHeader$`,
-					StatusArgIndex: 0,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http\.ResponseWriter$`,
+				{BasePattern: BasePattern{CallRegex: `^WriteHeader$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, StatusArgIndex: 0,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
 				},
-				{
-					CallRegex:     `^Write$`,
-					TypeArgIndex:  0,
+				{BasePattern: BasePattern{CallRegex: `^Write$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Error$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 2,
+					StatusFromArg: true,
 					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: `^net/http\.ResponseWriter$`,
-				},
-				{
-					CallRegex:          `^Error$`,
-					StatusArgIndex:     2,
-					StatusFromArg:      true,
-					TypeFromArg:        true,
-					TypeArgIndex:       1,
-					RecvTypeRegex:      `^net/http$`,
+					TypeArgIndex:  1,
+
 					DefaultContentType: "text/plain; charset=utf-8",
 				},
-				{
-					CallRegex:      `^NotFound$`,
-					StatusArgIndex: -1, // Always 404
-					StatusFromArg:  false,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
-					DefaultStatus:  http.StatusNotFound,
+				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
+					// Always 404
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: -1,
+					StatusFromArg: false,
+					TypeArgIndex:  -1,
+
+					DefaultStatus: http.StatusNotFound,
 				},
-				{
-					CallRegex:      `^Redirect$`,
-					StatusArgIndex: 3,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
+				{BasePattern: BasePattern{CallRegex: `^Redirect$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 3,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
 				},
-				{
-					CallRegex:    `^Marshal$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^Marshal$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:     `^Encode$`,
-					TypeArgIndex:  0,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: ".*json(iter)?\\.\\*?Encoder",
+				{BasePattern: BasePattern{CallRegex: `^Encode$`,
+
+					RecvTypeRegex: ".*json(iter)?\\.\\*?Encoder"}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				// stdlib write functions that target io.Writer (often ResponseWriter)
+				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+				},
+				{BasePattern: BasePattern{CallRegex: `^Copy$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+				},
+				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
 				},
 			},
-			ParamPatterns: []ParamPattern{ // @note: mux does not have a ParamPattern and it's not supported in this version
-				{
-					CallRegex:     `^Vars$`,
-					ParamIn:       "path",
-					ParamArgIndex: 0,
-					RecvTypeRegex: `^github\.com/gorilla/mux$`,
-				},
+			ParamPatterns: []ParamPattern{
+				// Note: mux.Vars(r) returns map[string]string — parameter names
+				// are extracted from path templates by ensureAllPathParams instead.
 			},
 			MountPatterns: []MountPattern{
-				{
-					CallRegex:     `^PathPrefix$`,
-					PathFromArg:   true,
-					PathArgIndex:  0,
-					IsMount:       true,
-					RecvTypeRegex: `^github\.com/gorilla/mux\.\*?Router$`,
+				{BasePattern: BasePattern{CallRegex: `^PathPrefix$`,
+
+					RecvTypeRegex: `^github\.com/gorilla/mux\.\*?Router$`}, PathFromArg: true,
+					PathArgIndex: 0,
+					IsMount:      true,
 				},
-				{
-					CallRegex:     `^Subrouter$`,
-					IsMount:       true,
-					RecvTypeRegex: `^github\.com/gorilla/mux\.\*?Route$`,
+				{BasePattern: BasePattern{CallRegex: `^Subrouter$`,
+
+					RecvTypeRegex: `^github\.com/gorilla/mux\.\*?Route$`}, IsMount: true,
 				},
 			},
+			ContentTypePatterns: defaultContentTypePatterns(),
 		},
 		Defaults: Defaults{
 			RequestContentType:  defaultRequestContentType,
@@ -1274,18 +1250,15 @@ func DefaultHTTPConfig() *APISpecConfig {
 	return &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:       `^HandleFunc$`,
-					PathFromArg:     true,
+				{BasePattern: BasePattern{CallRegex: `^HandleFunc$`,
+
+					RecvTypeRegex: "^net/http(\\.\\*ServeMux)?$"}, PathFromArg: true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
 					MethodArgIndex:  -1,
 					HandlerArgIndex: 1,
-					RecvTypeRegex:   "^net/http(\\.\\*ServeMux)?$",
 				},
-				{
-					CallRegex:       `^Handle$`,
-					PathFromArg:     true,
+				{BasePattern: BasePattern{CallRegex: `^Handle$`}, PathFromArg: true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
 					MethodArgIndex:  -1,
@@ -1293,95 +1266,88 @@ func DefaultHTTPConfig() *APISpecConfig {
 				},
 			},
 			RequestBodyPatterns: []RequestBodyPattern{
-				{
-					CallRegex:    `^Decode$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^Decode$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:    `^Unmarshal$`,
+				{BasePattern: BasePattern{CallRegex: `^Unmarshal$`}, TypeArgIndex: 1,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+			},
+			ResponsePatterns: []ResponsePattern{
+				{BasePattern: BasePattern{CallRegex: `^WriteHeader$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, StatusArgIndex: 0,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Write$`,
+
+					RecvTypeRegex: `^net/http\.ResponseWriter$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Error$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 2,
+					StatusFromArg: true,
+					TypeFromArg:   true,
+					TypeArgIndex:  1,
+
+					DefaultContentType: "text/plain; charset=utf-8",
+				},
+				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
+					// Always 404
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: -1,
+					StatusFromArg: false,
+					TypeArgIndex:  -1,
+
+					DefaultStatus: http.StatusNotFound,
+				},
+				{BasePattern: BasePattern{CallRegex: `^Redirect$`,
+
+					RecvTypeRegex: `^net/http$`}, StatusArgIndex: 3,
+					StatusFromArg: true,
+					TypeArgIndex:  -1,
+				},
+				{BasePattern: BasePattern{CallRegex: `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`}, StatusArgIndex: 0,
 					TypeArgIndex: 1,
 					TypeFromArg:  true,
 					Deref:        true,
 				},
-			},
-			ResponsePatterns: []ResponsePattern{
-				{
-					CallRegex:      `^WriteHeader$`,
-					StatusArgIndex: 0,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http\.ResponseWriter$`,
+				{BasePattern: BasePattern{CallRegex: `^Marshal$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:     `^Write$`,
-					TypeArgIndex:  0,
-					TypeFromArg:   true,
-					Deref:         true,
-					RecvTypeRegex: `^net/http\.ResponseWriter$`,
+				{BasePattern: BasePattern{CallRegex: `^Encode$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:          `^Error$`,
-					StatusArgIndex:     2,
-					StatusFromArg:      true,
-					TypeFromArg:        true,
-					TypeArgIndex:       1,
-					RecvTypeRegex:      `^net/http$`,
-					DefaultContentType: "text/plain; charset=utf-8",
+				// stdlib write functions that target io.Writer (often ResponseWriter)
+				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
 				},
-				{
-					CallRegex:      `^NotFound$`,
-					StatusArgIndex: -1, // Always 404
-					StatusFromArg:  false,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
-					DefaultStatus:  http.StatusNotFound,
+				{BasePattern: BasePattern{CallRegex: `^Copy$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
 				},
-				{
-					CallRegex:      `^Redirect$`,
-					StatusArgIndex: 3,
-					StatusFromArg:  true,
-					TypeArgIndex:   -1,
-					RecvTypeRegex:  `^net/http$`,
-				},
-				{
-					CallRegex:      `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`,
-					StatusArgIndex: 0,
-					TypeArgIndex:   1,
-					TypeFromArg:    true,
-					Deref:          true,
-				},
-				{
-					CallRegex:    `^Marshal$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
-				},
-				{
-					CallRegex:    `^Encode$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
 				},
 			},
 			ParamPatterns: []ParamPattern{
-				{
-					CallRegex:     "^FormValue$",
-					ParamIn:       "form",
+				{BasePattern: BasePattern{CallRegex: "^FormValue$"}, ParamIn: "form",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^Get$",
-					ParamIn:       "header",
+				{BasePattern: BasePattern{CallRegex: "^Get$"}, ParamIn: "header",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^Cookie$",
-					ParamIn:       "cookie",
+				{BasePattern: BasePattern{CallRegex: "^Cookie$"}, ParamIn: "cookie",
 					ParamArgIndex: 0,
 				},
 			},
+			ContentTypePatterns: defaultContentTypePatterns(),
 		},
 		Defaults: Defaults{
 			RequestContentType:  defaultRequestContentType,

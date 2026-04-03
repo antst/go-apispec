@@ -1,10 +1,24 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
 	"reflect"
 	"testing"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 func TestRoutePatternMatcher_Comprehensive(t *testing.T) {
@@ -35,9 +49,7 @@ func TestRoutePatternMatcher_Comprehensive(t *testing.T) {
 	}{
 		{
 			name: "exact method match",
-			pattern: RoutePattern{
-				CallRegex:       `^GET$`,
-				MethodFromCall:  true,
+			pattern: RoutePattern{BasePattern: BasePattern{CallRegex: `^GET$`}, MethodFromCall: true,
 				PathFromArg:     true,
 				HandlerFromArg:  true,
 				PathArgIndex:    0,
@@ -48,9 +60,7 @@ func TestRoutePatternMatcher_Comprehensive(t *testing.T) {
 		},
 		{
 			name: "case insensitive method match",
-			pattern: RoutePattern{
-				CallRegex:       `(?i)^get$`,
-				MethodFromCall:  true,
+			pattern: RoutePattern{BasePattern: BasePattern{CallRegex: `(?i)^get$`}, MethodFromCall: true,
 				PathFromArg:     true,
 				HandlerFromArg:  true,
 				PathArgIndex:    0,
@@ -61,37 +71,33 @@ func TestRoutePatternMatcher_Comprehensive(t *testing.T) {
 		},
 		{
 			name: "method with receiver type",
-			pattern: RoutePattern{
-				CallRegex:       `^GET$`,
-				MethodFromCall:  true,
+			pattern: RoutePattern{BasePattern: BasePattern{CallRegex: `^GET$`,
+
+				RecvTypeRegex: `^\*gin\.Engine$`}, MethodFromCall: true,
 				PathFromArg:     true,
 				HandlerFromArg:  true,
 				PathArgIndex:    0,
 				HandlerArgIndex: 1,
-				RecvTypeRegex:   `^\*gin\.Engine$`,
 			},
 			expectedMatch: true,
 			description:   "Should match method with specific receiver type",
 		},
 		{
 			name: "method with function name pattern",
-			pattern: RoutePattern{
-				CallRegex:         `^GET$`,
-				MethodFromCall:    true,
-				PathFromArg:       true,
-				HandlerFromArg:    true,
-				PathArgIndex:      0,
-				HandlerArgIndex:   1,
-				FunctionNameRegex: `^getUsers$`,
+			pattern: RoutePattern{BasePattern: BasePattern{CallRegex: `^GET$`,
+
+				FunctionNameRegex: `^getUsers$`}, MethodFromCall: true,
+				PathFromArg:     true,
+				HandlerFromArg:  true,
+				PathArgIndex:    0,
+				HandlerArgIndex: 1,
 			},
 			expectedMatch: true,
 			description:   "Should match method with function name pattern",
 		},
 		{
 			name: "complex regex pattern",
-			pattern: RoutePattern{
-				CallRegex:       `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)(?:Handler)?$`,
-				MethodFromCall:  true,
+			pattern: RoutePattern{BasePattern: BasePattern{CallRegex: `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)(?:Handler)?$`}, MethodFromCall: true,
 				PathFromArg:     true,
 				HandlerFromArg:  true,
 				PathArgIndex:    0,
@@ -154,9 +160,7 @@ func TestMountPatternMatcher_Comprehensive(t *testing.T) {
 	}{
 		{
 			name: "basic group pattern",
-			pattern: MountPattern{
-				CallRegex:      `^Group$`,
-				PathFromArg:    true,
+			pattern: MountPattern{BasePattern: BasePattern{CallRegex: `^Group$`}, PathFromArg: true,
 				RouterFromArg:  true,
 				PathArgIndex:   0,
 				RouterArgIndex: 1,
@@ -167,37 +171,33 @@ func TestMountPatternMatcher_Comprehensive(t *testing.T) {
 		},
 		{
 			name: "group with receiver type",
-			pattern: MountPattern{
-				CallRegex:      `^Group$`,
-				PathFromArg:    true,
+			pattern: MountPattern{BasePattern: BasePattern{CallRegex: `^Group$`,
+
+				RecvTypeRegex: `^\*gin\.RouterGroup$`}, PathFromArg: true,
 				RouterFromArg:  true,
 				PathArgIndex:   0,
 				RouterArgIndex: 1,
 				IsMount:        true,
-				RecvTypeRegex:  `^\*gin\.RouterGroup$`,
 			},
 			expectedMatch: true,
 			description:   "Should match Group with specific receiver type",
 		},
 		{
 			name: "mount with function name pattern",
-			pattern: MountPattern{
-				CallRegex:         `^Mount$`,
-				PathFromArg:       true,
-				RouterFromArg:     true,
-				PathArgIndex:      0,
-				RouterArgIndex:    1,
-				IsMount:           true,
-				FunctionNameRegex: `^mountAPI$`,
+			pattern: MountPattern{BasePattern: BasePattern{CallRegex: `^Mount$`,
+
+				FunctionNameRegex: `^mountAPI$`}, PathFromArg: true,
+				RouterFromArg:  true,
+				PathArgIndex:   0,
+				RouterArgIndex: 1,
+				IsMount:        true,
 			},
 			expectedMatch: true,
 			description:   "Should match Mount with function name pattern",
 		},
 		{
 			name: "complex mount pattern",
-			pattern: MountPattern{
-				CallRegex:      `^(?i)(Group|Mount|Use|Handle|Register)(?:Prefix|Group|Route)?$`,
-				PathFromArg:    true,
+			pattern: MountPattern{BasePattern: BasePattern{CallRegex: `^(?i)(Group|Mount|Use|Handle|Register)(?:Prefix|Group|Route)?$`}, PathFromArg: true,
 				RouterFromArg:  true,
 				PathArgIndex:   0,
 				RouterArgIndex: 1,
@@ -258,44 +258,36 @@ func TestRequestPatternMatcher_Comprehensive(t *testing.T) {
 	}{
 		{
 			name: "basic bind pattern",
-			pattern: RequestBodyPattern{
-				CallRegex:    `^(?i)(BindJSON|ShouldBindJSON|BindXML|BindYAML|BindForm|ShouldBind)$`,
-				TypeArgIndex: 0,
-				TypeFromArg:  true,
-				Deref:        true,
+			pattern: RequestBodyPattern{BasePattern: BasePattern{CallRegex: `^(?i)(BindJSON|ShouldBindJSON|BindXML|BindYAML|BindForm|ShouldBind)$`}, TypeArgIndex: 0,
+				TypeFromArg: true,
+				Deref:       true,
 			},
 			expectedMatch: true,
 			description:   "Should match basic bind pattern",
 		},
 		{
 			name: "decode pattern",
-			pattern: RequestBodyPattern{
-				CallRegex:    `^Decode$`,
-				TypeArgIndex: 0,
-				TypeFromArg:  true,
-				Deref:        true,
+			pattern: RequestBodyPattern{BasePattern: BasePattern{CallRegex: `^Decode$`}, TypeArgIndex: 0,
+				TypeFromArg: true,
+				Deref:       true,
 			},
 			expectedMatch: true,
 			description:   "Should match decode pattern",
 		},
 		{
 			name: "custom bind pattern",
-			pattern: RequestBodyPattern{
-				CallRegex:    `^CustomBind$`,
-				TypeArgIndex: 0,
-				TypeFromArg:  true,
-				Deref:        false,
+			pattern: RequestBodyPattern{BasePattern: BasePattern{CallRegex: `^CustomBind$`}, TypeArgIndex: 0,
+				TypeFromArg: true,
+				Deref:       false,
 			},
 			expectedMatch: true,
 			description:   "Should match custom bind pattern",
 		},
 		{
 			name: "complex request pattern",
-			pattern: RequestBodyPattern{
-				CallRegex:    `^(?i)(Bind|Parse|Read|Unmarshal|Deserialize)(?:JSON|XML|YAML|Form|Body)?$`,
-				TypeArgIndex: 0,
-				TypeFromArg:  true,
-				Deref:        true,
+			pattern: RequestBodyPattern{BasePattern: BasePattern{CallRegex: `^(?i)(Bind|Parse|Read|Unmarshal|Deserialize)(?:JSON|XML|YAML|Form|Body)?$`}, TypeArgIndex: 0,
+				TypeFromArg: true,
+				Deref:       true,
 			},
 			expectedMatch: true,
 			description:   "Should match complex request pattern",
@@ -354,47 +346,39 @@ func TestResponsePatternMatcher_Comprehensive(t *testing.T) {
 	}{
 		{
 			name: "basic response pattern",
-			pattern: ResponsePattern{
-				CallRegex:      `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`,
-				StatusArgIndex: 0,
-				TypeArgIndex:   1,
-				TypeFromArg:    true,
-				StatusFromArg:  true,
+			pattern: ResponsePattern{BasePattern: BasePattern{CallRegex: `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`}, StatusArgIndex: 0,
+				TypeArgIndex:  1,
+				TypeFromArg:   true,
+				StatusFromArg: true,
 			},
 			expectedMatch: true,
 			description:   "Should match basic response pattern",
 		},
 		{
 			name: "marshal pattern",
-			pattern: ResponsePattern{
-				CallRegex:    `^Marshal$`,
-				TypeArgIndex: 0,
-				TypeFromArg:  true,
-				Deref:        true,
+			pattern: ResponsePattern{BasePattern: BasePattern{CallRegex: `^Marshal$`}, TypeArgIndex: 0,
+				TypeFromArg: true,
+				Deref:       true,
 			},
 			expectedMatch: true,
 			description:   "Should match marshal pattern",
 		},
 		{
 			name: "custom response pattern",
-			pattern: ResponsePattern{
-				CallRegex:      `^CustomResponse$`,
-				StatusArgIndex: 0,
-				TypeArgIndex:   1,
-				TypeFromArg:    true,
-				StatusFromArg:  false,
+			pattern: ResponsePattern{BasePattern: BasePattern{CallRegex: `^CustomResponse$`}, StatusArgIndex: 0,
+				TypeArgIndex:  1,
+				TypeFromArg:   true,
+				StatusFromArg: false,
 			},
 			expectedMatch: true,
 			description:   "Should match custom response pattern",
 		},
 		{
 			name: "complex response pattern",
-			pattern: ResponsePattern{
-				CallRegex:      `^(?i)(Send|Write|Output|Return|Respond)(?:JSON|XML|YAML|Data|File)?$`,
-				StatusArgIndex: 0,
-				TypeArgIndex:   1,
-				TypeFromArg:    true,
-				StatusFromArg:  true,
+			pattern: ResponsePattern{BasePattern: BasePattern{CallRegex: `^(?i)(Send|Write|Output|Return|Respond)(?:JSON|XML|YAML|Data|File)?$`}, StatusArgIndex: 0,
+				TypeArgIndex:  1,
+				TypeFromArg:   true,
+				StatusFromArg: true,
 			},
 			expectedMatch: true,
 			description:   "Should match complex response pattern",
@@ -451,9 +435,7 @@ func TestParamPatternMatcher_Comprehensive(t *testing.T) {
 	}{
 		{
 			name: "path param pattern",
-			pattern: ParamPattern{
-				CallRegex:     "^Param$",
-				ParamIn:       "path",
+			pattern: ParamPattern{BasePattern: BasePattern{CallRegex: "^Param$"}, ParamIn: "path",
 				ParamArgIndex: 0,
 			},
 			expectedMatch: true,
@@ -461,9 +443,7 @@ func TestParamPatternMatcher_Comprehensive(t *testing.T) {
 		},
 		{
 			name: "query param pattern",
-			pattern: ParamPattern{
-				CallRegex:     "^Query$",
-				ParamIn:       "query",
+			pattern: ParamPattern{BasePattern: BasePattern{CallRegex: "^Query$"}, ParamIn: "query",
 				ParamArgIndex: 0,
 			},
 			expectedMatch: true,
@@ -471,9 +451,7 @@ func TestParamPatternMatcher_Comprehensive(t *testing.T) {
 		},
 		{
 			name: "header param pattern",
-			pattern: ParamPattern{
-				CallRegex:     "^GetHeader$",
-				ParamIn:       "header",
+			pattern: ParamPattern{BasePattern: BasePattern{CallRegex: "^GetHeader$"}, ParamIn: "header",
 				ParamArgIndex: 0,
 			},
 			expectedMatch: true,
@@ -481,9 +459,7 @@ func TestParamPatternMatcher_Comprehensive(t *testing.T) {
 		},
 		{
 			name: "custom param pattern",
-			pattern: ParamPattern{
-				CallRegex:     "^CustomParam$",
-				ParamIn:       "custom",
+			pattern: ParamPattern{BasePattern: BasePattern{CallRegex: "^CustomParam$"}, ParamIn: "custom",
 				ParamArgIndex: 0,
 			},
 			expectedMatch: true,
@@ -491,9 +467,7 @@ func TestParamPatternMatcher_Comprehensive(t *testing.T) {
 		},
 		{
 			name: "complex param pattern",
-			pattern: ParamPattern{
-				CallRegex:     `^(?i)(Param|Query|Header|Cookie|Form|Body)(?:Value|String|Int|Float|Bool)?$`,
-				ParamIn:       "path",
+			pattern: ParamPattern{BasePattern: BasePattern{CallRegex: `^(?i)(Param|Query|Header|Cookie|Form|Body)(?:Value|String|Int|Float|Bool)?$`}, ParamIn: "path",
 				ParamArgIndex: 0,
 			},
 			expectedMatch: true,
@@ -545,9 +519,7 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 	// Test edge cases for all pattern types
 	t.Run("empty regex patterns", func(t *testing.T) {
 		// Test route pattern with empty regex
-		routePattern := RoutePattern{
-			CallRegex:      "",
-			MethodFromCall: true,
+		routePattern := RoutePattern{BasePattern: BasePattern{CallRegex: ""}, MethodFromCall: true,
 			PathFromArg:    true,
 			HandlerFromArg: true,
 		}
@@ -558,9 +530,7 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 		}
 
 		// Test mount pattern with empty regex
-		mountPattern := MountPattern{
-			CallRegex:     "",
-			PathFromArg:   true,
+		mountPattern := MountPattern{BasePattern: BasePattern{CallRegex: ""}, PathFromArg: true,
 			RouterFromArg: true,
 			IsMount:       true,
 		}
@@ -573,9 +543,7 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 
 	t.Run("nil config handling", func(t *testing.T) {
 		// Test with nil config - should handle gracefully
-		routePattern := RoutePattern{
-			CallRegex:      `^GET$`,
-			MethodFromCall: true,
+		routePattern := RoutePattern{BasePattern: BasePattern{CallRegex: `^GET$`}, MethodFromCall: true,
 			PathFromArg:    true,
 			HandlerFromArg: true,
 		}
@@ -591,9 +559,7 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 
 	t.Run("nil context provider", func(t *testing.T) {
 		// Test with nil context provider - should handle gracefully
-		routePattern := RoutePattern{
-			CallRegex:      `^GET$`,
-			MethodFromCall: true,
+		routePattern := RoutePattern{BasePattern: BasePattern{CallRegex: `^GET$`}, MethodFromCall: true,
 			PathFromArg:    true,
 			HandlerFromArg: true,
 		}
@@ -609,9 +575,7 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 
 	t.Run("nil type resolver", func(t *testing.T) {
 		// Test with nil type resolver - should handle gracefully
-		routePattern := RoutePattern{
-			CallRegex:      `^GET$`,
-			MethodFromCall: true,
+		routePattern := RoutePattern{BasePattern: BasePattern{CallRegex: `^GET$`}, MethodFromCall: true,
 			PathFromArg:    true,
 			HandlerFromArg: true,
 		}
@@ -648,17 +612,13 @@ func TestPatternMatcher_PrioritySystem(t *testing.T) {
 	// Test priority system
 	t.Run("route pattern priorities", func(t *testing.T) {
 		// High priority pattern (priority is determined by the matcher, not the pattern)
-		highPriorityPattern := RoutePattern{
-			CallRegex:      `^GET$`,
-			MethodFromCall: true,
+		highPriorityPattern := RoutePattern{BasePattern: BasePattern{CallRegex: `^GET$`}, MethodFromCall: true,
 			PathFromArg:    true,
 			HandlerFromArg: true,
 		}
 
 		// Low priority pattern (priority is determined by the matcher, not the pattern)
-		lowPriorityPattern := RoutePattern{
-			CallRegex:      `^GET$`,
-			MethodFromCall: true,
+		lowPriorityPattern := RoutePattern{BasePattern: BasePattern{CallRegex: `^GET$`}, MethodFromCall: true,
 			PathFromArg:    true,
 			HandlerFromArg: true,
 		}
@@ -677,17 +637,13 @@ func TestPatternMatcher_PrioritySystem(t *testing.T) {
 
 	t.Run("mount pattern priorities", func(t *testing.T) {
 		// High priority pattern (priority is determined by the matcher, not the pattern)
-		highPriorityPattern := MountPattern{
-			CallRegex:     `^Group$`,
-			PathFromArg:   true,
+		highPriorityPattern := MountPattern{BasePattern: BasePattern{CallRegex: `^Group$`}, PathFromArg: true,
 			RouterFromArg: true,
 			IsMount:       true,
 		}
 
 		// Low priority pattern (priority is determined by the matcher, not the pattern)
-		lowPriorityPattern := MountPattern{
-			CallRegex:     `^Group$`,
-			PathFromArg:   true,
+		lowPriorityPattern := MountPattern{BasePattern: BasePattern{CallRegex: `^Group$`}, PathFromArg: true,
 			RouterFromArg: true,
 			IsMount:       true,
 		}
@@ -725,9 +681,7 @@ func TestMountPatternMatcher_GetPattern(t *testing.T) {
 	contextProvider := NewContextProvider(meta)
 
 	// Create mount pattern
-	pattern := MountPattern{
-		CallRegex:    "Mount",
-		IsMount:      true,
+	pattern := MountPattern{BasePattern: BasePattern{CallRegex: "Mount"}, IsMount: true,
 		PathFromArg:  true,
 		PathArgIndex: 0,
 	}
@@ -767,9 +721,7 @@ func TestMountPatternMatcher_ExtractMount(t *testing.T) {
 	contextProvider := NewContextProvider(meta)
 
 	// Create mount pattern
-	pattern := MountPattern{
-		CallRegex:      "Mount",
-		IsMount:        true,
+	pattern := MountPattern{BasePattern: BasePattern{CallRegex: "Mount"}, IsMount: true,
 		PathFromArg:    true,
 		PathArgIndex:   0,
 		RouterArgIndex: 1,
@@ -850,12 +802,13 @@ func TestRequestPatternMatcher_MatchNode(t *testing.T) {
 	contextProvider := NewContextProvider(meta)
 
 	// Create request pattern
-	pattern := RequestBodyPattern{
-		CallRegex:     "^BindJSON$",
-		TypeArgIndex:  0,
-		TypeFromArg:   false, // Don't extract type from argument
-		Deref:         false, // Don't dereference
-		RecvTypeRegex: `^gin\.\*gin\.Context$`,
+	pattern := RequestBodyPattern{BasePattern: BasePattern{CallRegex: "^BindJSON$",
+
+		// Don't extract type from argument
+		// Don't dereference
+		RecvTypeRegex: `^gin\.\*gin\.Context$`}, TypeArgIndex: 0,
+		TypeFromArg: false,
+		Deref:       false,
 	}
 
 	// Create request pattern matcher
@@ -913,10 +866,8 @@ func TestRequestPatternMatcher_GetPattern(t *testing.T) {
 	contextProvider := NewContextProvider(meta)
 
 	// Create request pattern
-	pattern := RequestBodyPattern{
-		CallRegex:    "BindJSON",
-		TypeArgIndex: 0,
-		TypeFromArg:  true,
+	pattern := RequestBodyPattern{BasePattern: BasePattern{CallRegex: "BindJSON"}, TypeArgIndex: 0,
+		TypeFromArg: true,
 	}
 
 	// Create request pattern matcher
@@ -954,11 +905,9 @@ func TestRequestPatternMatcher_ExtractRequest(t *testing.T) {
 	contextProvider := NewContextProvider(meta)
 
 	// Create request pattern
-	pattern := RequestBodyPattern{
-		CallRegex:    "BindJSON",
-		TypeArgIndex: 0,
-		TypeFromArg:  false, // Don't extract type from argument
-		Deref:        false, // Don't dereference
+	pattern := RequestBodyPattern{BasePattern: BasePattern{CallRegex: "BindJSON"}, TypeArgIndex: 0,
+		TypeFromArg: false, // Don't extract type from argument
+		Deref:       false, // Don't dereference
 	}
 
 	// Create request pattern matcher
@@ -1156,7 +1105,7 @@ func TestBasePatternMatcher_traceRouterOrigin(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+		t.Run(tt.name, func(_ *testing.T) {
 			routerArg := &metadata.CallArgument{
 				Kind: tt.argKind,
 				Name: stringPool.Get(tt.argName),

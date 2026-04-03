@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // Package patterns provides gitignore-style pattern matching functionality
 // that can be used across the project for filtering files, packages, and other paths.
 package patterns
@@ -58,6 +72,8 @@ func matchGitignorePattern(pattern, path string) bool {
 }
 
 // patternToRegex converts a gitignore pattern to a regex
+//
+//nolint:gocyclo // gitignore pattern to regex conversion
 func patternToRegex(pattern string) string {
 	// Handle special case: if pattern ends with /, we need special logic
 	trailingSlash := strings.HasSuffix(pattern, "/")
@@ -84,11 +100,12 @@ func patternToRegex(pattern string) string {
 		case '*':
 			if i+1 < len(pattern) && pattern[i+1] == '*' {
 				// Handle ** - matches any number of path segments
-				if i+2 < len(pattern) && pattern[i+2] == '/' {
+				switch {
+				case i+2 < len(pattern) && pattern[i+2] == '/':
 					// **/ - matches zero or more path segments followed by /
 					result.WriteString("(?:.*?/)?")
 					i += 3
-				} else if i+2 == len(pattern) {
+				case i+2 == len(pattern):
 					// ** at end - matches the current path and any subpaths
 					// Check if there's a preceding slash that we need to make optional
 					if i > 0 && pattern[i-1] == '/' {
@@ -106,7 +123,7 @@ func patternToRegex(pattern string) string {
 						result.WriteString(".*")
 					}
 					i += 2
-				} else {
+				default:
 					// ** in middle - matches zero or more path segments
 					result.WriteString(".*")
 					i += 2

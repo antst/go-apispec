@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
@@ -150,7 +164,7 @@ func TestSchemaMapper_MapTypes(t *testing.T) {
 			goType: "map[string]uint",
 			expected: &Schema{
 				Type:                 "object",
-				AdditionalProperties: &Schema{Type: "integer", Minimum: 0},
+				AdditionalProperties: &Schema{Type: "integer", Minimum: floatPtr(0)},
 			},
 		},
 		{
@@ -245,7 +259,7 @@ func TestSchemaMapper_SliceTypes(t *testing.T) {
 			goType: "[]uint",
 			expected: &Schema{
 				Type:  "array",
-				Items: &Schema{Type: "integer", Minimum: 0},
+				Items: &Schema{Type: "integer", Minimum: floatPtr(0)},
 			},
 		},
 		{
@@ -338,32 +352,32 @@ func TestSchemaMapper_BasicTypes(t *testing.T) {
 		{
 			name:     "uint",
 			goType:   "uint",
-			expected: &Schema{Type: "integer", Minimum: 0},
+			expected: &Schema{Type: "integer", Minimum: floatPtr(0)},
 		},
 		{
 			name:     "uint8",
 			goType:   "uint8",
-			expected: &Schema{Type: "integer", Minimum: 0},
+			expected: &Schema{Type: "integer", Minimum: floatPtr(0)},
 		},
 		{
 			name:     "uint16",
 			goType:   "uint16",
-			expected: &Schema{Type: "integer", Minimum: 0},
+			expected: &Schema{Type: "integer", Minimum: floatPtr(0)},
 		},
 		{
 			name:     "uint32",
 			goType:   "uint32",
-			expected: &Schema{Type: "integer", Minimum: 0},
+			expected: &Schema{Type: "integer", Minimum: floatPtr(0)},
 		},
 		{
 			name:     "uint64",
 			goType:   "uint64",
-			expected: &Schema{Type: "integer", Minimum: 0},
+			expected: &Schema{Type: "integer", Minimum: floatPtr(0)},
 		},
 		{
 			name:     "byte",
 			goType:   "byte",
-			expected: &Schema{Type: "integer", Minimum: 0},
+			expected: &Schema{Type: "integer", Minimum: floatPtr(0)},
 		},
 		{
 			name:     "float32",
@@ -383,7 +397,7 @@ func TestSchemaMapper_BasicTypes(t *testing.T) {
 		{
 			name:     "[]byte",
 			goType:   "[]byte",
-			expected: &Schema{Type: "array", Items: &Schema{Type: "integer", Minimum: 0}},
+			expected: &Schema{Type: "array", Items: &Schema{Type: "integer", Minimum: floatPtr(0)}},
 		},
 		{
 			name:     "[]string",
@@ -706,42 +720,4 @@ func TestMapMethodFromFunctionName(t *testing.T) {
 	}
 }
 
-// Helper function to compare schemas
-func schemasEqual(a, b *Schema) bool {
-	if a == nil && b == nil {
-		return true
-	}
-	if a == nil || b == nil {
-		return false
-	}
-
-	if a.Type != b.Type {
-		return false
-	}
-	if a.Format != b.Format {
-		return false
-	}
-	if a.Ref != b.Ref {
-		return false
-	}
-	if a.Minimum != b.Minimum {
-		return false
-	}
-	if a.Maximum != b.Maximum {
-		return false
-	}
-	if a.Items != nil && b.Items != nil {
-		return schemasEqual(a.Items, b.Items)
-	}
-	if a.Items != nil || b.Items != nil {
-		return false
-	}
-	if a.AdditionalProperties != nil && b.AdditionalProperties != nil {
-		return schemasEqual(a.AdditionalProperties, b.AdditionalProperties)
-	}
-	if a.AdditionalProperties != nil || b.AdditionalProperties != nil {
-		return false
-	}
-
-	return true
-}
+// schemasEqual is defined in extractor.go (same package)

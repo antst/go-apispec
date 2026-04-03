@@ -280,6 +280,35 @@
                         'line-color': '#ff6b6b',
                         'target-arrow-color': '#ff6b6b'
                     }
+                },
+                // CFG branch edge styles
+                {
+                    selector: 'edge[branch_kind = "if-then"]',
+                    style: {
+                        'line-color': '#22c55e',
+                        'target-arrow-color': '#22c55e',
+                        'width': 2.5,
+                        'label': 'data(branch_label)'
+                    }
+                },
+                {
+                    selector: 'edge[branch_kind = "if-else"]',
+                    style: {
+                        'line-color': '#ef4444',
+                        'target-arrow-color': '#ef4444',
+                        'line-style': 'dashed',
+                        'width': 2.5,
+                        'label': 'data(branch_label)'
+                    }
+                },
+                {
+                    selector: 'edge[branch_kind = "switch-case"]',
+                    style: {
+                        'line-color': '#a78bfa',
+                        'target-arrow-color': '#a78bfa',
+                        'width': 2.5,
+                        'label': 'data(branch_label)'
+                    }
                 }
             ],
             layout: {

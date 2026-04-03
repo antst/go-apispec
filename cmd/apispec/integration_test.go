@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
@@ -454,8 +468,8 @@ func TestParseFlags(t *testing.T) {
 				Title:              "Generated API",
 				APIVersion:         "1.0.0",
 				ContactName:        "Ehab",
-				ContactURL:         "https://ehabterra.github.io/",
-				ContactEmail:       "ehabterra@hotmail.com",
+				ContactURL:         "https://github.com/antst/go-apispec",
+				ContactEmail:       "antst@gmail.com",
 				OpenAPIVersion:     "3.1.1",
 				MaxNodesPerTree:    50000,
 				MaxChildrenPerNode: 500,
@@ -501,8 +515,17 @@ func TestParseFlags(t *testing.T) {
 				if config.InputDir != tt.expected.InputDir && tt.expected.InputDir != "" {
 					t.Errorf("InputDir = %v, want %v", config.InputDir, tt.expected.InputDir)
 				}
-				if config.OutputFile != tt.expected.OutputFile && tt.expected.OutputFile != "" {
-					t.Errorf("OutputFile = %v, want %v", config.OutputFile, tt.expected.OutputFile)
+				if tt.expected.OutputFile != "" {
+					// parseFlags resolves user-specified output paths to absolute;
+					// check that the resolved path ends with the expected filename
+					expectedBase := filepath.Base(tt.expected.OutputFile)
+					actualBase := filepath.Base(config.OutputFile)
+					if actualBase != expectedBase {
+						t.Errorf("OutputFile base = %v, want %v (full: %v)", actualBase, expectedBase, config.OutputFile)
+					}
+					if tt.expected.OutputFlagSet && !filepath.IsAbs(config.OutputFile) {
+						t.Errorf("OutputFile should be absolute when flag is set, got %v", config.OutputFile)
+					}
 				}
 				if config.Title != tt.expected.Title && tt.expected.Title != "" {
 					t.Errorf("Title = %v, want %v", config.Title, tt.expected.Title)

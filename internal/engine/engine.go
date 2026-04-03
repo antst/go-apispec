@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 // Package engine provides the core OpenAPI generation engine used by both
 // the CLI and the generator package.
 package engine
@@ -12,13 +26,14 @@ import (
 
 	"go/types"
 
-	"github.com/ehabterra/apispec/internal/core"
-	"github.com/ehabterra/apispec/internal/metadata"
-	intspec "github.com/ehabterra/apispec/internal/spec"
-	"github.com/ehabterra/apispec/pkg/patterns"
-	"github.com/ehabterra/apispec/spec"
 	"golang.org/x/tools/go/packages"
 	"gopkg.in/yaml.v3"
+
+	"github.com/antst/go-apispec/internal/core"
+	"github.com/antst/go-apispec/internal/metadata"
+	intspec "github.com/antst/go-apispec/internal/spec"
+	"github.com/antst/go-apispec/pkg/patterns"
+	"github.com/antst/go-apispec/spec"
 )
 
 // VerboseLogger provides conditional logging based on verbose setting
@@ -58,9 +73,9 @@ const (
 	DefaultInputDir           = "."
 	DefaultTitle              = "Generated API"
 	DefaultAPIVersion         = "1.0.0"
-	DefaultContactName        = "Ehab"
-	DefaultContactURL         = "https://ehabterra.github.io/"
-	DefaultContactEmail       = "ehabterra@hotmail.com"
+	DefaultContactName        = "Anton Starikov"
+	DefaultContactURL         = "https://github.com/antst/go-apispec"
+	DefaultContactEmail       = "antst@gmail.com"
 	DefaultOpenAPIVersion     = "3.1.1"
 	DefaultMaxNodesPerTree    = 50000
 	DefaultMaxChildrenPerNode = 500
@@ -68,9 +83,8 @@ const (
 	DefaultMaxNestedArgsDepth = 100
 	DefaultMaxRecursionDepth  = 10
 	DefaultMetadataFile       = "metadata.yaml"
-	CopyrightNotice           = "apispec - Copyright 2025 Ehab Terra"
+	CopyrightNotice           = "go-apispec - Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov"
 	LicenseNotice             = "Licensed under the Apache License 2.0. See LICENSE and NOTICE."
-	FullLicenseNotice         = "\n\nCopyright 2025 Ehab Terra. Licensed under the Apache License 2.0. See LICENSE and NOTICE."
 )
 
 // EngineConfig holds configuration for the OpenAPI generation engine
@@ -122,6 +136,11 @@ type EngineConfig struct {
 
 	// Verbose output control
 	Verbose bool
+
+	// Output naming: use short names for operationIds and schema names.
+	// ShortNamesSet indicates the CLI flag was explicitly provided.
+	ShortNames    bool
+	ShortNamesSet bool
 
 	moduleRoot string
 }
@@ -216,11 +235,39 @@ func NewEngine(config *EngineConfig) *Engine {
 	return &Engine{config: config}
 }
 
-// GenerateOpenAPI generates an OpenAPI specification from the configured input directory
-// GenerateMetadataOnly generates only metadata and call graph without OpenAPI spec
-// This is useful for diagram servers and other tools that only need the call graph
+// GenerateMetadataOnly generates only metadata and call graph without OpenAPI spec.
+// This is useful for diagram servers and other tools that only need the call graph.
 func (e *Engine) GenerateMetadataOnly() (*metadata.Metadata, error) {
 	return e.GenerateMetadataOnlyWithLogger(NewVerboseLogger(e.config.Verbose))
+}
+
+// filterValidPackages filters out packages with errors and returns only valid ones
+func (e *Engine) filterValidPackages(pkgs []*packages.Package, logger *VerboseLogger) ([]*packages.Package, error) {
+	var validPkgs []*packages.Package
+	var errorCount int
+
+	for _, pkg := range pkgs {
+		if len(pkg.Errors) > 0 {
+			errorCount++
+			logger.Printf("Warning: Skipping package %s due to errors:\n", pkg.PkgPath)
+			for _, pkgErr := range pkg.Errors {
+				logger.Printf("  - %s\n", pkgErr.Msg)
+			}
+			continue
+		}
+		validPkgs = append(validPkgs, pkg)
+	}
+
+	if len(validPkgs) == 0 {
+		return nil, fmt.Errorf("no valid packages found - all %d packages contain errors", errorCount)
+	}
+
+	if errorCount > 0 {
+		logger.Printf("Info: Continuing analysis with %d valid packages (%d packages skipped due to errors)\n",
+			len(validPkgs), errorCount)
+	}
+
+	return validPkgs, nil
 }
 
 // GenerateMetadataOnlyWithLogger generates only metadata and call graph without OpenAPI spec with a custom logger
@@ -242,6 +289,9 @@ func (e *Engine) GenerateMetadataOnlyWithLogger(logger *VerboseLogger) (*metadat
 		return nil, fmt.Errorf("could not find Go module: %w", err)
 	}
 
+	// Set repo root for relative path generation in metadata positions
+	metadata.SetRepoRoot(e.config.moduleRoot)
+
 	// Create file set and file info mapping for metadata generation
 	fset := token.NewFileSet()
 	fileToInfo := make(map[*ast.File]*types.Info)
@@ -259,30 +309,9 @@ func (e *Engine) GenerateMetadataOnlyWithLogger(logger *VerboseLogger) (*metadat
 	}
 
 	// Filter out packages with errors and continue with valid packages
-	var validPkgs []*packages.Package
-	var errorCount int
-
-	for _, pkg := range filteredPkgs {
-		if len(pkg.Errors) > 0 {
-			errorCount++
-			// Log errors but continue processing other packages
-			logger.Printf("Warning: Skipping package %s due to errors:\n", pkg.PkgPath)
-			for _, err := range pkg.Errors {
-				logger.Printf("  - %s\n", err.Msg)
-			}
-			continue
-		}
-		validPkgs = append(validPkgs, pkg)
-	}
-
-	// If all packages have errors, that's a problem
-	if len(validPkgs) == 0 {
-		return nil, fmt.Errorf("no valid packages found - all %d packages contain errors", errorCount)
-	}
-
-	if errorCount > 0 {
-		logger.Printf("Info: Continuing analysis with %d valid packages (%d packages skipped due to errors)\n",
-			len(validPkgs), errorCount)
+	validPkgs, err := e.filterValidPackages(filteredPkgs, logger)
+	if err != nil {
+		return nil, err
 	}
 
 	// Use valid packages instead of all filtered packages
@@ -359,85 +388,117 @@ func (e *Engine) GenerateMetadataOnlyWithLogger(logger *VerboseLogger) (*metadat
 	return meta, nil
 }
 
-func (e *Engine) GenerateOpenAPI() (*spec.OpenAPISpec, error) {
-	// Generate metadata using the shared method
-	meta, err := e.GenerateMetadataOnly()
-	if err != nil {
-		return nil, err
+// generateDiagram generates the call graph diagram if configured
+func (e *Engine) generateDiagram(meta *metadata.Metadata) error {
+	if e.config.DiagramPath == "" {
+		return nil
 	}
 
-	// Generate diagram if requested
-	if e.config.DiagramPath != "" {
-		// Use absolute path for diagram file
-		diagramPath := e.config.DiagramPath
-		if !filepath.IsAbs(diagramPath) {
-			diagramPath = filepath.Join(e.config.moduleRoot, diagramPath)
-		}
-
-		// Choose between paginated and regular diagram based on configuration
-		if e.config.PaginatedDiagram {
-			// Use paginated visualization for better performance with large call graphs
-			// This solves the 3997-edge performance problem by loading data progressively
-			err := intspec.GeneratePaginatedCytoscapeHTML(meta, diagramPath, e.config.DiagramPageSize)
-			if err != nil {
-				return nil, fmt.Errorf("failed to generate paginated diagram: %w", err)
-			}
-		} else {
-			// Use regular call graph visualization for smaller graphs
-			err := intspec.GenerateCallGraphCytoscapeHTML(meta, diagramPath)
-			if err != nil {
-				return nil, fmt.Errorf("failed to generate diagram: %w", err)
-			}
-		}
+	diagramPath := e.config.DiagramPath
+	if !filepath.IsAbs(diagramPath) {
+		diagramPath = filepath.Join(e.config.moduleRoot, diagramPath)
 	}
 
-	// Framework dependency analysis is now handled in GenerateMetadataOnly()
+	if e.config.PaginatedDiagram {
+		if err := intspec.GeneratePaginatedCytoscapeHTML(meta, diagramPath, e.config.DiagramPageSize); err != nil {
+			return fmt.Errorf("failed to generate paginated diagram: %w", err)
+		}
+	} else {
+		if err := intspec.GenerateCallGraphCytoscapeHTML(meta, diagramPath); err != nil {
+			return fmt.Errorf("failed to generate diagram: %w", err)
+		}
+	}
+	return nil
+}
 
-	// Detect framework and load configuration
+// loadOrDetectConfig loads or auto-detects the API spec configuration.
+// When a config file is provided, it is merged with the auto-detected
+// framework defaults — absent sections fall back to built-in patterns.
+func (e *Engine) loadOrDetectConfig() (*spec.APISpecConfig, error) {
+	if e.config.APISpecConfig != nil {
+		return e.config.APISpecConfig, nil
+	}
+
+	// Always detect framework for defaults
 	detector := core.NewFrameworkDetector()
 	framework, err := detector.Detect(e.config.moduleRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to detect framework: %w", err)
 	}
 
-	var apispecConfig *spec.APISpecConfig
-	if e.config.APISpecConfig != nil {
-		// Use the directly provided config
-		apispecConfig = e.config.APISpecConfig
-	} else if e.config.ConfigFile != "" {
-		// Load config from file
-		apispecConfig, err = spec.LoadAPISpecConfig(e.config.ConfigFile)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load config: %w", err)
-		}
-	} else {
-		// Auto-detect framework and use defaults
-		switch framework {
-		case "gin":
-			apispecConfig = spec.DefaultGinConfig()
-		case "chi":
-			apispecConfig = spec.DefaultChiConfig()
-		case "echo":
-			apispecConfig = spec.DefaultEchoConfig()
-		case "fiber":
-			apispecConfig = spec.DefaultFiberConfig()
-		case "mux":
-			apispecConfig = spec.DefaultMuxConfig()
-		default:
-			apispecConfig = spec.DefaultHTTPConfig() // fallback
-		}
+	var defaults *spec.APISpecConfig
+	switch framework {
+	case "gin":
+		defaults = spec.DefaultGinConfig()
+	case "chi":
+		defaults = spec.DefaultChiConfig()
+	case "echo":
+		defaults = spec.DefaultEchoConfig()
+	case "fiber":
+		defaults = spec.DefaultFiberConfig()
+	case "mux":
+		defaults = spec.DefaultMuxConfig()
+	default:
+		defaults = spec.DefaultHTTPConfig()
 	}
 
-	// Set info from configuration (only if not already set in APISpecConfig)
+	if e.config.ConfigFile == "" {
+		return defaults, nil
+	}
+
+	// Load user config and merge with defaults
+	userCfg, err := spec.LoadAPISpecConfig(e.config.ConfigFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	mergeConfigWithDefaults(userCfg, defaults)
+	return userCfg, nil
+}
+
+// mergeConfigWithDefaults fills absent sections in userCfg from defaults.
+// Present sections in userCfg are kept as-is (user overrides).
+func mergeConfigWithDefaults(userCfg, defaults *spec.APISpecConfig) {
+	fw := &userCfg.Framework
+	dfw := &defaults.Framework
+
+	if len(fw.RoutePatterns) == 0 {
+		fw.RoutePatterns = dfw.RoutePatterns
+	}
+	if len(fw.RequestBodyPatterns) == 0 {
+		fw.RequestBodyPatterns = dfw.RequestBodyPatterns
+	}
+	if len(fw.ResponsePatterns) == 0 {
+		fw.ResponsePatterns = dfw.ResponsePatterns
+	}
+	if len(fw.ParamPatterns) == 0 {
+		fw.ParamPatterns = dfw.ParamPatterns
+	}
+	if len(fw.MountPatterns) == 0 {
+		fw.MountPatterns = dfw.MountPatterns
+	}
+	if len(fw.ContentTypePatterns) == 0 {
+		fw.ContentTypePatterns = dfw.ContentTypePatterns
+	}
+
+	if userCfg.Defaults.RequestContentType == "" {
+		userCfg.Defaults.RequestContentType = defaults.Defaults.RequestContentType
+	}
+	if userCfg.Defaults.ResponseContentType == "" {
+		userCfg.Defaults.ResponseContentType = defaults.Defaults.ResponseContentType
+	}
+	if userCfg.Defaults.ResponseStatus == 0 {
+		userCfg.Defaults.ResponseStatus = defaults.Defaults.ResponseStatus
+	}
+}
+
+// applyConfigDefaults fills in missing config fields from engine defaults
+func (e *Engine) applyConfigDefaults(apispecConfig *spec.APISpecConfig) {
 	if apispecConfig.Info.Title == "" {
 		apispecConfig.Info.Title = e.config.Title
 	}
-	if apispecConfig.Info.Description == "" {
-		desc := e.config.Description
-		if !strings.HasSuffix(desc, FullLicenseNotice) {
-			desc += FullLicenseNotice
-		}
-		apispecConfig.Info.Description = desc
+	if apispecConfig.Info.Description == "" && e.config.Description != "" {
+		apispecConfig.Info.Description = e.config.Description
 	}
 	if apispecConfig.Info.Version == "" {
 		apispecConfig.Info.Version = e.config.APIVersion
@@ -459,8 +520,34 @@ func (e *Engine) GenerateOpenAPI() (*spec.OpenAPISpec, error) {
 		}
 	}
 
-	// Merge CLI include/exclude patterns with loaded configuration
+	if e.config.ShortNamesSet {
+		v := e.config.ShortNames
+		apispecConfig.ShortNames = &v
+	}
+
 	e.mergeIncludeExcludePatterns(apispecConfig)
+}
+
+func (e *Engine) GenerateOpenAPI() (*spec.OpenAPISpec, error) {
+	// Generate metadata using the shared method
+	meta, err := e.GenerateMetadataOnly()
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate diagram if requested
+	if err := e.generateDiagram(meta); err != nil {
+		return nil, err
+	}
+
+	// Load or detect API spec configuration
+	apispecConfig, err := e.loadOrDetectConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	// Apply defaults and merge patterns
+	e.applyConfigDefaults(apispecConfig)
 
 	// Prepare generator config
 	generatorConfig := intspec.GeneratorConfig{
@@ -487,7 +574,7 @@ func (e *Engine) GenerateOpenAPI() (*spec.OpenAPISpec, error) {
 
 	// Handle metadata writing if requested
 	if e.config.WriteMetadata {
-		// Use absolute path for metadata file
+		// Metadata file goes in the analyzed project directory
 		metadataPath := DefaultMetadataFile
 		if !filepath.IsAbs(metadataPath) {
 			metadataPath = filepath.Join(e.config.moduleRoot, metadataPath)
@@ -506,7 +593,6 @@ func (e *Engine) GenerateOpenAPI() (*spec.OpenAPISpec, error) {
 
 	// Output effective config if requested
 	if e.config.OutputConfig != "" {
-		// Use absolute path for config output file
 		configPath := e.config.OutputConfig
 		if !filepath.IsAbs(configPath) {
 			configPath = filepath.Join(e.config.moduleRoot, configPath)
@@ -516,7 +602,7 @@ func (e *Engine) GenerateOpenAPI() (*spec.OpenAPISpec, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal effective config: %w", err)
 		}
-		err = os.WriteFile(configPath, cfgYaml, 0644)
+		err = os.WriteFile(configPath, cfgYaml, 0600)
 		if err != nil {
 			return nil, fmt.Errorf("failed to write effective config: %w", err)
 		}
@@ -589,86 +675,91 @@ func matchesPattern(pattern, path string) bool {
 	return patterns.Match(pattern, path)
 }
 
-// shouldIncludePackage checks if a package should be included based on include/exclude patterns
-func (e *Engine) shouldIncludePackage(pkgPath string) bool {
-	// Auto-exclude known problematic CGO dependencies if enabled
-	if e.config.SkipCGOPackages {
-		cgoProblematicPatterns := []string{
-			"*/tensorflow/*",     // TensorFlow C bindings
-			"*/govips/*",         // VIPS image processing
-			"*/opencv/*",         // OpenCV bindings
-			"*/ffmpeg/*",         // FFmpeg bindings
-			"*/sqlite3",          // SQLite3 CGO driver
-			"*/go-sqlite3",       // Alternative SQLite3 driver
-			"*/graft/tensorflow", // Specific TensorFlow graft package
-		}
-
-		for _, pattern := range cgoProblematicPatterns {
-			if matchesPattern(pattern, pkgPath) {
-				return false
-			}
-			// Also check with wildcards for nested paths
-			if strings.Contains(pkgPath, strings.Replace(pattern, "*/", "", 1)) {
-				return false
-			}
-		}
+// isCGOProblematic checks if a package path matches known CGO-problematic patterns
+func isCGOProblematic(pkgPath string) bool {
+	cgoProblematicPatterns := []string{
+		"*/tensorflow/*",     // TensorFlow C bindings
+		"*/govips/*",         // VIPS image processing
+		"*/opencv/*",         // OpenCV bindings
+		"*/ffmpeg/*",         // FFmpeg bindings
+		"*/sqlite3",          // SQLite3 CGO driver
+		"*/go-sqlite3",       // Alternative SQLite3 driver
+		"*/graft/tensorflow", // Specific TensorFlow graft package
 	}
 
-	// Auto-exclude test/mock packages if enabled (case-insensitive)
+	for _, pattern := range cgoProblematicPatterns {
+		if matchesPattern(pattern, pkgPath) {
+			return true
+		}
+		if strings.Contains(pkgPath, strings.Replace(pattern, "*/", "", 1)) {
+			return true
+		}
+	}
+	return false
+}
+
+// isAutoExcludedPackage checks if a package should be excluded by auto-exclude rules
+func (e *Engine) isAutoExcludedPackage(pkgPath string) bool {
 	lowerPkg := strings.ToLower(pkgPath)
 	if e.config.AutoExcludeTests {
 		if strings.HasSuffix(lowerPkg, "_test") || strings.HasSuffix(lowerPkg, "_tests") {
-			return false
+			return true
 		}
 	}
 	if e.config.AutoExcludeMocks {
 		if strings.HasSuffix(lowerPkg, "mock") || strings.HasSuffix(lowerPkg, "mocks") ||
 			strings.HasSuffix(lowerPkg, "fake") || strings.HasSuffix(lowerPkg, "fakes") ||
 			strings.HasSuffix(lowerPkg, "stub") || strings.HasSuffix(lowerPkg, "stubs") {
-			return false
+			return true
 		}
 	}
+	return false
+}
 
-	// If no include/exclude patterns specified, include everything (except CGO problematic)
+// matchesPackagePattern checks if a package path matches any of the given patterns
+func matchesPackagePattern(patterns []string, pkgPath string) bool {
+	for _, pattern := range patterns {
+		if matchesPattern(pattern, pkgPath) {
+			return true
+		}
+		parts := strings.Split(pkgPath, "/")
+		if len(parts) > 0 {
+			lastPart := parts[len(parts)-1]
+			if matchesPattern(pattern, lastPart) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// shouldIncludePackage checks if a package should be included based on include/exclude patterns
+func (e *Engine) shouldIncludePackage(pkgPath string) bool {
+	if e.config.SkipCGOPackages && isCGOProblematic(pkgPath) {
+		return false
+	}
+
+	if e.isAutoExcludedPackage(pkgPath) {
+		return false
+	}
+
+	// If no include/exclude patterns specified, include everything
 	if len(e.config.IncludeFiles) == 0 && len(e.config.ExcludeFiles) == 0 &&
 		len(e.config.IncludePackages) == 0 && len(e.config.ExcludePackages) == 0 {
 		return true
 	}
 
 	// Check exclude patterns first (exclude takes precedence)
-	for _, pattern := range e.config.ExcludePackages {
-		if matchesPattern(pattern, pkgPath) {
-			return false
-		}
-		// Also check if the pattern matches the last part of the package path
-		parts := strings.Split(pkgPath, "/")
-		if len(parts) > 0 {
-			lastPart := parts[len(parts)-1]
-			if matchesPattern(pattern, lastPart) {
-				return false
-			}
-		}
+	if matchesPackagePattern(e.config.ExcludePackages, pkgPath) {
+		return false
 	}
 
 	// Check include patterns
 	if len(e.config.IncludePackages) > 0 {
-		for _, pattern := range e.config.IncludePackages {
-			if matchesPattern(pattern, pkgPath) {
-				return true
-			}
-			// Also check if the pattern matches the last part of the package path
-			parts := strings.Split(pkgPath, "/")
-			if len(parts) > 0 {
-				lastPart := parts[len(parts)-1]
-				if matchesPattern(pattern, lastPart) {
-					return true
-				}
-			}
-		}
-		return false // Not matched by any include pattern
+		return matchesPackagePattern(e.config.IncludePackages, pkgPath)
 	}
 
-	return true // No include patterns specified, so include
+	return true
 }
 
 // shouldIncludeFile checks if a file should be included based on include/exclude patterns
@@ -841,7 +932,6 @@ func (e *Engine) filterToFrameworkPackages(
 	importPaths map[string]string,
 	frameworkList *metadata.FrameworkDependencyList,
 ) (map[string]map[string]*ast.File, map[*ast.File]*types.Info, map[string]string) {
-
 	// Create a set of framework package paths for quick lookup
 	frameworkPackages := make(map[string]bool)
 	for _, dep := range frameworkList.AllPackages {

@@ -1,6 +1,6 @@
 # Installation Guide
 
-This guide covers all the ways to install and use apispec.
+This guide covers all the ways to install and use go-apispec.
 
 ## Prerequisites
 
@@ -11,10 +11,10 @@ This guide covers all the ways to install and use apispec.
 
 ### 1. Go Install (Recommended)
 
-The easiest way to install apispec is using Go's built-in install command:
+The easiest way to install go-apispec is using Go's built-in install command:
 
 ```bash
-go install github.com/ehabterra/apispec/cmd/apispec@latest
+go install github.com/antst/go-apispec/cmd/apispec@latest
 ```
 
 **Pros:**
@@ -32,7 +32,7 @@ If you want to build from source or contribute to the project:
 
 ```bash
 # Clone the repository
-git clone https://github.com/ehabterra/apispec.git
+git clone https://github.com/antst/go-apispec.git
 cd apispec
 
 # Install to user directory (no sudo required)
@@ -57,7 +57,7 @@ We provide a convenient installation script:
 
 ```bash
 # Download and run the installation script
-curl -sSL https://raw.githubusercontent.com/ehabterra/apispec/main/scripts/install.sh | bash -s go-install
+curl -sSL https://raw.githubusercontent.com/antst/go-apispec/main/scripts/install.sh | bash -s go-install
 ```
 
 **Pros:**
@@ -74,14 +74,11 @@ curl -sSL https://raw.githubusercontent.com/ehabterra/apispec/main/scripts/insta
 ### macOS
 
 ```bash
-# Using Homebrew (if available)
-brew install ehabterra/tap/apispec
-
 # Using Go install
-go install github.com/ehabterra/apispec/cmd/apispec@latest
+go install github.com/antst/go-apispec/cmd/apispec@latest
 
 # From source
-git clone https://github.com/ehabterra/apispec.git
+git clone https://github.com/antst/go-apispec.git
 cd apispec
 make install-local
 ```
@@ -90,10 +87,10 @@ make install-local
 
 ```bash
 # Using Go install
-go install github.com/ehabterra/apispec/cmd/apispec@latest
+go install github.com/antst/go-apispec/cmd/apispec@latest
 
 # From source
-git clone https://github.com/ehabterra/apispec.git
+git clone https://github.com/antst/go-apispec.git
 cd apispec
 make install-local
 ```
@@ -102,10 +99,10 @@ make install-local
 
 ```bash
 # Using Go install
-go install github.com/ehabterra/apispec/cmd/apispec@latest
+go install github.com/antst/go-apispec/cmd/apispec@latest
 
 # From source
-git clone https://github.com/ehabterra/apispec.git
+git clone https://github.com/antst/go-apispec.git
 cd apispec
 go build -o apispec.exe ./cmd/apispec
 # Copy apispec.exe to a directory in your PATH
@@ -167,7 +164,7 @@ Go version: go1.21.0
 
 ### Go Install Method
 ```bash
-go install github.com/ehabterra/apispec/cmd/apispec@latest@latest
+go install github.com/antst/go-apispec/cmd/apispec@latest@latest
 ```
 
 ### From Source
@@ -181,7 +178,7 @@ make install-local
 
 ### Go Install Method
 ```bash
-go clean -i github.com/ehabterra/apispec/cmd/apispec
+go clean -i github.com/antst/go-apispec/cmd/apispec
 ```
 
 ### From Source
@@ -220,7 +217,7 @@ make uninstall
 
 If you encounter issues:
 
-1. Check the [GitHub Issues](https://github.com/ehabterra/apispec/issues)
+1. Check the [GitHub Issues](https://github.com/antst/go-apispec/issues)
 2. Review the [README.md](../README.md) for usage examples
 3. Check the [Go documentation](https://golang.org/doc/) for Go-related issues
 
@@ -229,7 +226,7 @@ If you encounter issues:
 For developers who want to work on apispec:
 
 ```bash
-git clone https://github.com/ehabterra/apispec.git
+git clone https://github.com/antst/go-apispec.git
 cd apispec
 
 # Install dependencies
@@ -247,7 +244,7 @@ make release
 
 ## Release Downloads
 
-Pre-built binaries are available for each release on the [GitHub Releases page](https://github.com/ehabterra/apispec/releases).
+Pre-built binaries are available for each release on the [GitHub Releases page](https://github.com/antst/go-apispec/releases).
 
 Supported platforms:
 - Linux (amd64, arm64)

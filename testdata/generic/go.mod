@@ -1,4 +1,4 @@
-module github.com/ehabterra/apispec/testdata/generic
+module github.com/antst/go-apispec/testdata/generic
 
 go 1.21
 

@@ -1,0 +1,790 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    },
+    "license": {
+      "name": ""
+    }
+  },
+  "paths": {
+    "/cache/{key}": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.GetWithCache",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "304": {
+            "description": "Not Modified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/config": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.LoadConfig",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.AppConfig"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/debug": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.DebugEndpoint",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dispatch": {
+      "post": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.DispatchHandler",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Method Not Allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/files/serve": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ContentServer.Serve",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.FileMetadata"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/files/{id}/download": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.DownloadFile",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/files/{id}/thumbnail": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ServeThumbnail",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.HealthCheck",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/image": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ServeImage",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items": {
+      "post": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.CreateItem",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/items-func": {
+      "post": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.CreateItemViaFunc",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/newsletter": {
+      "post": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.SubscribeNewsletter",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.NewsletterSubscription"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.NewsletterSubscription"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/paged-users": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.GetPagedUsers",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedList_github.com_antst_go-apispec_testdata_response_patterns.User"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ping": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.Ping",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/protected": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ProtectedEndpoint",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/stream": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.StreamData",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/text": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ServeText",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user-wrapped": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.GetUserWrapped",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIResponse_github.com_antst_go-apispec_testdata_response_patterns.User"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ListUsersEncoder",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.CreateUserEncoder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/search": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.SearchUsers",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.PaginatedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users/{id}": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.GetUserEncoder",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.DeleteUser",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/v2/users": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ListUsersV2",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.GetVersion",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "APIResponse_github.com_antst_go-apispec_testdata_response_patterns.User": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "PagedList_github.com_antst_go-apispec_testdata_response_patterns.User": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "total"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_response_patterns.AppConfig": {
+        "type": "object",
+        "properties": {
+          "debug": {
+            "type": "boolean"
+          },
+          "log_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "debug",
+          "log_path"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_response_patterns.ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "code",
+          "message"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_response_patterns.FileMetadata": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "size",
+          "type"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_response_patterns.NewsletterSubscription": {
+        "type": "object",
+        "properties": {
+          "emails": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "email"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "emails"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_response_patterns.PaginatedResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "total_count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total_count",
+          "page"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_response_patterns.User": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "email"
+        ]
+      }
+    }
+  }
+}

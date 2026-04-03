@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
@@ -5,7 +19,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 // ContextProviderImpl implements ContextProvider
@@ -43,6 +57,8 @@ func (c *ContextProviderImpl) GetArgumentInfo(arg *metadata.CallArgument) string
 }
 
 // callArgToString converts a call argument to a string representation
+//
+//nolint:gocyclo // call argument to string with multiple metadata kinds
 func (c *ContextProviderImpl) callArgToString(arg *metadata.CallArgument, sep *string) string {
 	// Use provided separator or default
 	separator := "."
@@ -77,11 +93,22 @@ func (c *ContextProviderImpl) callArgToString(arg *metadata.CallArgument, sep *s
 		}
 		return "[]"
 	case metadata.KindIndex:
-		// Handle index expressions (e.g., arr[i])
+		// Handle index expressions (e.g., arr[i] → element type)
 		if arg.X != nil {
-			return "*" + c.callArgToString(arg.X, nil)
+			baseType := c.callArgToString(arg.X, nil)
+			// For slice indexing, return the element type
+			if strings.HasPrefix(baseType, "[]") {
+				return baseType[2:] // []User → User
+			}
+			// For map indexing, return the value type (best effort)
+			if strings.HasPrefix(baseType, "map[") {
+				if idx := strings.Index(baseType, "]"); idx >= 0 && idx+1 < len(baseType) {
+					return baseType[idx+1:]
+				}
+			}
+			return baseType
 		}
-		return "*"
+		return ""
 	case metadata.KindCompositeLit:
 		if arg.X != nil {
 			return c.callArgToString(arg.X, nil)
@@ -166,11 +193,12 @@ func (c *ContextProviderImpl) callArgToString(arg *metadata.CallArgument, sep *s
 
 		var argName string
 
-		if arg.GetType() == "" && strings.HasSuffix(DefaultPackageName(arg.GetPkg()), arg.GetName()) {
+		switch {
+		case arg.GetType() == "" && strings.HasSuffix(DefaultPackageName(arg.GetPkg()), arg.GetName()):
 			argName = DefaultPackageName(arg.GetPkg())
-		} else if arg.GetType() != "" {
+		case arg.GetType() != "":
 			argName = DefaultPackageName(arg.GetPkg()) + "." + arg.GetName()
-		} else {
+		default:
 			argName = DefaultPackageName(arg.GetPkg()) + "/" + arg.GetName()
 		}
 

@@ -1,6 +1,6 @@
 # Release Workflow
 
-This document explains how to create releases for apispec using the automated GitHub Actions workflow.
+This document explains how to create releases for go-apispec using the automated GitHub Actions workflow.
 
 ## Overview
 
@@ -32,7 +32,7 @@ git push origin v1.0.0
 
 ### 3. Monitor the Workflow
 
-- Go to [Actions](https://github.com/ehabterra/apispec/actions) in your GitHub repository
+- Go to [Actions](https://github.com/antst/go-apispec/actions) in your GitHub repository
 - The "Release" workflow will automatically start
 - Monitor the progress and check for any errors
 
@@ -245,7 +245,6 @@ Potential improvements to consider:
 
 - **Pre-release builds** for testing
 - **Docker image builds** and publishing
-- **Homebrew formula updates**
 - **Changelog generation** from commits
 - **Release signing** for security
 - **Multi-architecture Docker builds**
@@ -254,7 +253,7 @@ Potential improvements to consider:
 
 If you encounter issues with the release workflow:
 
-1. Check the [Actions](https://github.com/ehabterra/apispec/actions) tab
+1. Check the [Actions](https://github.com/antst/go-apispec/actions) tab
 2. Review the workflow logs for errors
 3. Verify your tag format and naming
 4. Ensure you have proper permissions

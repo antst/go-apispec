@@ -2,53 +2,41 @@ name: Coverage Badge
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write   # <-- Needed for pushing changes
+  contents: write
 
 jobs:
   coverage:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-        token: ${{ secrets.GITHUB_TOKEN }}
-      
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.24.3'
-        
-    - name: Make script executable
-      run: chmod +x scripts/update-coverage-badge.sh
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Run coverage badge update script
-      run: ./scripts/update-coverage-badge.sh
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache-dependency-path: go.sum
 
-    - name: Commit and push changes
-      run: |
-        # Configure git
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        
-        # Add changes
-        git add README.md
-        git restore internal/spec/tests/
-        
-        # Check if there are changes to commit
-        if git diff --quiet && git diff --staged --quiet; then
-          echo "No changes to commit"
-        else
-          echo "Committing changes..."
-          git commit -m "Update coverage badge"
-          
-          # Push changes to main branch
-          echo "Pushing to main branch"
-          git push origin main
-        fi
+      - name: Make script executable
+        run: chmod +x scripts/update-coverage-badge.sh
+
+      - name: Update coverage badge
+        run: ./scripts/update-coverage-badge.sh
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add README.md
+          if git diff --quiet --staged; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update coverage badge"
+            git push origin main
+          fi

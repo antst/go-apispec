@@ -348,6 +348,22 @@
                 <span class="legend-color" style="background: #e74c3c;"></span>
                 Root Functions
             </div>
+            <div class="legend-item">
+                <span class="legend-color" style="background: #64748b;"></span>
+                Call (unconditional)
+            </div>
+            <div class="legend-item">
+                <span class="legend-color" style="background: #22c55e;"></span>
+                if-then branch
+            </div>
+            <div class="legend-item">
+                <span class="legend-color" style="background: #ef4444; border: 1px dashed #fff;"></span>
+                if-else branch
+            </div>
+            <div class="legend-item">
+                <span class="legend-color" style="background: #a78bfa;"></span>
+                switch-case branch
+            </div>
         </div>
     </div>
     <script>
@@ -478,6 +494,40 @@
                         'line-color': '#f59e0b',
                         'target-arrow-color': '#f59e0b',
                         'color': '#ffffff'
+                    }
+                },
+                // CFG branch edge styles
+                {
+                    selector: 'edge[branch_kind = "if-then"]',
+                    style: {
+                        'line-color': '#22c55e',
+                        'target-arrow-color': '#22c55e',
+                        'line-style': 'solid',
+                        'width': 2.5,
+                        'label': 'data(branch_label)',
+                        'opacity': 0.9
+                    }
+                },
+                {
+                    selector: 'edge[branch_kind = "if-else"]',
+                    style: {
+                        'line-color': '#ef4444',
+                        'target-arrow-color': '#ef4444',
+                        'line-style': 'dashed',
+                        'width': 2.5,
+                        'label': 'data(branch_label)',
+                        'opacity': 0.9
+                    }
+                },
+                {
+                    selector: 'edge[branch_kind = "switch-case"]',
+                    style: {
+                        'line-color': '#a78bfa',
+                        'target-arrow-color': '#a78bfa',
+                        'line-style': 'solid',
+                        'width': 2.5,
+                        'label': 'data(branch_label)',
+                        'opacity': 0.9
                     }
                 },
                 {

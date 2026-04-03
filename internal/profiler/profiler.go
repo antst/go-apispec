@@ -1,4 +1,4 @@
-// Copyright 2025 Ehab Terra
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -111,7 +111,7 @@ func (p *Profiler) Start() error {
 
 	// Create output directory if it doesn't exist
 	if p.config.OutputDir != "" {
-		if err := os.MkdirAll(p.config.OutputDir, 0755); err != nil {
+		if err := os.MkdirAll(p.config.OutputDir, 0750); err != nil { //nolint:gosec // profiling output directory
 			return fmt.Errorf("failed to create output directory: %w", err)
 		}
 	}
@@ -125,23 +125,17 @@ func (p *Profiler) Start() error {
 
 	// Start memory profiling
 	if p.config.MemProfile {
-		if err := p.startMemProfile(); err != nil {
-			return fmt.Errorf("failed to start memory profiling: %w", err)
-		}
+		p.startMemProfile()
 	}
 
 	// Start block profiling
 	if p.config.BlockProfile {
-		if err := p.startBlockProfile(); err != nil {
-			return fmt.Errorf("failed to start block profiling: %w", err)
-		}
+		p.startBlockProfile()
 	}
 
 	// Start mutex profiling
 	if p.config.MutexProfile {
-		if err := p.startMutexProfile(); err != nil {
-			return fmt.Errorf("failed to start mutex profiling: %w", err)
-		}
+		p.startMutexProfile()
 	}
 
 	// Start trace profiling
@@ -227,7 +221,7 @@ func (p *Profiler) Stop() error {
 // startCPUProfile starts CPU profiling
 func (p *Profiler) startCPUProfile() error {
 	filePath := filepath.Join(p.config.OutputDir, p.config.CPUProfilePath)
-	file, err := os.Create(filePath)
+	file, err := os.Create(filePath) //nolint:gosec // filePath is derived from profiler config
 	if err != nil {
 		return err
 	}
@@ -246,16 +240,15 @@ func (p *Profiler) startCPUProfile() error {
 }
 
 // startMemProfile starts memory profiling
-func (p *Profiler) startMemProfile() error {
+func (p *Profiler) startMemProfile() {
 	// Memory profiling is done at stop time
 	fmt.Printf("Memory profiling enabled: %s\n", filepath.Join(p.config.OutputDir, p.config.MemProfilePath))
-	return nil
 }
 
 // stopMemProfile stops memory profiling and writes to file
 func (p *Profiler) stopMemProfile() error {
 	filePath := filepath.Join(p.config.OutputDir, p.config.MemProfilePath)
-	file, err := os.Create(filePath)
+	file, err := os.Create(filePath) //nolint:gosec // filePath is derived from profiler config
 	if err != nil {
 		return err
 	}
@@ -275,16 +268,15 @@ func (p *Profiler) stopMemProfile() error {
 }
 
 // startBlockProfile starts block profiling
-func (p *Profiler) startBlockProfile() error {
+func (p *Profiler) startBlockProfile() {
 	runtime.SetBlockProfileRate(1) // Profile every block event
 	fmt.Printf("Block profiling enabled: %s\n", filepath.Join(p.config.OutputDir, p.config.BlockProfilePath))
-	return nil
 }
 
 // stopBlockProfile stops block profiling and writes to file
 func (p *Profiler) stopBlockProfile() error {
 	filePath := filepath.Join(p.config.OutputDir, p.config.BlockProfilePath)
-	file, err := os.Create(filePath)
+	file, err := os.Create(filePath) //nolint:gosec // filePath is derived from profiler config
 	if err != nil {
 		return err
 	}
@@ -304,16 +296,15 @@ func (p *Profiler) stopBlockProfile() error {
 }
 
 // startMutexProfile starts mutex profiling
-func (p *Profiler) startMutexProfile() error {
+func (p *Profiler) startMutexProfile() {
 	runtime.SetMutexProfileFraction(1) // Profile every mutex event
 	fmt.Printf("Mutex profiling enabled: %s\n", filepath.Join(p.config.OutputDir, p.config.MutexProfilePath))
-	return nil
 }
 
 // stopMutexProfile stops mutex profiling and writes to file
 func (p *Profiler) stopMutexProfile() error {
 	filePath := filepath.Join(p.config.OutputDir, p.config.MutexProfilePath)
-	file, err := os.Create(filePath)
+	file, err := os.Create(filePath) //nolint:gosec // filePath is derived from profiler config
 	if err != nil {
 		return err
 	}
@@ -335,7 +326,7 @@ func (p *Profiler) stopMutexProfile() error {
 // startTraceProfile starts trace profiling
 func (p *Profiler) startTraceProfile() error {
 	filePath := filepath.Join(p.config.OutputDir, p.config.TraceProfilePath)
-	file, err := os.Create(filePath)
+	file, err := os.Create(filePath) //nolint:gosec // filePath is derived from profiler config
 	if err != nil {
 		return err
 	}

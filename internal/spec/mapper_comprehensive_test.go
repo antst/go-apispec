@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
@@ -5,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 // TestMapMetadataToOpenAPI_Comprehensive tests the main mapping function with various scenarios
@@ -15,13 +29,13 @@ func TestMapMetadataToOpenAPI_Comprehensive(t *testing.T) {
 		description string
 		testFunc    func(t *testing.T)
 	}{
-		{"nil_tree", "Should handle nil tracker tree", testMapMetadataToOpenAPI_NilTree},
-		{"empty_routes", "Should handle empty routes", testMapMetadataToOpenAPI_EmptyRoutes},
-		{"with_config_info", "Should use config info when present", testMapMetadataToOpenAPI_WithConfigInfo},
-		{"with_security_schemes", "Should include security schemes", testMapMetadataToOpenAPI_WithSecuritySchemes},
-		{"with_external_docs", "Should include external docs", testMapMetadataToOpenAPI_WithExternalDocs},
-		{"with_servers", "Should include servers", testMapMetadataToOpenAPI_WithServers},
-		{"with_tags", "Should include tags", testMapMetadataToOpenAPI_WithTags},
+		{"nil_tree", "Should handle nil tracker tree", testMapMetadataToOpenAPINilTree},
+		{"empty_routes", "Should handle empty routes", testMapMetadataToOpenAPIEmptyRoutes},
+		{"with_config_info", "Should use config info when present", testMapMetadataToOpenAPIWithConfigInfo},
+		{"with_security_schemes", "Should include security schemes", testMapMetadataToOpenAPIWithSecuritySchemes},
+		{"with_external_docs", "Should include external docs", testMapMetadataToOpenAPIWithExternalDocs},
+		{"with_servers", "Should include servers", testMapMetadataToOpenAPIWithServers},
+		{"with_tags", "Should include tags", testMapMetadataToOpenAPIWithTags},
 	}
 
 	for _, tt := range tests {
@@ -31,7 +45,7 @@ func TestMapMetadataToOpenAPI_Comprehensive(t *testing.T) {
 	}
 }
 
-func testMapMetadataToOpenAPI_NilTree(t *testing.T) {
+func testMapMetadataToOpenAPINilTree(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	genCfg := GeneratorConfig{
 		OpenAPIVersion: "3.0.3",
@@ -52,7 +66,7 @@ func testMapMetadataToOpenAPI_NilTree(t *testing.T) {
 	}
 }
 
-func testMapMetadataToOpenAPI_EmptyRoutes(t *testing.T) {
+func testMapMetadataToOpenAPIEmptyRoutes(t *testing.T) {
 	// Create a mock tree that returns empty routes
 	mockTree := &MockTrackerTree{
 		meta: &metadata.Metadata{
@@ -83,7 +97,7 @@ func testMapMetadataToOpenAPI_EmptyRoutes(t *testing.T) {
 	}
 }
 
-func testMapMetadataToOpenAPI_WithConfigInfo(t *testing.T) {
+func testMapMetadataToOpenAPIWithConfigInfo(t *testing.T) {
 	mockTree := &MockTrackerTree{
 		meta: &metadata.Metadata{
 			StringPool: metadata.NewStringPool(),
@@ -123,7 +137,7 @@ func testMapMetadataToOpenAPI_WithConfigInfo(t *testing.T) {
 	}
 }
 
-func testMapMetadataToOpenAPI_WithSecuritySchemes(t *testing.T) {
+func testMapMetadataToOpenAPIWithSecuritySchemes(t *testing.T) {
 	mockTree := &MockTrackerTree{
 		meta: &metadata.Metadata{
 			StringPool: metadata.NewStringPool(),
@@ -165,7 +179,7 @@ func testMapMetadataToOpenAPI_WithSecuritySchemes(t *testing.T) {
 	}
 }
 
-func testMapMetadataToOpenAPI_WithExternalDocs(t *testing.T) {
+func testMapMetadataToOpenAPIWithExternalDocs(t *testing.T) {
 	mockTree := &MockTrackerTree{
 		meta: &metadata.Metadata{
 			StringPool: metadata.NewStringPool(),
@@ -204,7 +218,7 @@ func testMapMetadataToOpenAPI_WithExternalDocs(t *testing.T) {
 	}
 }
 
-func testMapMetadataToOpenAPI_WithServers(t *testing.T) {
+func testMapMetadataToOpenAPIWithServers(t *testing.T) {
 	mockTree := &MockTrackerTree{
 		meta: &metadata.Metadata{
 			StringPool: metadata.NewStringPool(),
@@ -241,7 +255,7 @@ func testMapMetadataToOpenAPI_WithServers(t *testing.T) {
 	}
 }
 
-func testMapMetadataToOpenAPI_WithTags(t *testing.T) {
+func testMapMetadataToOpenAPIWithTags(t *testing.T) {
 	mockTree := &MockTrackerTree{
 		meta: &metadata.Metadata{
 			StringPool: metadata.NewStringPool(),
@@ -285,15 +299,15 @@ func TestBuildPathsFromRoutes_Comprehensive(t *testing.T) {
 		description string
 		testFunc    func(t *testing.T)
 	}{
-		{"empty_routes", "Should handle empty routes", testBuildPathsFromRoutes_Empty},
-		{"single_route", "Should handle single route", testBuildPathsFromRoutes_Single},
-		{"multiple_routes_same_path", "Should handle multiple routes on same path", testBuildPathsFromRoutes_MultipleSamePath},
-		{"path_with_params", "Should convert path parameters", testBuildPathsFromRoutes_WithParams},
-		{"all_http_methods", "Should handle all HTTP methods", testBuildPathsFromRoutes_AllMethods},
-		{"with_request_body", "Should handle request body", testBuildPathsFromRoutes_WithRequestBody},
-		{"with_parameters", "Should handle parameters", testBuildPathsFromRoutes_WithParameters},
-		{"with_responses", "Should handle responses", testBuildPathsFromRoutes_WithResponses},
-		{"with_package_prefix", "Should handle package prefix", testBuildPathsFromRoutes_WithPackagePrefix},
+		{"empty_routes", "Should handle empty routes", testBuildPathsFromRoutesEmpty},
+		{"single_route", "Should handle single route", testBuildPathsFromRoutesSingle},
+		{"multiple_routes_same_path", "Should handle multiple routes on same path", testBuildPathsFromRoutesMultipleSamePath},
+		{"path_with_params", "Should convert path parameters", testBuildPathsFromRoutesWithParams},
+		{"all_http_methods", "Should handle all HTTP methods", testBuildPathsFromRoutesAllMethods},
+		{"with_request_body", "Should handle request body", testBuildPathsFromRoutesWithRequestBody},
+		{"with_parameters", "Should handle parameters", testBuildPathsFromRoutesWithParameters},
+		{"with_responses", "Should handle responses", testBuildPathsFromRoutesWithResponses},
+		{"with_package_prefix", "Should handle package prefix", testBuildPathsFromRoutesWithPackagePrefix},
 	}
 
 	for _, tt := range tests {
@@ -303,16 +317,16 @@ func TestBuildPathsFromRoutes_Comprehensive(t *testing.T) {
 	}
 }
 
-func testBuildPathsFromRoutes_Empty(t *testing.T) {
+func testBuildPathsFromRoutesEmpty(t *testing.T) {
 	routes := []*RouteInfo{}
-	paths := buildPathsFromRoutes(routes)
+	paths := buildPathsFromRoutes(routes, nil)
 
 	if len(paths) != 0 {
 		t.Errorf("Expected empty paths, got %d", len(paths))
 	}
 }
 
-func testBuildPathsFromRoutes_Single(t *testing.T) {
+func testBuildPathsFromRoutesSingle(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Path:     "/users",
@@ -322,7 +336,7 @@ func testBuildPathsFromRoutes_Single(t *testing.T) {
 		},
 	}
 
-	paths := buildPathsFromRoutes(routes)
+	paths := buildPathsFromRoutes(routes, nil)
 
 	if len(paths) != 1 {
 		t.Errorf("Expected 1 path, got %d", len(paths))
@@ -342,7 +356,7 @@ func testBuildPathsFromRoutes_Single(t *testing.T) {
 	}
 }
 
-func testBuildPathsFromRoutes_MultipleSamePath(t *testing.T) {
+func testBuildPathsFromRoutesMultipleSamePath(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Path:     "/users",
@@ -358,7 +372,7 @@ func testBuildPathsFromRoutes_MultipleSamePath(t *testing.T) {
 		},
 	}
 
-	paths := buildPathsFromRoutes(routes)
+	paths := buildPathsFromRoutes(routes, nil)
 
 	if len(paths) != 1 {
 		t.Errorf("Expected 1 path, got %d", len(paths))
@@ -378,7 +392,7 @@ func testBuildPathsFromRoutes_MultipleSamePath(t *testing.T) {
 	}
 }
 
-func testBuildPathsFromRoutes_WithParams(t *testing.T) {
+func testBuildPathsFromRoutesWithParams(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Path:     "/users/:id",
@@ -388,7 +402,7 @@ func testBuildPathsFromRoutes_WithParams(t *testing.T) {
 		},
 	}
 
-	paths := buildPathsFromRoutes(routes)
+	paths := buildPathsFromRoutes(routes, nil)
 
 	pathItem, exists := paths["/users/{id}"]
 	if !exists {
@@ -400,7 +414,7 @@ func testBuildPathsFromRoutes_WithParams(t *testing.T) {
 	}
 }
 
-func testBuildPathsFromRoutes_AllMethods(t *testing.T) {
+func testBuildPathsFromRoutesAllMethods(t *testing.T) {
 	methods := []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"}
 	routes := make([]*RouteInfo, len(methods))
 
@@ -413,7 +427,7 @@ func testBuildPathsFromRoutes_AllMethods(t *testing.T) {
 		}
 	}
 
-	paths := buildPathsFromRoutes(routes)
+	paths := buildPathsFromRoutes(routes, nil)
 
 	pathItem, exists := paths["/test"]
 	if !exists {
@@ -443,7 +457,7 @@ func testBuildPathsFromRoutes_AllMethods(t *testing.T) {
 	}
 }
 
-func testBuildPathsFromRoutes_WithRequestBody(t *testing.T) {
+func testBuildPathsFromRoutesWithRequestBody(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Path:     "/users",
@@ -457,7 +471,7 @@ func testBuildPathsFromRoutes_WithRequestBody(t *testing.T) {
 		},
 	}
 
-	paths := buildPathsFromRoutes(routes)
+	paths := buildPathsFromRoutes(routes, nil)
 
 	pathItem, exists := paths["/users"]
 	if !exists {
@@ -477,7 +491,7 @@ func testBuildPathsFromRoutes_WithRequestBody(t *testing.T) {
 	}
 }
 
-func testBuildPathsFromRoutes_WithParameters(t *testing.T) {
+func testBuildPathsFromRoutesWithParameters(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Path:     "/users",
@@ -495,7 +509,7 @@ func testBuildPathsFromRoutes_WithParameters(t *testing.T) {
 		},
 	}
 
-	paths := buildPathsFromRoutes(routes)
+	paths := buildPathsFromRoutes(routes, nil)
 
 	pathItem, exists := paths["/users"]
 	if !exists {
@@ -515,7 +529,7 @@ func testBuildPathsFromRoutes_WithParameters(t *testing.T) {
 	}
 }
 
-func testBuildPathsFromRoutes_WithResponses(t *testing.T) {
+func testBuildPathsFromRoutesWithResponses(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Path:     "/users",
@@ -532,7 +546,7 @@ func testBuildPathsFromRoutes_WithResponses(t *testing.T) {
 		},
 	}
 
-	paths := buildPathsFromRoutes(routes)
+	paths := buildPathsFromRoutes(routes, nil)
 
 	pathItem, exists := paths["/users"]
 	if !exists {
@@ -557,7 +571,7 @@ func testBuildPathsFromRoutes_WithResponses(t *testing.T) {
 	}
 }
 
-func testBuildPathsFromRoutes_WithPackagePrefix(t *testing.T) {
+func testBuildPathsFromRoutesWithPackagePrefix(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Path:     "/users",
@@ -567,7 +581,7 @@ func testBuildPathsFromRoutes_WithPackagePrefix(t *testing.T) {
 		},
 	}
 
-	paths := buildPathsFromRoutes(routes)
+	paths := buildPathsFromRoutes(routes, nil)
 
 	pathItem, exists := paths["/users"]
 	if !exists {
@@ -877,15 +891,15 @@ func TestMapGoTypeToOpenAPISchema_Comprehensive(t *testing.T) {
 		description string
 		testFunc    func(t *testing.T)
 	}{
-		{"primitive_types", "Should handle all primitive types", testMapGoTypeToOpenAPISchema_PrimitiveTypes},
-		{"pointer_types", "Should handle pointer types", testMapGoTypeToOpenAPISchema_PointerTypes},
-		{"slice_types", "Should handle slice types", testMapGoTypeToOpenAPISchema_SliceTypes},
-		{"array_types", "Should handle array types", testMapGoTypeToOpenAPISchema_ArrayTypes},
-		{"map_types", "Should handle map types", testMapGoTypeToOpenAPISchema_MapTypes},
-		{"custom_types", "Should handle custom types", testMapGoTypeToOpenAPISchema_CustomTypes},
-		{"external_types", "Should handle external types", testMapGoTypeToOpenAPISchema_ExternalTypes},
-		{"type_mappings", "Should handle type mappings", testMapGoTypeToOpenAPISchema_TypeMappings},
-		{"nil_metadata", "Should handle nil metadata", testMapGoTypeToOpenAPISchema_NilMetadata},
+		{"primitive_types", "Should handle all primitive types", testMapGoTypeToOpenAPISchemaPrimitiveTypes},
+		{"pointer_types", "Should handle pointer types", testMapGoTypeToOpenAPISchemaPointerTypes},
+		{"slice_types", "Should handle slice types", testMapGoTypeToOpenAPISchemaSliceTypes},
+		{"array_types", "Should handle array types", testMapGoTypeToOpenAPISchemaArrayTypes},
+		{"map_types", "Should handle map types", testMapGoTypeToOpenAPISchemaMapTypes},
+		{"custom_types", "Should handle custom types", testMapGoTypeToOpenAPISchemaCustomTypes},
+		{"external_types", "Should handle external types", testMapGoTypeToOpenAPISchemaExternalTypes},
+		{"type_mappings", "Should handle type mappings", testMapGoTypeToOpenAPISchemaTypeMappings},
+		{"nil_metadata", "Should handle nil metadata", testMapGoTypeToOpenAPISchemaNilMetadata},
 	}
 
 	for _, tt := range tests {
@@ -895,7 +909,7 @@ func TestMapGoTypeToOpenAPISchema_Comprehensive(t *testing.T) {
 	}
 }
 
-func testMapGoTypeToOpenAPISchema_PrimitiveTypes(t *testing.T) {
+func testMapGoTypeToOpenAPISchemaPrimitiveTypes(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -919,7 +933,7 @@ func testMapGoTypeToOpenAPISchema_PrimitiveTypes(t *testing.T) {
 		{"float64", "number"},
 		{"bool", "boolean"},
 		{"time.Time", "string"},
-		{"[]byte", "array"},
+		{"[]byte", "string"},
 		{"[]string", "array"},
 		{"[]time.Time", "array"},
 		{"[]int", "array"},
@@ -938,7 +952,7 @@ func testMapGoTypeToOpenAPISchema_PrimitiveTypes(t *testing.T) {
 	}
 }
 
-func testMapGoTypeToOpenAPISchema_PointerTypes(t *testing.T) {
+func testMapGoTypeToOpenAPISchemaPointerTypes(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -962,7 +976,7 @@ func testMapGoTypeToOpenAPISchema_PointerTypes(t *testing.T) {
 	}
 }
 
-func testMapGoTypeToOpenAPISchema_SliceTypes(t *testing.T) {
+func testMapGoTypeToOpenAPISchemaSliceTypes(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -992,7 +1006,7 @@ func testMapGoTypeToOpenAPISchema_SliceTypes(t *testing.T) {
 	}
 }
 
-func testMapGoTypeToOpenAPISchema_ArrayTypes(t *testing.T) {
+func testMapGoTypeToOpenAPISchemaArrayTypes(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1078,7 +1092,7 @@ func testMapGoTypeToOpenAPISchema_ArrayTypes(t *testing.T) {
 	}
 }
 
-func testMapGoTypeToOpenAPISchema_MapTypes(t *testing.T) {
+func testMapGoTypeToOpenAPISchemaMapTypes(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1106,7 +1120,7 @@ func testMapGoTypeToOpenAPISchema_MapTypes(t *testing.T) {
 	}
 }
 
-func testMapGoTypeToOpenAPISchema_CustomTypes(t *testing.T) {
+func testMapGoTypeToOpenAPISchemaCustomTypes(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1153,7 +1167,7 @@ func testMapGoTypeToOpenAPISchema_CustomTypes(t *testing.T) {
 	}
 }
 
-func testMapGoTypeToOpenAPISchema_ExternalTypes(t *testing.T) {
+func testMapGoTypeToOpenAPISchemaExternalTypes(t *testing.T) {
 	cfg := &APISpecConfig{
 		ExternalTypes: []ExternalType{
 			{
@@ -1181,7 +1195,7 @@ func testMapGoTypeToOpenAPISchema_ExternalTypes(t *testing.T) {
 	}
 }
 
-func testMapGoTypeToOpenAPISchema_TypeMappings(t *testing.T) {
+func testMapGoTypeToOpenAPISchemaTypeMappings(t *testing.T) {
 	cfg := &APISpecConfig{
 		TypeMapping: []TypeMapping{
 			{
@@ -1204,7 +1218,7 @@ func testMapGoTypeToOpenAPISchema_TypeMappings(t *testing.T) {
 	}
 }
 
-func testMapGoTypeToOpenAPISchema_NilMetadata(t *testing.T) {
+func testMapGoTypeToOpenAPISchemaNilMetadata(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1227,14 +1241,14 @@ func TestGenerateSchemaFromType_Comprehensive_Extended(t *testing.T) {
 		description string
 		testFunc    func(t *testing.T)
 	}{
-		{"struct_type", "Should generate struct schema", testGenerateSchemaFromType_Struct},
-		{"interface_type", "Should generate interface schema", testGenerateSchemaFromType_Interface},
-		{"alias_type", "Should generate alias schema", testGenerateSchemaFromType_Alias},
-		{"external_type", "Should handle external types", testGenerateSchemaFromType_External},
-		{"nil_type", "Should handle nil type", testGenerateSchemaFromType_Nil},
-		{"with_generics", "Should handle generic types", testGenerateSchemaFromType_WithGenerics},
-		{"with_nested_types", "Should handle nested types", testGenerateSchemaFromType_WithNestedTypes},
-		{"with_json_tags", "Should handle JSON tags", testGenerateSchemaFromType_WithJSONTags},
+		{"struct_type", "Should generate struct schema", testGenerateSchemaFromTypeStruct},
+		{"interface_type", "Should generate interface schema", testGenerateSchemaFromTypeInterface},
+		{"alias_type", "Should generate alias schema", testGenerateSchemaFromTypeAlias},
+		{"external_type", "Should handle external types", testGenerateSchemaFromTypeExternal},
+		{"nil_type", "Should handle nil type", testGenerateSchemaFromTypeNil},
+		{"with_generics", "Should handle generic types", testGenerateSchemaFromTypeWithGenerics},
+		{"with_nested_types", "Should handle nested types", testGenerateSchemaFromTypeWithNestedTypes},
+		{"with_json_tags", "Should handle JSON tags", testGenerateSchemaFromTypeWithJSONTags},
 	}
 
 	for _, tt := range tests {
@@ -1244,7 +1258,7 @@ func TestGenerateSchemaFromType_Comprehensive_Extended(t *testing.T) {
 	}
 }
 
-func testGenerateSchemaFromType_Struct(t *testing.T) {
+func testGenerateSchemaFromTypeStruct(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1275,7 +1289,7 @@ func testGenerateSchemaFromType_Struct(t *testing.T) {
 	}
 }
 
-func testGenerateSchemaFromType_Interface(t *testing.T) {
+func testGenerateSchemaFromTypeInterface(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1293,7 +1307,7 @@ func testGenerateSchemaFromType_Interface(t *testing.T) {
 	}
 }
 
-func testGenerateSchemaFromType_Alias(t *testing.T) {
+func testGenerateSchemaFromTypeAlias(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1312,7 +1326,7 @@ func testGenerateSchemaFromType_Alias(t *testing.T) {
 	}
 }
 
-func testGenerateSchemaFromType_External(t *testing.T) {
+func testGenerateSchemaFromTypeExternal(t *testing.T) {
 	cfg := &APISpecConfig{
 		ExternalTypes: []ExternalType{
 			{
@@ -1339,7 +1353,7 @@ func testGenerateSchemaFromType_External(t *testing.T) {
 	}
 }
 
-func testGenerateSchemaFromType_Nil(t *testing.T) {
+func testGenerateSchemaFromTypeNil(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1355,7 +1369,7 @@ func testGenerateSchemaFromType_Nil(t *testing.T) {
 	generateSchemaFromType(usedTypes, "Test", nil, meta, cfg, nil)
 }
 
-func testGenerateSchemaFromType_WithGenerics(t *testing.T) {
+func testGenerateSchemaFromTypeWithGenerics(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1379,7 +1393,7 @@ func testGenerateSchemaFromType_WithGenerics(t *testing.T) {
 	}
 }
 
-func testGenerateSchemaFromType_WithNestedTypes(t *testing.T) {
+func testGenerateSchemaFromTypeWithNestedTypes(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1418,7 +1432,7 @@ func testGenerateSchemaFromType_WithNestedTypes(t *testing.T) {
 	}
 }
 
-func testGenerateSchemaFromType_WithJSONTags(t *testing.T) {
+func testGenerateSchemaFromTypeWithJSONTags(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	usedTypes := make(map[string]*Schema)
 
@@ -1453,11 +1467,11 @@ func TestResolveUnderlyingType_Comprehensive(t *testing.T) {
 		description string
 		testFunc    func(t *testing.T)
 	}{
-		{"alias_type", "Should resolve alias to underlying type", testResolveUnderlyingType_Alias},
-		{"non_alias_type", "Should return empty for non-alias", testResolveUnderlyingType_NonAlias},
-		{"nil_metadata", "Should handle nil metadata", testResolveUnderlyingType_NilMetadata},
-		{"with_prefixes", "Should handle type prefixes", testResolveUnderlyingType_WithPrefixes},
-		{"not_found", "Should return empty for not found", testResolveUnderlyingType_NotFound},
+		{"alias_type", "Should resolve alias to underlying type", testResolveUnderlyingTypeAlias},
+		{"non_alias_type", "Should return empty for non-alias", testResolveUnderlyingTypeNonAlias},
+		{"nil_metadata", "Should handle nil metadata", testResolveUnderlyingTypeNilMetadata},
+		{"with_prefixes", "Should handle type prefixes", testResolveUnderlyingTypeWithPrefixes},
+		{"not_found", "Should return empty for not found", testResolveUnderlyingTypeNotFound},
 	}
 
 	for _, tt := range tests {
@@ -1467,7 +1481,7 @@ func TestResolveUnderlyingType_Comprehensive(t *testing.T) {
 	}
 }
 
-func testResolveUnderlyingType_Alias(t *testing.T) {
+func testResolveUnderlyingTypeAlias(t *testing.T) {
 	stringPool := metadata.NewStringPool()
 	meta := &metadata.Metadata{
 		StringPool: stringPool,
@@ -1494,7 +1508,7 @@ func testResolveUnderlyingType_Alias(t *testing.T) {
 	}
 }
 
-func testResolveUnderlyingType_NonAlias(t *testing.T) {
+func testResolveUnderlyingTypeNonAlias(t *testing.T) {
 	stringPool := metadata.NewStringPool()
 	meta := &metadata.Metadata{
 		StringPool: stringPool,
@@ -1520,14 +1534,14 @@ func testResolveUnderlyingType_NonAlias(t *testing.T) {
 	}
 }
 
-func testResolveUnderlyingType_NilMetadata(t *testing.T) {
+func testResolveUnderlyingTypeNilMetadata(t *testing.T) {
 	result := resolveUnderlyingType("UserID", nil)
 	if result != "" {
 		t.Errorf("Expected empty string for nil metadata, got %s", result)
 	}
 }
 
-func testResolveUnderlyingType_WithPrefixes(t *testing.T) {
+func testResolveUnderlyingTypeWithPrefixes(t *testing.T) {
 	stringPool := metadata.NewStringPool()
 	meta := &metadata.Metadata{
 		StringPool: stringPool,
@@ -1561,7 +1575,7 @@ func testResolveUnderlyingType_WithPrefixes(t *testing.T) {
 	}
 }
 
-func testResolveUnderlyingType_NotFound(t *testing.T) {
+func testResolveUnderlyingTypeNotFound(t *testing.T) {
 	stringPool := metadata.NewStringPool()
 	meta := &metadata.Metadata{
 		StringPool: stringPool,
@@ -1581,10 +1595,10 @@ func TestMarkUsedType_Comprehensive(t *testing.T) {
 		description string
 		testFunc    func(t *testing.T)
 	}{
-		{"basic_marking", "Should mark type as used", testMarkUsedType_Basic},
-		{"pointer_type", "Should handle pointer types", testMarkUsedType_Pointer},
-		{"already_marked", "Should return true if already marked", testMarkUsedType_AlreadyMarked},
-		{"different_values", "Should handle different mark values", testMarkUsedType_DifferentValues},
+		{"basic_marking", "Should mark type as used", testMarkUsedTypeBasic},
+		{"pointer_type", "Should handle pointer types", testMarkUsedTypePointer},
+		{"already_marked", "Should return true if already marked", testMarkUsedTypeAlreadyMarked},
+		{"different_values", "Should handle different mark values", testMarkUsedTypeDifferentValues},
 	}
 
 	for _, tt := range tests {
@@ -1594,7 +1608,7 @@ func TestMarkUsedType_Comprehensive(t *testing.T) {
 	}
 }
 
-func testMarkUsedType_Basic(t *testing.T) {
+func testMarkUsedTypeBasic(t *testing.T) {
 	usedTypes := make(map[string]*Schema)
 
 	result := markUsedType(usedTypes, "User", &Schema{Type: "object"})
@@ -1606,7 +1620,7 @@ func testMarkUsedType_Basic(t *testing.T) {
 	}
 }
 
-func testMarkUsedType_Pointer(t *testing.T) {
+func testMarkUsedTypePointer(t *testing.T) {
 	usedTypes := make(map[string]*Schema)
 
 	result := markUsedType(usedTypes, "*User", &Schema{Type: "object"})
@@ -1621,7 +1635,7 @@ func testMarkUsedType_Pointer(t *testing.T) {
 	}
 }
 
-func testMarkUsedType_AlreadyMarked(t *testing.T) {
+func testMarkUsedTypeAlreadyMarked(t *testing.T) {
 	usedTypes := make(map[string]*Schema)
 	usedTypes["User"] = &Schema{Type: "object"}
 
@@ -1631,7 +1645,7 @@ func testMarkUsedType_AlreadyMarked(t *testing.T) {
 	}
 }
 
-func testMarkUsedType_DifferentValues(t *testing.T) {
+func testMarkUsedTypeDifferentValues(t *testing.T) {
 	usedTypes := make(map[string]*Schema)
 
 	// Mark with true
@@ -1661,11 +1675,11 @@ func TestIsPrimitiveType_Comprehensive(t *testing.T) {
 		description string
 		testFunc    func(t *testing.T)
 	}{
-		{"basic_primitives", "Should detect basic primitives", testIsPrimitiveType_BasicPrimitives},
-		{"pointer_primitives", "Should detect pointer primitives", testIsPrimitiveType_PointerPrimitives},
-		{"slice_primitives", "Should detect slice primitives", testIsPrimitiveType_SlicePrimitives},
-		{"map_primitives", "Should detect map primitives", testIsPrimitiveType_MapPrimitives},
-		{"custom_types", "Should not detect custom types", testIsPrimitiveType_CustomTypes},
+		{"basic_primitives", "Should detect basic primitives", testIsPrimitiveTypeBasicPrimitives},
+		{"pointer_primitives", "Should detect pointer primitives", testIsPrimitiveTypePointerPrimitives},
+		{"slice_primitives", "Should detect slice primitives", testIsPrimitiveTypeSlicePrimitives},
+		{"map_primitives", "Should detect map primitives", testIsPrimitiveTypeMapPrimitives},
+		{"custom_types", "Should not detect custom types", testIsPrimitiveTypeCustomTypes},
 	}
 
 	for _, tt := range tests {
@@ -1675,7 +1689,7 @@ func TestIsPrimitiveType_Comprehensive(t *testing.T) {
 	}
 }
 
-func testIsPrimitiveType_BasicPrimitives(t *testing.T) {
+func testIsPrimitiveTypeBasicPrimitives(t *testing.T) {
 	primitives := []string{
 		"string", "int", "int8", "int16", "int32", "int64",
 		"uint", "uint8", "uint16", "uint32", "uint64",
@@ -1691,7 +1705,7 @@ func testIsPrimitiveType_BasicPrimitives(t *testing.T) {
 	}
 }
 
-func testIsPrimitiveType_PointerPrimitives(t *testing.T) {
+func testIsPrimitiveTypePointerPrimitives(t *testing.T) {
 	pointerPrimitives := []string{
 		"*string", "*int", "*bool", "*float64",
 	}
@@ -1703,7 +1717,7 @@ func testIsPrimitiveType_PointerPrimitives(t *testing.T) {
 	}
 }
 
-func testIsPrimitiveType_SlicePrimitives(t *testing.T) {
+func testIsPrimitiveTypeSlicePrimitives(t *testing.T) {
 	slicePrimitives := []string{
 		"[]string", "[]int", "[]bool", "[]float64",
 	}
@@ -1715,7 +1729,7 @@ func testIsPrimitiveType_SlicePrimitives(t *testing.T) {
 	}
 }
 
-func testIsPrimitiveType_MapPrimitives(t *testing.T) {
+func testIsPrimitiveTypeMapPrimitives(t *testing.T) {
 	mapPrimitives := []string{
 		"map[string]string", "map[string]int", "map[string]bool",
 	}
@@ -1727,7 +1741,7 @@ func testIsPrimitiveType_MapPrimitives(t *testing.T) {
 	}
 }
 
-func testIsPrimitiveType_CustomTypes(t *testing.T) {
+func testIsPrimitiveTypeCustomTypes(t *testing.T) {
 	customTypes := []string{
 		"User", "UserID", "CustomType", "MyStruct",
 	}
@@ -1777,8 +1791,8 @@ func TestTypeParts_Comprehensive(t *testing.T) {
 		{"string", "", "string", nil},
 		{"main-->User", "main", "User", nil},
 		{"pkg-->Type-->T", "pkg", "Type", []string{"T"}},
-		{"Container[T]", "", "Container[T]", nil},
-		{"Container[T, U]", "", "Container[T, U]", nil},
+		{"Container[T]", "", "Container", []string{"T T"}},
+		{"Container[T, U]", "", "Container", []string{"T T", "U U"}},
 		{"pkg-->Container[T]", "pkg", "Container", []string{"T"}},
 	}
 
@@ -1810,11 +1824,11 @@ func TestFindTypesInMetadata_Comprehensive(t *testing.T) {
 		description string
 		testFunc    func(t *testing.T)
 	}{
-		{"primitive_type", "Should return nil for primitives", testFindTypesInMetadata_Primitive},
-		{"nil_metadata", "Should handle nil metadata", testFindTypesInMetadata_NilMetadata},
-		{"found_type", "Should find existing type", testFindTypesInMetadata_FoundType},
-		{"not_found", "Should return empty for not found", testFindTypesInMetadata_NotFound},
-		{"generic_type", "Should handle generic types", testFindTypesInMetadata_GenericType},
+		{"primitive_type", "Should return nil for primitives", testFindTypesInMetadataPrimitive},
+		{"nil_metadata", "Should handle nil metadata", testFindTypesInMetadataNilMetadata},
+		{"found_type", "Should find existing type", testFindTypesInMetadataFoundType},
+		{"not_found", "Should return empty for not found", testFindTypesInMetadataNotFound},
+		{"generic_type", "Should handle generic types", testFindTypesInMetadataGenericType},
 	}
 
 	for _, tt := range tests {
@@ -1824,7 +1838,7 @@ func TestFindTypesInMetadata_Comprehensive(t *testing.T) {
 	}
 }
 
-func testFindTypesInMetadata_Primitive(t *testing.T) {
+func testFindTypesInMetadataPrimitive(t *testing.T) {
 	stringPool := metadata.NewStringPool()
 	meta := &metadata.Metadata{StringPool: stringPool}
 
@@ -1834,14 +1848,14 @@ func testFindTypesInMetadata_Primitive(t *testing.T) {
 	}
 }
 
-func testFindTypesInMetadata_NilMetadata(t *testing.T) {
+func testFindTypesInMetadataNilMetadata(t *testing.T) {
 	result := findTypesInMetadata(nil, "User")
 	if result != nil {
 		t.Error("Expected nil for nil metadata")
 	}
 }
 
-func testFindTypesInMetadata_FoundType(t *testing.T) {
+func testFindTypesInMetadataFoundType(t *testing.T) {
 	stringPool := metadata.NewStringPool()
 	meta := &metadata.Metadata{
 		StringPool: stringPool,
@@ -1870,7 +1884,7 @@ func testFindTypesInMetadata_FoundType(t *testing.T) {
 	}
 }
 
-func testFindTypesInMetadata_NotFound(t *testing.T) {
+func testFindTypesInMetadataNotFound(t *testing.T) {
 	stringPool := metadata.NewStringPool()
 	meta := &metadata.Metadata{
 		StringPool: stringPool,
@@ -1883,7 +1897,7 @@ func testFindTypesInMetadata_NotFound(t *testing.T) {
 	}
 }
 
-func testFindTypesInMetadata_GenericType(t *testing.T) {
+func testFindTypesInMetadataGenericType(t *testing.T) {
 	stringPool := metadata.NewStringPool()
 	meta := &metadata.Metadata{
 		StringPool: stringPool,
@@ -1920,11 +1934,11 @@ func TestCollectUsedTypesFromRoutes_Comprehensive(t *testing.T) {
 		description string
 		testFunc    func(t *testing.T)
 	}{
-		{"empty_routes", "Should handle empty routes", testCollectUsedTypesFromRoutes_Empty},
-		{"with_request_body", "Should collect request body types", testCollectUsedTypesFromRoutes_WithRequestBody},
-		{"with_response_types", "Should collect response types", testCollectUsedTypesFromRoutes_WithResponseTypes},
-		{"with_parameters", "Should collect parameter types", testCollectUsedTypesFromRoutes_WithParameters},
-		{"mixed_types", "Should collect all types", testCollectUsedTypesFromRoutes_MixedTypes},
+		{"empty_routes", "Should handle empty routes", testCollectUsedTypesFromRoutesEmpty},
+		{"with_request_body", "Should collect request body types", testCollectUsedTypesFromRoutesWithRequestBody},
+		{"with_response_types", "Should collect response types", testCollectUsedTypesFromRoutesWithResponseTypes},
+		{"with_parameters", "Should collect parameter types", testCollectUsedTypesFromRoutesWithParameters},
+		{"mixed_types", "Should collect all types", testCollectUsedTypesFromRoutesMixedTypes},
 	}
 
 	for _, tt := range tests {
@@ -1934,7 +1948,7 @@ func TestCollectUsedTypesFromRoutes_Comprehensive(t *testing.T) {
 	}
 }
 
-func testCollectUsedTypesFromRoutes_Empty(t *testing.T) {
+func testCollectUsedTypesFromRoutesEmpty(t *testing.T) {
 	routes := []*RouteInfo{}
 	result := collectUsedTypesFromRoutes(routes)
 	if len(result) != 0 {
@@ -1942,7 +1956,7 @@ func testCollectUsedTypesFromRoutes_Empty(t *testing.T) {
 	}
 }
 
-func testCollectUsedTypesFromRoutes_WithRequestBody(t *testing.T) {
+func testCollectUsedTypesFromRoutesWithRequestBody(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Request: &RequestInfo{
@@ -1957,7 +1971,7 @@ func testCollectUsedTypesFromRoutes_WithRequestBody(t *testing.T) {
 	}
 }
 
-func testCollectUsedTypesFromRoutes_WithResponseTypes(t *testing.T) {
+func testCollectUsedTypesFromRoutesWithResponseTypes(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Response: map[string]*ResponseInfo{
@@ -1974,7 +1988,7 @@ func testCollectUsedTypesFromRoutes_WithResponseTypes(t *testing.T) {
 	}
 }
 
-func testCollectUsedTypesFromRoutes_WithParameters(t *testing.T) {
+func testCollectUsedTypesFromRoutesWithParameters(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Params: []Parameter{
@@ -1993,7 +2007,7 @@ func testCollectUsedTypesFromRoutes_WithParameters(t *testing.T) {
 	}
 }
 
-func testCollectUsedTypesFromRoutes_MixedTypes(t *testing.T) {
+func testCollectUsedTypesFromRoutesMixedTypes(t *testing.T) {
 	routes := []*RouteInfo{
 		{
 			Request: &RequestInfo{

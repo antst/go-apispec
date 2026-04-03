@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
@@ -6,7 +20,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 // Regex cache for pattern matchers
@@ -39,6 +53,73 @@ func getCachedPatternRegex(pattern string) (*regexp.Regexp, error) {
 
 	patternRegexCache[pattern] = re
 	return re, nil
+}
+
+// baseMatchNode contains the shared matching logic used by all MatchNode implementations.
+// It checks the CallRegex, FunctionNameRegex, RecvTypeRegex, and RecvType fields of a
+// BasePattern against the given node.
+func baseMatchNode(node TrackerNodeInterface, pattern BasePattern, contextProvider ContextProvider) bool {
+	if node == nil || node.GetEdge() == nil {
+		return false
+	}
+
+	edge := node.GetEdge()
+	callName := contextProvider.GetString(edge.Callee.Name)
+	recvType := contextProvider.GetString(edge.Callee.RecvType)
+	recvPkg := contextProvider.GetString(edge.Callee.Pkg)
+
+	// Build fully qualified receiver type
+	fqRecvType := recvPkg
+	if fqRecvType != "" && recvType != "" {
+		fqRecvType += "." + recvType
+	} else if recvType != "" {
+		fqRecvType = recvType
+	}
+
+	// Check call regex
+	if pattern.CallRegex != "" {
+		re, err := getCachedPatternRegex(pattern.CallRegex)
+		if err != nil || !re.MatchString(callName) {
+			return false
+		}
+	}
+
+	// Check function name regex
+	if pattern.FunctionNameRegex != "" {
+		funcName := contextProvider.GetString(edge.Caller.Name)
+		re, err := getCachedPatternRegex(pattern.FunctionNameRegex)
+		if err != nil || !re.MatchString(funcName) {
+			return false
+		}
+	}
+
+	// Check receiver type
+	if pattern.RecvTypeRegex != "" {
+		re, err := getCachedPatternRegex(pattern.RecvTypeRegex)
+		if err != nil || !re.MatchString(fqRecvType) {
+			return false
+		}
+	} else if pattern.RecvType != "" && pattern.RecvType != fqRecvType {
+		return false
+	}
+
+	return true
+}
+
+// basePriority computes the shared priority score for a BasePattern.
+// More specific patterns have higher priority.
+func basePriority(pattern BasePattern) int {
+	priority := 0
+	if pattern.CallRegex != "" {
+		priority += 10
+	}
+	if pattern.FunctionNameRegex != "" {
+		priority += 5
+	}
+	if pattern.RecvTypeRegex != "" || pattern.RecvType != "" {
+		priority += 3
+	}
+	return priority
 }
 
 // BasePatternMatcher provides common functionality for all pattern matchers
@@ -75,47 +156,7 @@ func NewRoutePatternMatcher(pattern RoutePattern, cfg *APISpecConfig, contextPro
 
 // MatchNode checks if a node matches the route pattern
 func (r *RoutePatternMatcherImpl) MatchNode(node TrackerNodeInterface) bool {
-	if node == nil || node.GetEdge() == nil {
-		return false
-	}
-
-	edge := node.GetEdge()
-	callName := r.contextProvider.GetString(edge.Callee.Name)
-	recvType := r.contextProvider.GetString(edge.Callee.RecvType)
-	recvPkg := r.contextProvider.GetString(edge.Callee.Pkg)
-
-	// Build fully qualified receiver type
-	fqRecvType := recvPkg
-	if fqRecvType != "" && recvType != "" {
-		fqRecvType += "." + recvType
-	} else if recvType != "" {
-		fqRecvType = recvType
-	}
-
-	// Check call regex
-	if r.pattern.CallRegex != "" && !r.matchPattern(r.pattern.CallRegex, callName) {
-		return false
-	}
-
-	// Check function name regex
-	if r.pattern.FunctionNameRegex != "" {
-		funcName := r.contextProvider.GetString(edge.Caller.Name)
-		if !r.pattern.MatchFunctionName(funcName) {
-			return false
-		}
-	}
-
-	// Check receiver type
-	if r.pattern.RecvTypeRegex != "" {
-		re, err := getCachedPatternRegex(r.pattern.RecvTypeRegex)
-		if err != nil || !re.MatchString(fqRecvType) {
-			return false
-		}
-	} else if r.pattern.RecvType != "" && r.pattern.RecvType != fqRecvType {
-		return false
-	}
-
-	return true
+	return baseMatchNode(node, r.pattern.BasePattern, r.contextProvider)
 }
 
 // GetPattern returns the route pattern
@@ -125,18 +166,7 @@ func (r *RoutePatternMatcherImpl) GetPattern() interface{} {
 
 // GetPriority returns the priority of this pattern
 func (r *RoutePatternMatcherImpl) GetPriority() int {
-	// More specific patterns have higher priority
-	priority := 0
-	if r.pattern.CallRegex != "" {
-		priority += 10
-	}
-	if r.pattern.FunctionNameRegex != "" {
-		priority += 5
-	}
-	if r.pattern.RecvTypeRegex != "" || r.pattern.RecvType != "" {
-		priority += 3
-	}
-	return priority
+	return basePriority(r.pattern.BasePattern)
 }
 
 // ExtractRoute extracts route information from a matched node
@@ -171,7 +201,6 @@ func (r *RoutePatternMatcherImpl) ExtractRoute(node TrackerNodeInterface, routeI
 		found = true
 		handlerArg := edge.Args[r.pattern.HandlerArgIndex]
 		if handlerArg.GetKind() == metadata.KindIdent || handlerArg.GetKind() == metadata.KindFuncLit {
-
 			handlerName := handlerArg.GetName()
 			// Use variable tracing to resolve handler
 			originVar, originPkg, originType, _ := r.traceVariable(
@@ -200,15 +229,18 @@ func (r *RoutePatternMatcherImpl) ExtractRoute(node TrackerNodeInterface, routeI
 }
 
 // extractRouteDetails extracts route details from a node
+//
+//nolint:gocyclo // route detail extraction with multiple pattern sources
 func (r *RoutePatternMatcherImpl) extractRouteDetails(node TrackerNodeInterface, routeInfo *RouteInfo) bool {
 	found := false
 	edge := node.GetEdge()
 
-	if r.pattern.MethodFromCall {
+	switch {
+	case r.pattern.MethodFromCall:
 		funcName := r.contextProvider.GetString(edge.Callee.Name)
 		routeInfo.Method = r.extractMethodFromFunctionNameWithConfig(funcName, r.pattern.MethodExtraction)
 		found = true
-	} else if r.pattern.MethodFromHandler && r.pattern.HandlerFromArg && len(edge.Args) > r.pattern.HandlerArgIndex {
+	case r.pattern.MethodFromHandler && r.pattern.HandlerFromArg && len(edge.Args) > r.pattern.HandlerArgIndex:
 		// Extract method from handler function name
 		handlerArg := edge.Args[r.pattern.HandlerArgIndex]
 		handlerName := r.contextProvider.GetArgumentInfo(handlerArg)
@@ -216,7 +248,7 @@ func (r *RoutePatternMatcherImpl) extractRouteDetails(node TrackerNodeInterface,
 			routeInfo.Method = r.extractMethodFromFunctionNameWithConfig(handlerName, r.pattern.MethodExtraction)
 			found = true
 		}
-	} else if r.pattern.MethodArgIndex >= 0 && len(edge.Args) > r.pattern.MethodArgIndex {
+	case r.pattern.MethodArgIndex >= 0 && len(edge.Args) > r.pattern.MethodArgIndex:
 		methodArg := edge.Args[r.pattern.MethodArgIndex]
 		methodValue := methodArg.GetValue()
 
@@ -250,7 +282,18 @@ func (r *RoutePatternMatcherImpl) extractRouteDetails(node TrackerNodeInterface,
 	}
 
 	if r.pattern.PathFromArg && len(edge.Args) > r.pattern.PathArgIndex {
-		routeInfo.Path = r.contextProvider.GetArgumentInfo(edge.Args[r.pattern.PathArgIndex])
+		arg := edge.Args[r.pattern.PathArgIndex]
+		routeInfo.Path = r.contextProvider.GetArgumentInfo(arg)
+		// If path is a variable name, resolve via assignment map
+		if arg.GetKind() == metadata.KindIdent && !strings.HasPrefix(routeInfo.Path, "/") {
+			if assignments, exists := edge.AssignmentMap[arg.GetName()]; exists && len(assignments) > 0 {
+				resolved := r.contextProvider.GetArgumentInfo(&assignments[0].Value)
+				resolved = strings.Trim(resolved, "\"")
+				if strings.HasPrefix(resolved, "/") {
+					routeInfo.Path = resolved
+				}
+			}
+		}
 		if routeInfo.Path == "" {
 			routeInfo.Path = "/"
 		}
@@ -368,47 +411,7 @@ func NewMountPatternMatcher(pattern MountPattern, cfg *APISpecConfig, contextPro
 
 // MatchNode checks if a node matches the mount pattern
 func (m *MountPatternMatcherImpl) MatchNode(node TrackerNodeInterface) bool {
-	if node == nil || node.GetEdge() == nil {
-		return false
-	}
-
-	edge := node.GetEdge()
-	callName := m.contextProvider.GetString(edge.Callee.Name)
-	recvType := m.contextProvider.GetString(edge.Callee.RecvType)
-	recvPkg := m.contextProvider.GetString(edge.Callee.Pkg)
-
-	// Build fully qualified receiver type
-	fqRecvType := recvPkg
-	if fqRecvType != "" && recvType != "" {
-		fqRecvType += "." + recvType
-	} else if recvType != "" {
-		fqRecvType = recvType
-	}
-
-	// Check call regex
-	if m.pattern.CallRegex != "" && !m.matchPattern(m.pattern.CallRegex, callName) {
-		return false
-	}
-
-	// Check function name regex
-	if m.pattern.FunctionNameRegex != "" {
-		funcName := m.contextProvider.GetString(edge.Caller.Name)
-		if !m.matchPattern(m.pattern.FunctionNameRegex, funcName) {
-			return false
-		}
-	}
-
-	// Check receiver type
-	if m.pattern.RecvTypeRegex != "" {
-		re, err := getCachedPatternRegex(m.pattern.RecvTypeRegex)
-		if err != nil || !re.MatchString(fqRecvType) {
-			return false
-		}
-	} else if m.pattern.RecvType != "" && m.pattern.RecvType != fqRecvType {
-		return false
-	}
-
-	return m.pattern.IsMount
+	return baseMatchNode(node, m.pattern.BasePattern, m.contextProvider) && m.pattern.IsMount
 }
 
 // GetPattern returns the mount pattern
@@ -418,17 +421,7 @@ func (m *MountPatternMatcherImpl) GetPattern() interface{} {
 
 // GetPriority returns the priority of this pattern
 func (m *MountPatternMatcherImpl) GetPriority() int {
-	priority := 0
-	if m.pattern.CallRegex != "" {
-		priority += 10
-	}
-	if m.pattern.FunctionNameRegex != "" {
-		priority += 5
-	}
-	if m.pattern.RecvTypeRegex != "" || m.pattern.RecvType != "" {
-		priority += 3
-	}
-	return priority
+	return basePriority(m.pattern.BasePattern)
 }
 
 // ExtractMount extracts mount information from a matched node
@@ -473,48 +466,7 @@ func NewRequestPatternMatcher(pattern RequestBodyPattern, cfg *APISpecConfig, co
 
 // MatchNode checks if a node matches the request pattern
 func (r *RequestPatternMatcherImpl) MatchNode(node TrackerNodeInterface) bool {
-	if node == nil || node.GetEdge() == nil {
-		return false
-	}
-
-	edge := node.GetEdge()
-	callName := r.contextProvider.GetString(edge.Callee.Name)
-	recvType := r.contextProvider.GetString(edge.Callee.RecvType)
-	recvPkg := r.contextProvider.GetString(edge.Callee.Pkg)
-
-	// Build fully qualified receiver type
-	fqRecvType := recvPkg
-	if fqRecvType != "" && recvType != "" {
-		fqRecvType += "." + recvType
-	} else if recvType != "" {
-		fqRecvType = recvType
-	}
-
-	// Check call regex
-	if r.pattern.CallRegex != "" && !r.matchPattern(r.pattern.CallRegex, callName) {
-		return false
-	}
-
-	// Check function name regex
-	if r.pattern.FunctionNameRegex != "" {
-		funcName := r.contextProvider.GetString(edge.Caller.Name)
-		if !r.matchPattern(r.pattern.FunctionNameRegex, funcName) {
-			return false
-		}
-
-	}
-
-	// Check receiver type
-	if r.pattern.RecvTypeRegex != "" {
-		re, err := getCachedPatternRegex(r.pattern.RecvTypeRegex)
-		if err != nil || !re.MatchString(fqRecvType) {
-			return false
-		}
-	} else if r.pattern.RecvType != "" && r.pattern.RecvType != fqRecvType {
-		return false
-	}
-
-	return true
+	return baseMatchNode(node, r.pattern.BasePattern, r.contextProvider)
 }
 
 // GetPattern returns the request pattern
@@ -524,26 +476,30 @@ func (r *RequestPatternMatcherImpl) GetPattern() interface{} {
 
 // GetPriority returns the priority of this pattern
 func (r *RequestPatternMatcherImpl) GetPriority() int {
-	priority := 0
-	if r.pattern.CallRegex != "" {
-		priority += 10
-	}
-	if r.pattern.FunctionNameRegex != "" {
-		priority += 5
-	}
-	if r.pattern.RecvTypeRegex != "" || r.pattern.RecvType != "" {
-		priority += 3
-	}
-	return priority
+	return basePriority(r.pattern.BasePattern)
 }
 
 // ExtractRequest extracts request information from a matched node
 func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, route *RouteInfo) *RequestInfo {
+	// For chained Decode calls (e.g., json.NewDecoder(r.Body).Decode(&user)),
+	// check if the parent call's first argument is r.Body. If not, this isn't
+	// a request body decode and should be skipped.
+	edge := node.GetEdge()
+	if edge != nil && edge.ChainParent != nil {
+		parentName := r.contextProvider.GetString(edge.ChainParent.Callee.Name)
+		if parentName == "NewDecoder" && len(edge.ChainParent.Args) > 0 {
+			parentArg := r.contextProvider.GetArgumentInfo(edge.ChainParent.Args[0])
+			// Only accept r.Body or request.Body as the decoder source
+			if !strings.Contains(parentArg, "Body") {
+				return nil
+			}
+		}
+	}
+
 	reqInfo := &RequestInfo{
 		ContentType: r.cfg.Defaults.RequestContentType,
 	}
 
-	edge := node.GetEdge()
 	if r.pattern.TypeFromArg && len(edge.Args) > r.pattern.TypeArgIndex {
 		arg := edge.Args[r.pattern.TypeArgIndex]
 		bodyType := r.contextProvider.GetArgumentInfo(arg)
@@ -672,36 +628,19 @@ func (b *BasePatternMatcher) findAssignmentFunction(arg *metadata.CallArgument) 
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
 func (r *RequestPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
-	// NEW: If the argument has resolved type information, use it
+	// Request-specific: trace generic origin via TypeParts before shared logic
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
 		return resolvedType
 	}
 
 	typeParts := TypeParts(originalType)
-
-	// If it's a generic type with a concrete resolution, use it
 	genericType := traceGenericOrigin(node, typeParts)
 	if genericType != "" {
 		return genericType
 	}
 
-	// Original logic for type resolution
-	if arg.GetKind() == metadata.KindIdent || arg.GetKind() == metadata.KindFuncLit {
-		// Check if this variable has assignments that might give us more type information
-		edge := node.GetEdge()
-		if assignments, exists := edge.AssignmentMap[arg.GetName()]; exists {
-			for _, assignment := range assignments {
-				if assignment.ConcreteType != 0 {
-					concreteType := r.contextProvider.GetString(assignment.ConcreteType)
-					if concreteType != "" {
-						return concreteType
-					}
-				}
-			}
-		}
-	}
-
-	return originalType
+	// Delegate to shared logic (checkFuncLit=true to match original Request behavior)
+	return sharedResolveTypeOrigin(arg, node, originalType, r.contextProvider, true)
 }
 
 func traceGenericOrigin(node TrackerNodeInterface, typeParts Parts) string {

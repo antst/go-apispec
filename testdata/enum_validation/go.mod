@@ -1,3 +1,3 @@
-module github.com/ehabterra/apispec/testdata/enum_validation
+module github.com/antst/go-apispec/testdata/enum_validation
 
 go 1.21

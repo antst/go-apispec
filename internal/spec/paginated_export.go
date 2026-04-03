@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
@@ -9,13 +23,13 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
-//go:embed paginated_template.html
+//go:embed templates/paginated_template.html
 var paginatedTemplate embed.FS
 
-//go:embed server_template.html
+//go:embed templates/server_template.html
 var serverTemplate embed.FS
 
 // PaginatedCytoscapeData represents paginated data for Cytoscape.js
@@ -148,7 +162,7 @@ func (s *PaginatedCallGraphServer) getPaginatedData(start, end int, packageFilte
 }
 
 // GeneratePaginatedCytoscapeHTML generates HTML with pagination support
-func GeneratePaginatedCytoscapeHTML(meta *metadata.Metadata, outputPath string, pageSize int) error {
+func GeneratePaginatedCytoscapeHTML(meta *metadata.Metadata, outputPath string, _ int) error {
 	// Generate all data first
 	allData := DrawCallGraphCytoscape(meta)
 
@@ -159,7 +173,7 @@ func GeneratePaginatedCytoscapeHTML(meta *metadata.Metadata, outputPath string, 
 	}
 
 	// Read the embedded template
-	templateBytes, err := paginatedTemplate.ReadFile("paginated_template.html")
+	templateBytes, err := paginatedTemplate.ReadFile("templates/paginated_template.html")
 	if err != nil {
 		return fmt.Errorf("failed to read paginated template: %w", err)
 	}
@@ -169,7 +183,7 @@ func GeneratePaginatedCytoscapeHTML(meta *metadata.Metadata, outputPath string, 
 	htmlContent := strings.Replace(htmlTemplate, "%s", string(jsonData), 1)
 
 	// Write the HTML file
-	err = os.WriteFile(outputPath, []byte(htmlContent), 0644)
+	err = os.WriteFile(outputPath, []byte(htmlContent), 0600)
 	if err != nil {
 		return fmt.Errorf("failed to write HTML file: %w", err)
 	}
@@ -180,7 +194,7 @@ func GeneratePaginatedCytoscapeHTML(meta *metadata.Metadata, outputPath string, 
 // GenerateServerBasedCytoscapeHTML generates HTML that connects to a diagram server
 func GenerateServerBasedCytoscapeHTML(serverURL, outputPath string) error {
 	// Read the embedded template
-	templateBytes, err := serverTemplate.ReadFile("server_template.html")
+	templateBytes, err := serverTemplate.ReadFile("templates/server_template.html")
 	if err != nil {
 		return fmt.Errorf("failed to read server template: %w", err)
 	}
@@ -190,7 +204,7 @@ func GenerateServerBasedCytoscapeHTML(serverURL, outputPath string) error {
 	htmlContent := strings.Replace(htmlTemplate, "%s", serverURL, 1)
 
 	// Write the HTML file
-	err = os.WriteFile(outputPath, []byte(htmlContent), 0644)
+	err = os.WriteFile(outputPath, []byte(htmlContent), 0600)
 	if err != nil {
 		return fmt.Errorf("failed to write HTML file: %w", err)
 	}

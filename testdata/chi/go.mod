@@ -1,4 +1,4 @@
-module github.com/ehabterra/apispec/testdata/chi
+module github.com/antst/go-apispec/testdata/chi
 
 go 1.24.3
 

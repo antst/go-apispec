@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
@@ -113,7 +127,7 @@ func (ci *CallIdentifier) ID(idType CallIdentifierType) string {
 	return result
 }
 
-// Helper function to strip ID to base format
+// StripToBase strips an ID to its base format by removing position and generic suffixes.
 func StripToBase(id string) string {
 	callerID := id
 	idIndex := strings.IndexAny(id, "@[")
@@ -139,6 +153,7 @@ type VerboseLogger interface {
 	Print(args ...any)
 }
 
+//nolint:gocyclo // metadata generation orchestrator for all package types
 func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo map[*ast.File]*types.Info, importPaths map[string]string, fset *token.FileSet, logger VerboseLogger) *Metadata {
 	funcMap := BuildFuncMap(pkgs)
 
@@ -179,21 +194,19 @@ func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo
 			// If we found a common prefix, use it
 			if commonPrefix != "" && strings.Contains(commonPrefix, "/") {
 				currentModulePath = commonPrefix
-			} else {
+			} else if strings.Contains(path, ".") && (currentModulePath == "" || len(path) < len(currentModulePath)) {
 				// If no common prefix, try to find a reasonable module path
 				// Look for the shortest path that contains a domain
-				if strings.Contains(path, ".") && (currentModulePath == "" || len(path) < len(currentModulePath)) {
-					// Extract the module part (everything before the first internal/ or pkg/ or cmd/)
-					parts := strings.Split(path, "/")
-					for i, part := range parts {
-						if part == "internal" || part == "pkg" || part == "cmd" {
-							currentModulePath = strings.Join(parts[:i], "/")
-							break
-						}
+				// Extract the module part (everything before the first internal/ or pkg/ or cmd/)
+				parts := strings.Split(path, "/")
+				for i, part := range parts {
+					if part == "internal" || part == "pkg" || part == "cmd" {
+						currentModulePath = strings.Join(parts[:i], "/")
+						break
 					}
-					if currentModulePath == "" {
-						currentModulePath = path
-					}
+				}
+				if currentModulePath == "" {
+					currentModulePath = path
 				}
 			}
 		}
@@ -276,8 +289,7 @@ func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo
 				var assignmentsInFunc = make(map[string][]Assignment)
 
 				ast.Inspect(fn, func(nd ast.Node) bool {
-					switch expr := nd.(type) {
-					case *ast.AssignStmt:
+					if expr, ok := nd.(*ast.AssignStmt); ok {
 						assignments := processAssignment(expr, file, info, pkgName, fset, fileToInfo, funcMap, metadata)
 						processAssignmentCount++
 						for _, assign := range assignments {
@@ -402,6 +414,13 @@ func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo
 
 	// Finalize string pool
 	metadata.StringPool.Finalize()
+
+	// Build CFG for all functions and annotate edges/assignments with branch context
+	allFuncDecls := make([]*ast.FuncDecl, 0, len(funcMap))
+	for _, fn := range funcMap {
+		allFuncDecls = append(allFuncDecls, fn)
+	}
+	BuildFunctionCFGs(allFuncDecls, fset, metadata)
 
 	if logger != nil {
 		logger.Println("process assignment Count:", processAssignmentCount)
@@ -1041,8 +1060,7 @@ func processFunctions(file *ast.File, info *types.Info, pkgName string, fset *to
 		var assignmentsInFunc = make(map[string][]Assignment)
 
 		ast.Inspect(fn, func(nd ast.Node) bool {
-			switch expr := nd.(type) {
-			case *ast.AssignStmt:
+			if expr, ok := nd.(*ast.AssignStmt); ok {
 				assignments := processAssignment(expr, file, info, pkgName, fset, fileToInfo, funcMap, metadata)
 				for _, assign := range assignments {
 					varName := metadata.StringPool.GetString(assign.VariableName)
@@ -1052,20 +1070,80 @@ func processFunctions(file *ast.File, info *types.Info, pkgName string, fset *to
 			return true
 		})
 
+		// Detect constant return value for simple functions.
+		// If all return statements return the same constant literal or
+		// known constant (e.g., http.StatusOK), store it.
+		constantReturnValue := detectConstantReturnValue(fn.Body, info)
+
 		f.Functions[fn.Name.Name] = &Function{
-			Name:          metadata.StringPool.Get(fn.Name.Name),
-			Pkg:           metadata.StringPool.Get(pkgName),
-			Signature:     *ExprToCallArgument(fn.Type, info, pkgName, fset, metadata),
-			Position:      metadata.StringPool.Get(getFuncPosition(fn, fset)),
-			Scope:         metadata.StringPool.Get(getScope(fn.Name.Name)),
-			Comments:      metadata.StringPool.Get(comments),
-			TypeParams:    typeParams,
-			ReturnVars:    returnVars,
-			AssignmentMap: assignmentsInFunc,
+			Name:                metadata.StringPool.Get(fn.Name.Name),
+			Pkg:                 metadata.StringPool.Get(pkgName),
+			Signature:           *ExprToCallArgument(fn.Type, info, pkgName, fset, metadata),
+			Position:            metadata.StringPool.Get(getFuncPosition(fn, fset)),
+			Scope:               metadata.StringPool.Get(getScope(fn.Name.Name)),
+			Comments:            metadata.StringPool.Get(comments),
+			TypeParams:          typeParams,
+			ConstantReturnValue: constantReturnValue,
+			ReturnVars:          returnVars,
+			AssignmentMap:       assignmentsInFunc,
 		}
 
 		f.Functions[fn.Name.Name].SignatureStr = metadata.StringPool.Get(CallArgToString(&f.Functions[fn.Name.Name].Signature))
 	}
+}
+
+// detectConstantReturnValue checks if a function body always returns the same
+// constant value. Returns the constant string (e.g., "200", "StatusOK") or
+// empty string if the return value is not a simple constant.
+func detectConstantReturnValue(body *ast.BlockStmt, info *types.Info) string {
+	if body == nil {
+		return ""
+	}
+
+	var values []string
+	ast.Inspect(body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		if len(ret.Results) != 1 {
+			return true // Only handle single-return functions
+		}
+		expr := ret.Results[0]
+		switch v := expr.(type) {
+		case *ast.BasicLit:
+			// Literal value: 200, "text", etc.
+			val := strings.Trim(v.Value, "\"")
+			values = append(values, val)
+		case *ast.SelectorExpr:
+			// Package constant: http.StatusOK, http.StatusCreated, etc.
+			if ident, ok := v.X.(*ast.Ident); ok {
+				values = append(values, ident.Name+"."+v.Sel.Name)
+			}
+		case *ast.Ident:
+			// Local constant or variable
+			if info != nil {
+				if obj := info.Uses[v]; obj != nil {
+					if c, ok := obj.(*types.Const); ok {
+						values = append(values, c.Val().String())
+					}
+				}
+			}
+		}
+		return true
+	})
+
+	if len(values) == 0 {
+		return ""
+	}
+	// All returns must have the same value
+	first := values[0]
+	for _, v := range values[1:] {
+		if v != first {
+			return "" // Different values — not constant
+		}
+	}
+	return first
 }
 
 // processVariables processes all variable and constant declarations in a file
@@ -1135,8 +1213,7 @@ func processVariables(file *ast.File, info *types.Info, pkgName string, fset *to
 // processStructInstances processes struct literals and assignments
 func processStructInstances(file *ast.File, info *types.Info, pkgName string, fset *token.FileSet, f *File, constMap map[string]string, metadata *Metadata) {
 	ast.Inspect(file, func(n ast.Node) bool {
-		switch x := n.(type) {
-		case *ast.CompositeLit:
+		if x, ok := n.(*ast.CompositeLit); ok {
 			processStructInstance(x, info, pkgName, fset, f, constMap, metadata)
 		}
 		return true
@@ -1374,6 +1451,8 @@ func getTypeWithGenerics(expr ast.Expr, info *types.Info) types.Type {
 }
 
 // processCallExpression processes a function call expression
+//
+//nolint:gocyclo // call expression processing with multiple AST patterns
 func processCallExpression(call *ast.CallExpr, file *ast.File, pkgs map[string]map[string]*ast.File, pkgName string, parentAssign *ast.AssignStmt, fileToInfo map[*ast.File]*types.Info, funcMap map[string]*ast.FuncDecl, fset *token.FileSet, metadata *Metadata, info *types.Info, calleeMap map[string]*CallGraphEdge, argMap map[string]*CallArgument) {
 	// Skip type conversions as they are not function calls
 	if isTypeConversion(call, info) {
@@ -1501,8 +1580,7 @@ func processCallExpression(call *ast.CallExpr, file *ast.File, pkgs map[string]m
 						return true
 					}
 
-					switch expr := nd.(type) {
-					case *ast.AssignStmt:
+					if expr, ok := nd.(*ast.AssignStmt); ok {
 						// IMPORTANT: The `file` argument in processAssignment should be the file of the *callee*,
 						// not the caller. Otherwise, info.ObjectOf might return nil for objects not in the caller's file.
 						// We need to find the correct `*ast.File` object for the callee's declaration.
@@ -1597,7 +1675,6 @@ func astFileFromFn(pkgName, fnName string, pkgs map[string]map[string]*ast.File,
 					}
 				}
 			}
-
 		}
 	}
 
@@ -1619,6 +1696,7 @@ func extractRootVariable(expr ast.Expr) string {
 	return ""
 }
 
+//nolint:gocyclo // generic type parameter extraction from AST
 func extractParamsAndTypeParams(call *ast.CallExpr, info *types.Info, args []*CallArgument, paramArgMap map[string]CallArgument, typeParamMap map[string]string) {
 	var funcObj types.Object
 	switch fun := call.Fun.(type) {
@@ -1715,42 +1793,38 @@ func extractParamsAndTypeParams(call *ast.CallExpr, info *types.Info, args []*Ca
 									typeParamMap[name] = inferredType.String()
 								}
 							}
-						} else {
+						} else if len(args) > 0 {
 							// Try to infer types from function arguments
 							// This is crucial for cases like HandleRequest(handleSendEmail)
 							// where the type parameters are inferred from the argument types
-							if len(args) > 0 {
-								// Look at the first argument to infer type parameters
-								firstArg := args[0]
-								if firstArg.GetKind() == KindIdent {
-									// Try to get the type of the argument
-									if argType := info.TypeOf(call.Args[0]); argType != nil {
-										// For function arguments, try to extract parameter types
-										if sig, isSig := argType.(*types.Signature); isSig {
-											// Check if this is a function type that can help infer generic parameters
-											if sig.Params().Len() > 0 {
-												// The first parameter type of the argument function
-												// should correspond to the first type parameter of the generic function
-												firstParamType := sig.Params().At(0).Type()
-												if sig.TypeParams().Len() > 0 {
-													// This is a generic function argument
-													// Try to map its type parameters to the callee's type parameters
-													for i := 0; i < sig.TypeParams().Len(); i++ {
-														tparam := sig.TypeParams().At(i)
-														calleeTParam := sig.TypeParams().At(i)
-														if i < sig.TypeParams().Len() {
-															// Map the argument's type parameter to the callee's type parameter
-															typeParamMap[calleeTParam.Obj().Name()] = tparam.Obj().Name()
-														}
-													}
-												} else {
-													// Non-generic function argument
-													// The first parameter type should map to the first type parameter
-													if sig.TypeParams().Len() > 0 {
-														firstTParam := sig.TypeParams().At(0)
-														typeParamMap[firstTParam.Obj().Name()] = firstParamType.String()
+							// Look at the first argument to infer type parameters
+							firstArg := args[0]
+							if firstArg.GetKind() == KindIdent {
+								// Try to get the type of the argument
+								if argType := info.TypeOf(call.Args[0]); argType != nil {
+									// For function arguments, try to extract parameter types
+									if sig, isSig := argType.(*types.Signature); isSig {
+										// Check if this is a function type that can help infer generic parameters
+										if sig.Params().Len() > 0 {
+											// The first parameter type of the argument function
+											// should correspond to the first type parameter of the generic function
+											firstParamType := sig.Params().At(0).Type()
+											if sig.TypeParams().Len() > 0 {
+												// This is a generic function argument
+												// Try to map its type parameters to the callee's type parameters
+												for i := 0; i < sig.TypeParams().Len(); i++ {
+													tparam := sig.TypeParams().At(i)
+													calleeTParam := sig.TypeParams().At(i)
+													if i < sig.TypeParams().Len() {
+														// Map the argument's type parameter to the callee's type parameter
+														typeParamMap[calleeTParam.Obj().Name()] = tparam.Obj().Name()
 													}
 												}
+											} else if sig.TypeParams().Len() > 0 {
+												// Non-generic function argument
+												// The first parameter type should map to the first type parameter
+												firstTParam := sig.TypeParams().At(0)
+												typeParamMap[firstTParam.Obj().Name()] = firstParamType.String()
 											}
 										}
 									}
@@ -1819,19 +1893,19 @@ func applyTypeParameterResolution(edge *CallGraphEdge) {
 	// Apply type parameter resolution to all arguments
 	for i := range edge.Args {
 		arg := edge.Args[i]
-		applyTypeParameterResolutionToArgument(arg, edge.ParamArgMap, arg.TypeParamMap)
+		applyTypeParameterResolutionToArgument(arg, arg.TypeParamMap)
 	}
 
 	// Apply type parameter resolution to ParamArgMap values
 	for paramName, arg := range edge.ParamArgMap {
 		resolvedArg := arg
-		applyTypeParameterResolutionToArgument(&resolvedArg, edge.ParamArgMap, edge.TypeParamMap)
+		applyTypeParameterResolutionToArgument(&resolvedArg, edge.TypeParamMap)
 		edge.ParamArgMap[paramName] = resolvedArg
 	}
 }
 
 // applyTypeParameterResolutionToArgument applies type parameter resolution to a single CallArgument
-func applyTypeParameterResolutionToArgument(arg *CallArgument, paramArgMap map[string]CallArgument, typeParamMap map[string]string) {
+func applyTypeParameterResolutionToArgument(arg *CallArgument, typeParamMap map[string]string) {
 	if arg == nil {
 		return
 	}
@@ -1848,13 +1922,13 @@ func applyTypeParameterResolutionToArgument(arg *CallArgument, paramArgMap map[s
 
 	// Recursively apply to nested arguments
 	if arg.X != nil {
-		applyTypeParameterResolutionToArgument(arg.X, paramArgMap, arg.X.TypeParamMap)
+		applyTypeParameterResolutionToArgument(arg.X, arg.X.TypeParamMap)
 	}
 	if arg.Fun != nil {
-		applyTypeParameterResolutionToArgument(arg.Fun, paramArgMap, arg.Fun.TypeParamMap)
+		applyTypeParameterResolutionToArgument(arg.Fun, arg.Fun.TypeParamMap)
 	}
 	for i := range arg.Args {
-		applyTypeParameterResolutionToArgument(arg.Args[i], paramArgMap, arg.Args[i].TypeParamMap)
+		applyTypeParameterResolutionToArgument(arg.Args[i], arg.Args[i].TypeParamMap)
 	}
 }
 

@@ -1,9 +1,23 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
 	"testing"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 func TestRoutePattern_MatchPattern(t *testing.T) {
@@ -73,34 +87,26 @@ func TestRoutePattern_MatchFunctionName(t *testing.T) {
 		{
 			name:         "exact match",
 			functionName: "testHandler",
-			pattern: &RoutePattern{
-				FunctionNameRegex: "testHandler",
-			},
-			expected: true,
+			pattern:      &RoutePattern{BasePattern: BasePattern{FunctionNameRegex: "testHandler"}},
+			expected:     true,
 		},
 		{
 			name:         "regex match",
 			functionName: "userHandler",
-			pattern: &RoutePattern{
-				FunctionNameRegex: ".*Handler$",
-			},
-			expected: true,
+			pattern:      &RoutePattern{BasePattern: BasePattern{FunctionNameRegex: ".*Handler$"}},
+			expected:     true,
 		},
 		{
 			name:         "no match",
 			functionName: "testFunction",
-			pattern: &RoutePattern{
-				FunctionNameRegex: ".*Handler$",
-			},
-			expected: false,
+			pattern:      &RoutePattern{BasePattern: BasePattern{FunctionNameRegex: ".*Handler$"}},
+			expected:     false,
 		},
 		{
 			name:         "empty regex",
 			functionName: "test",
-			pattern: &RoutePattern{
-				FunctionNameRegex: "",
-			},
-			expected: false,
+			pattern:      &RoutePattern{BasePattern: BasePattern{FunctionNameRegex: ""}},
+			expected:     false,
 		},
 	}
 
@@ -134,11 +140,9 @@ func TestExtractor_IsValid(t *testing.T) {
 	cfg := &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:      "test",
-					MethodFromCall: true,
-					PathFromArg:    true,
-					PathArgIndex:   0,
+				{BasePattern: BasePattern{CallRegex: "test"}, MethodFromCall: true,
+					PathFromArg:  true,
+					PathArgIndex: 0,
 				},
 			},
 		},
@@ -185,42 +189,32 @@ func TestExtractor_initializePatternMatchers(t *testing.T) {
 	cfg := &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:      "GET",
-					MethodFromCall: true,
-					PathFromArg:    true,
-					PathArgIndex:   0,
+				{BasePattern: BasePattern{CallRegex: "GET"}, MethodFromCall: true,
+					PathFromArg:  true,
+					PathArgIndex: 0,
 				},
 			},
 			MountPatterns: []MountPattern{
-				{
-					CallRegex:    "Mount",
-					IsMount:      true,
+				{BasePattern: BasePattern{CallRegex: "Mount"}, IsMount: true,
 					PathFromArg:  true,
 					PathArgIndex: 0,
 				},
 			},
 			RequestBodyPatterns: []RequestBodyPattern{
-				{
-					CallRegex:    "BindJSON",
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: "BindJSON"}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
 			},
 			ResponsePatterns: []ResponsePattern{
-				{
-					CallRegex:      "JSON",
-					StatusArgIndex: 0,
-					TypeArgIndex:   1,
-					TypeFromArg:    true,
-					StatusFromArg:  true,
+				{BasePattern: BasePattern{CallRegex: "JSON"}, StatusArgIndex: 0,
+					TypeArgIndex:  1,
+					TypeFromArg:   true,
+					StatusFromArg: true,
 				},
 			},
 			ParamPatterns: []ParamPattern{
-				{
-					CallRegex:     "Param",
-					ParamIn:       "path",
+				{BasePattern: BasePattern{CallRegex: "Param"}, ParamIn: "path",
 					ParamArgIndex: 0,
 				},
 			},
@@ -272,11 +266,9 @@ func TestExtractor_ExtractRoutes(t *testing.T) {
 	cfg := &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:      "test",
-					MethodFromCall: true,
-					PathFromArg:    true,
-					PathArgIndex:   0,
+				{BasePattern: BasePattern{CallRegex: "test"}, MethodFromCall: true,
+					PathFromArg:  true,
+					PathArgIndex: 0,
 				},
 			},
 		},
@@ -314,11 +306,9 @@ func TestExtractor_traverseForRoutes(t *testing.T) {
 	cfg := &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:      "test",
-					MethodFromCall: true,
-					PathFromArg:    true,
-					PathArgIndex:   0,
+				{BasePattern: BasePattern{CallRegex: "test"}, MethodFromCall: true,
+					PathFromArg:  true,
+					PathArgIndex: 0,
 				},
 			},
 		},
@@ -358,11 +348,9 @@ func TestExtractor_traverseForRoutesWithVisited(t *testing.T) {
 	cfg := &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:      "test",
-					MethodFromCall: true,
-					PathFromArg:    true,
-					PathArgIndex:   0,
+				{BasePattern: BasePattern{CallRegex: "test"}, MethodFromCall: true,
+					PathFromArg:  true,
+					PathArgIndex: 0,
 				},
 			},
 		},

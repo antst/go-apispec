@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
@@ -7,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,7 +29,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 // Regex cache for performance optimization
@@ -60,7 +75,7 @@ type GeneratorConfig struct {
 
 // LoadAPISpecConfig loads a APISpecConfig from a YAML file
 func LoadAPISpecConfig(path string) (*APISpecConfig, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // path is a user-provided config file path
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +94,124 @@ func DefaultAPISpecConfig() *APISpecConfig {
 	return &APISpecConfig{}
 }
 
+// shortenOperationID strips the Go module path and intermediate type chain
+// from an operationId, keeping only the final Type.Method portion.
+// e.g. "github.com/org/project/internal/http.Deps.DocumentHandler.GetContent"
+//
+//	→ "DocumentHandler.GetContent"
+//
+// If only one dot-segment exists after stripping the path (a bare function),
+// the last package segment is preserved for context:
+// e.g. "github.com/org/project/users.ListUsers" → "users.ListUsers"
+func shortenOperationID(fullID string) string {
+	// First strip module path
+	short := fullID
+	if idx := strings.LastIndex(short, "/"); idx >= 0 {
+		short = short[idx+1:]
+	}
+	// Now short is e.g. "http.Deps.DocumentHandler.GetContent" or "users.ListUsers"
+	parts := strings.Split(short, ".")
+	if len(parts) <= 2 {
+		// "package.Function" or just "Function" — keep as-is
+		return short
+	}
+	// More than 2 segments: keep only the last two (Type.Method)
+	return strings.Join(parts[len(parts)-2:], ".")
+}
+
+// shortenTypeName strips the Go module path from a type name,
+// keeping only the last package segment + type name.
+// e.g. "github.com/org/project/internal/http-->CreateDocumentResponse" → "http-->CreateDocumentResponse"
+func shortenTypeName(fullName string) string {
+	// For generic types like "APIResponse[github.com/.../User]",
+	// shorten the base type and each generic parameter separately.
+	if bracketIdx := strings.Index(fullName, "["); bracketIdx > 0 && !strings.HasPrefix(fullName, "[]") && !strings.HasPrefix(fullName, "map[") {
+		baseName := fullName[:bracketIdx]
+		params := fullName[bracketIdx+1:]
+
+		params = strings.TrimSuffix(params, "]")
+		shortBase := shortenTypeName(baseName)
+		// Shorten each comma-separated param
+		shortParams := make([]string, 0, len(strings.Split(params, ",")))
+		for _, p := range strings.Split(params, ",") {
+			shortParams = append(shortParams, shortenTypeName(strings.TrimSpace(p)))
+		}
+		return shortBase + "[" + strings.Join(shortParams, ",") + "]"
+	}
+	if idx := strings.LastIndex(fullName, "/"); idx >= 0 {
+		return fullName[idx+1:]
+	}
+	return fullName
+}
+
+// disambiguateOperationIDs scans all operations in paths for duplicate
+// operationIds and progressively adds parent package segments until unique.
+func disambiguateOperationIDs(paths map[string]PathItem, routes []*RouteInfo) {
+	// Build a map of operationId → list of (path, method, route) for collision detection.
+	type opRef struct {
+		path   string
+		method string
+		op     *Operation
+		route  *RouteInfo
+	}
+
+	idRefs := make(map[string][]opRef)
+	for pathStr, pathItem := range paths {
+		for method, op := range map[string]*Operation{
+			"GET": pathItem.Get, "POST": pathItem.Post, "PUT": pathItem.Put,
+			"DELETE": pathItem.Delete, "PATCH": pathItem.Patch, "OPTIONS": pathItem.Options,
+			"HEAD": pathItem.Head,
+		} {
+			if op != nil && op.OperationID != "" {
+				// Find the matching route for full package info.
+				var matchedRoute *RouteInfo
+				for _, r := range routes {
+					convertedPath := convertPathToOpenAPI(joinPaths(r.MountPath, r.Path))
+					if convertedPath == pathStr && strings.EqualFold(r.Method, method) {
+						matchedRoute = r
+						break
+					}
+				}
+				idRefs[op.OperationID] = append(idRefs[op.OperationID], opRef{
+					path: pathStr, method: method, op: op, route: matchedRoute,
+				})
+			}
+		}
+	}
+
+	// For each duplicate set, add parent package segments to disambiguate.
+	for _, refs := range idRefs {
+		if len(refs) <= 1 {
+			continue
+		}
+		// Use the route's full package to progressively add segments.
+		for i := range refs {
+			if refs[i].route == nil {
+				continue
+			}
+			pkg := refs[i].route.Package
+			parts := strings.Split(pkg, "/")
+			// Start from the second-to-last segment and add until unique.
+			for depth := 2; depth <= len(parts); depth++ {
+				candidate := strings.Join(parts[len(parts)-depth:], ".") + "." +
+					strings.Replace(strings.Replace(refs[i].route.Function, TypeSep, ".", 1), pkg+".", "", 1)
+				// Check uniqueness against all others.
+				unique := true
+				for j := range refs {
+					if i != j && refs[j].op.OperationID == candidate {
+						unique = false
+						break
+					}
+				}
+				if unique {
+					refs[i].op.OperationID = candidate
+					break
+				}
+			}
+		}
+	}
+}
+
 // MapMetadataToOpenAPI maps metadata to OpenAPI specification
 func MapMetadataToOpenAPI(tree TrackerTreeInterface, cfg *APISpecConfig, genCfg GeneratorConfig) (*OpenAPISpec, error) {
 	// Create extractor
@@ -87,8 +220,11 @@ func MapMetadataToOpenAPI(tree TrackerTreeInterface, cfg *APISpecConfig, genCfg 
 	// Extract routes
 	routes := extractor.ExtractRoutes()
 
-	// Build paths
-	paths := buildPathsFromRoutes(routes)
+	// Build paths and disambiguate operationIds if using short names
+	paths := buildPathsFromRoutes(routes, cfg)
+	if cfg != nil && cfg.UseShortNames() {
+		disambiguateOperationIDs(paths, routes)
+	}
 
 	// Generate component schemas
 	components := generateComponentSchemas(tree.GetMetadata(), cfg, routes)
@@ -127,11 +263,100 @@ func MapMetadataToOpenAPI(tree TrackerTreeInterface, cfg *APISpecConfig, genCfg 
 		spec.Components.SecuritySchemes = cfg.SecuritySchemes
 	}
 
+	// Post-process: shorten all $ref values to match shortened schema names.
+	if cfg != nil && cfg.UseShortNames() && spec.Components != nil {
+		shortenAllRefs(spec)
+	}
+
 	return spec, nil
 }
 
+// shortenAllRefs rewrites all $ref values in the spec to use shortened schema names
+// that match the keys in components.Schemas.
+//
+//nolint:gocyclo // OpenAPI ref shortening across all spec components
+func shortenAllRefs(spec *OpenAPISpec) {
+	if spec.Components == nil {
+		return
+	}
+	// Build a mapping from old (long) ref names to new (short) schema keys.
+	// The old ref name is produced by schemaComponentNameReplacer (without
+	// shortening), the new key is what generateSchemas stored (with shortening).
+	// We build this by collecting all existing short keys and mapping any
+	// ref that ends with the same type suffix to the short key.
+	existingKeys := make(map[string]bool)
+	for key := range spec.Components.Schemas {
+		existingKeys[key] = true
+	}
+
+	// Walk the entire spec and shorten any $ref that points to #/components/schemas/...
+	var shortenSchemaRef func(s *Schema)
+	shortenSchemaRef = func(s *Schema) {
+		if s == nil {
+			return
+		}
+		if strings.HasPrefix(s.Ref, refComponentsSchemasPrefix) {
+			oldName := strings.TrimPrefix(s.Ref, refComponentsSchemasPrefix)
+			if !existingKeys[oldName] {
+				// The ref target doesn't match a schema key — it's a long name.
+				// Shorten it: extract the portion after the last "_" that starts
+				// a package segment (same logic as shortenTypeName but on the
+				// already-replaced name where "/" became "_").
+				// Find the short key that the long name ends with.
+				for shortKey := range existingKeys {
+					if strings.HasSuffix(oldName, shortKey) {
+						s.Ref = refComponentsSchemasPrefix + shortKey
+						break
+					}
+				}
+			}
+		}
+		shortenSchemaRef(s.Items)
+		shortenSchemaRef(s.AdditionalProperties)
+		for _, v := range s.Properties {
+			shortenSchemaRef(v)
+		}
+		for _, v := range s.AllOf {
+			shortenSchemaRef(v)
+		}
+		for _, v := range s.OneOf {
+			shortenSchemaRef(v)
+		}
+		for _, v := range s.AnyOf {
+			shortenSchemaRef(v)
+		}
+	}
+
+	// Walk component schemas
+	for _, schema := range spec.Components.Schemas {
+		shortenSchemaRef(schema)
+	}
+
+	// Walk paths
+	for _, pathItem := range spec.Paths {
+		for _, op := range []*Operation{pathItem.Get, pathItem.Post, pathItem.Put, pathItem.Delete, pathItem.Patch, pathItem.Options, pathItem.Head} {
+			if op == nil {
+				continue
+			}
+			if op.RequestBody != nil {
+				for _, mt := range op.RequestBody.Content {
+					shortenSchemaRef(mt.Schema)
+				}
+			}
+			for _, resp := range op.Responses {
+				for _, mt := range resp.Content {
+					shortenSchemaRef(mt.Schema)
+				}
+			}
+			for i := range op.Parameters {
+				shortenSchemaRef(op.Parameters[i].Schema)
+			}
+		}
+	}
+}
+
 // buildPathsFromRoutes builds OpenAPI paths from extracted routes
-func buildPathsFromRoutes(routes []*RouteInfo) map[string]PathItem {
+func buildPathsFromRoutes(routes []*RouteInfo, cfg *APISpecConfig) map[string]PathItem {
 	paths := make(map[string]PathItem)
 
 	for _, route := range routes {
@@ -151,8 +376,13 @@ func buildPathsFromRoutes(routes []*RouteInfo) map[string]PathItem {
 		}
 
 		// Create operation
+		operationID := pkg + strings.Replace(strings.ReplaceAll(route.Function, TypeSep, "."), pkg, "", 1)
+		if cfg != nil && cfg.UseShortNames() {
+			operationID = shortenOperationID(operationID)
+		}
+
 		operation := &Operation{
-			OperationID: pkg + strings.Replace(strings.Replace(route.Function, TypeSep, ".", 1), pkg, "", 1),
+			OperationID: operationID,
 			Summary:     route.Summary,
 			Tags:        route.Tags,
 		}
@@ -201,15 +431,14 @@ func ensureAllPathParams(openAPIPath string, params []Parameter) []Parameter {
 	for _, match := range matches {
 		name := match[1]
 		if !paramMap[name] {
-			// Add default path parameter with warning extension
+			// Add path parameter inferred from the path template.
+			// Many frameworks extract params at runtime (mux.Vars, chi.URLParam, etc.)
+			// so not finding them in static analysis is expected.
 			params = append(params, Parameter{
 				Name:     name,
 				In:       "path",
 				Required: true,
 				Schema:   &Schema{Type: "string"},
-				Extensions: map[string]any{
-					"x-warning": "This parameter is present in the path but not found in the code.",
-				},
 			})
 		}
 	}
@@ -231,6 +460,8 @@ func deduplicateParameters(params []Parameter) []Parameter {
 }
 
 // buildResponses builds OpenAPI responses from response info
+//
+//nolint:gocyclo // response building with status code and content type logic
 func buildResponses(respInfo map[string]*ResponseInfo) map[string]Response {
 	responses := make(map[string]Response)
 
@@ -247,11 +478,52 @@ func buildResponses(respInfo map[string]*ResponseInfo) map[string]Response {
 		return responses
 	}
 
-	// Add success response
-	for statusCode, resp := range respInfo {
-		// if status less than 0, use "default" to indicate unknown/invalid status
-		// OpenAPI only accepts status codes 100-599, "default", or vendor extensions
-		if resp.StatusCode < 0 {
+	// Pre-process: merge status-only responses (have status code but no body)
+	// with body-only responses (have body but no explicit status code).
+	// This handles the common pattern: w.WriteHeader(201); json.Encode(user)
+	// where WriteHeader and Encode are captured as separate response entries.
+	var bodyOnlyKeys []string
+	var statusOnlyKeys []string
+	for key, resp := range respInfo {
+		if resp.StatusCode > 0 && resp.BodyType == "" && resp.Schema == nil {
+			statusOnlyKeys = append(statusOnlyKeys, key)
+		} else if resp.StatusCode < 0 && resp.BodyType != "" {
+			bodyOnlyKeys = append(bodyOnlyKeys, key)
+		}
+	}
+	if len(bodyOnlyKeys) > 0 && len(statusOnlyKeys) > 0 {
+		// Assign the body schema from body-only responses to status-only responses.
+		for _, sKey := range statusOnlyKeys {
+			statusResp := respInfo[sKey]
+			for _, bKey := range bodyOnlyKeys {
+				bodyResp := respInfo[bKey]
+				if bodyResp.Schema != nil {
+					if statusResp.Schema == nil {
+						statusResp.BodyType = bodyResp.BodyType
+						statusResp.Schema = bodyResp.Schema
+					} else if !schemasEqual(statusResp.Schema, bodyResp.Schema) {
+						statusResp.AlternativeSchemas = append(statusResp.AlternativeSchemas, bodyResp.Schema)
+					}
+				}
+			}
+		}
+		// Remove body-only entries that were merged
+		for _, bKey := range bodyOnlyKeys {
+			delete(respInfo, bKey)
+		}
+	}
+
+	// Add responses (sorted for deterministic output)
+	for _, statusCode := range slices.Sorted(maps.Keys(respInfo)) {
+		resp := respInfo[statusCode]
+		// If status code is unknown but the response has a body, infer 200 (OK).
+		// This handles the common case where handlers write a response without
+		// calling WriteHeader explicitly.
+		if resp.StatusCode < 0 && resp.BodyType != "" {
+			resp.StatusCode = http.StatusOK
+			statusCode = "200"
+		} else if resp.StatusCode < 0 {
+			// No body and no status — use "default"
 			statusCode = "default"
 		}
 
@@ -260,11 +532,20 @@ func buildResponses(respInfo map[string]*ResponseInfo) map[string]Response {
 			description = "Status code could not be determined"
 		}
 
+		// If multiple schemas exist for this status code, wrap in oneOf.
+		schema := resp.Schema
+		if len(resp.AlternativeSchemas) > 0 && schema != nil {
+			allSchemas := make([]*Schema, 0, 1+len(resp.AlternativeSchemas))
+			allSchemas = append(allSchemas, schema)
+			allSchemas = append(allSchemas, resp.AlternativeSchemas...)
+			schema = &Schema{OneOf: allSchemas}
+		}
+
 		responses[statusCode] = Response{
 			Description: description,
 			Content: map[string]MediaType{
 				resp.ContentType: {
-					Schema: resp.Schema,
+					Schema: schema,
 				},
 			},
 		}
@@ -320,13 +601,21 @@ func generateComponentSchemas(meta *metadata.Metadata, cfg *APISpecConfig, route
 	return components
 }
 
+// schemaName applies the standard name replacer and optionally shortens the type name.
+func schemaName(typeName string, cfg *APISpecConfig) string {
+	if cfg != nil && cfg.UseShortNames() {
+		return schemaComponentNameReplacer.Replace(shortenTypeName(typeName))
+	}
+	return schemaComponentNameReplacer.Replace(typeName)
+}
+
 func generateSchemas(usedTypes map[string]*Schema, cfg *APISpecConfig, components Components, meta *metadata.Metadata) {
-	for typeName := range usedTypes {
+	for _, typeName := range slices.Sorted(maps.Keys(usedTypes)) {
 		// Check external types
 		if cfg != nil {
 			for _, externalType := range cfg.ExternalTypes {
 				if externalType.Name == strings.ReplaceAll(typeName, TypeSep, ".") {
-					components.Schemas[schemaComponentNameReplacer.Replace(typeName)] = externalType.OpenAPIType
+					components.Schemas[schemaName(typeName, cfg)] = externalType.OpenAPIType
 					continue
 				}
 			}
@@ -352,12 +641,11 @@ func generateSchemas(usedTypes map[string]*Schema, cfg *APISpecConfig, component
 				schema, schemas = generateSchemaFromType(usedTypes, key, typ, meta, cfg, nil)
 			}
 			if schema != nil {
-				components.Schemas[schemaComponentNameReplacer.Replace(key)] = schema
+				components.Schemas[schemaName(key, cfg)] = schema
 			}
 			for schemaKey, newSchema := range schemas {
-				components.Schemas[schemaComponentNameReplacer.Replace(schemaKey)] = newSchema
+				components.Schemas[schemaName(schemaKey, cfg)] = newSchema
 			}
-
 		}
 	}
 }
@@ -373,10 +661,10 @@ func collectUsedTypesFromRoutes(routes []*RouteInfo) map[string]*Schema {
 			markUsedType(usedTypes, route.Request.BodyType, nil)
 		}
 
-		// Add response types
-		for _, res := range route.Response {
-			if route.Response != nil && res.BodyType != "" {
-				// addTypeAndDependenciesWithMetadata(res.BodyType, usedTypes, meta, cfg)
+		// Add response types (sorted for determinism)
+		for _, key := range slices.Sorted(maps.Keys(route.Response)) {
+			res := route.Response[key]
+			if res.BodyType != "" {
 				markUsedType(usedTypes, res.BodyType, nil)
 			}
 		}
@@ -481,6 +769,40 @@ type Parts struct {
 
 func TypeParts(typeName string) Parts {
 	parts := Parts{}
+
+	// Handle bracket-style generic types first (e.g., "APIResponse[pkg.User]")
+	// Extract base type and generic params before any separator splitting.
+	if bracketIdx := strings.Index(typeName, "["); bracketIdx > 0 && !strings.Contains(typeName[:bracketIdx], TypeSep) {
+		baseName := typeName[:bracketIdx]
+		genericParam := typeName[bracketIdx+1:]
+
+		genericParam = strings.TrimSuffix(genericParam, "]")
+
+		// Split base name into pkg.Type
+		lastDot := strings.LastIndex(baseName, defaultSep)
+		if lastDot > 0 {
+			parts.PkgName = baseName[:lastDot]
+			parts.TypeName = baseName[lastDot+1:]
+		} else {
+			parts.TypeName = baseName
+		}
+		// Format: "ParamName ConcreteType" — use single-letter type params
+		// (T, U, V) for positional parameters since we don't have the param
+		// names from the type string. generateStructSchema matches field types
+		// against these to substitute.
+		params := strings.Split(genericParam, ",")
+		paramNames := []string{"T", "U", "V", "W", "X", "Y", "Z"}
+		for i, param := range params {
+			param = strings.TrimSpace(param)
+			name := paramNames[0]
+			if i < len(paramNames) {
+				name = paramNames[i]
+			}
+			parts.GenericTypes = append(parts.GenericTypes, name+" "+param)
+		}
+		return parts
+	}
+
 	typeParts := strings.Split(typeName, TypeSep)
 
 	if len(typeParts) == 1 {
@@ -567,6 +889,8 @@ func generateSchemaFromType(usedTypes map[string]*Schema, key string, typ *metad
 }
 
 // generateStructSchema generates a schema for a struct type
+//
+//nolint:gocyclo // struct schema generation with field tags and validation
 func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadata.Type, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema) {
 	schemas := map[string]*Schema{}
 
@@ -576,7 +900,12 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 	if len(keyParts.GenericTypes) > 0 {
 		for _, part := range keyParts.GenericTypes {
 			genericType := strings.Split(part, " ")
-			genericTypes[genericType[0]] = strings.ReplaceAll(part, " ", "-")
+			if len(genericType) >= 2 {
+				// Map type parameter name to concrete type (e.g., "T" → "pkg.User")
+				genericTypes[genericType[0]] = genericType[1]
+			} else {
+				genericTypes[genericType[0]] = strings.ReplaceAll(part, " ", "-")
+			}
 		}
 	}
 
@@ -594,6 +923,29 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 
 		if genericType, ok := genericTypes[fieldType]; ok {
 			fieldType = genericType
+		} else {
+			// Substitute type params inside container types: []T, *T, map[K]V
+			// Only match when param is a complete token (not substring of another type).
+			for param, concrete := range genericTypes {
+				// Check common container patterns
+				if strings.HasPrefix(fieldType, "[]"+param) {
+					fieldType = "[]" + concrete + fieldType[2+len(param):]
+					break
+				}
+				if strings.HasPrefix(fieldType, "*"+param) {
+					fieldType = "*" + concrete + fieldType[1+len(param):]
+					break
+				}
+				if strings.HasPrefix(fieldType, "map["+param+"]") {
+					fieldType = "map[" + concrete + "]" + fieldType[4+len(param):]
+					break
+				}
+				// map value: map[X]T
+				if strings.Contains(fieldType, "]"+param) && strings.HasPrefix(fieldType, "map[") {
+					fieldType = strings.Replace(fieldType, "]"+param, "]"+concrete, 1)
+					break
+				}
+			}
 		}
 
 		// Check if fieldType is an alias/enum and resolve to underlying type
@@ -652,7 +1004,6 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 				}
 				schemas[derivedFieldType] = bodySchema
 				markUsedType(usedTypes, derivedFieldType, bodySchema)
-
 			} else {
 				fieldSchema, newSchemas = mapGoTypeToOpenAPISchema(usedTypes, derivedFieldType, meta, cfg, visitedTypes)
 				if canAddRefSchemaForType(derivedFieldType) {
@@ -670,6 +1021,13 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 
 			// Add to required fields if marked as required
 			if validationConstraints.Required {
+				schema.Required = append(schema.Required, fieldName)
+			}
+		} else {
+			// Fields without omitempty and without a "-" json tag are required
+			// by default in Go (zero-value is always serialized).
+			fieldTag := getStringFromPool(meta, field.Tag)
+			if !hasOmitempty(fieldTag) {
 				schema.Required = append(schema.Required, fieldName)
 			}
 		}
@@ -693,7 +1051,6 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 					default:
 						fieldSchema.Enum = enumValues
 					}
-
 				}
 			}
 		}
@@ -826,6 +1183,20 @@ func getStringFromPool(meta *metadata.Metadata, idx int) string {
 	return meta.StringPool.GetString(idx)
 }
 
+// hasOmitempty checks if the json tag contains the omitempty option.
+func hasOmitempty(tag string) bool {
+	if !strings.Contains(tag, "json:") {
+		return false
+	}
+	parts := strings.Split(tag, "json:")
+	if len(parts) < 2 {
+		return false
+	}
+	jsonPart := strings.Split(parts[1], " ")[0]
+	jsonPart = strings.Trim(jsonPart, "\"")
+	return strings.Contains(jsonPart, "omitempty")
+}
+
 // extractJSONName extracts JSON name from a struct tag
 func extractJSONName(tag string) string {
 	if tag == "" {
@@ -861,16 +1232,131 @@ type ValidationConstraints struct {
 	Format    string
 	Pattern   string
 	Required  bool
+	Dive      bool // When true, constraints apply to array items, not the array itself
 	Enum      []interface{}
 }
 
-// extractValidationConstraints extracts validation constraints from struct tags
+// validationFormatRules maps validation rule names to OpenAPI format strings
+var validationFormatRules = map[string]string{
+	"email": "email",
+	"url":   "uri",
+	"uuid":  "uuid",
+}
+
+// validationPatternRules maps validation rule names to regex patterns
+var validationPatternRules = map[string]string{ //nolint:gosec // not credentials, these are validation regex patterns
+	"alpha": `^[a-zA-Z]+$`, "alphanum": `^[a-zA-Z0-9]+$`, "numeric": `^[0-9]+$`,
+	"alphaunicode": `^\p{L}+$`, "alphanumunicode": `^[\p{L}\p{N}]+$`,
+	"hexadecimal": `^[0-9a-fA-F]+$`, "hexcolor": `^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`,
+	"rgb":  `^rgb\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*\)$`,
+	"rgba": `^rgba\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]*(?:\.[0-9]+)?)\s*\)$`,
+	"hsl":  `^hsl\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})%\s*,\s*([0-9]{1,3})%\s*\)$`,
+	"hsla": `^hsla\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})%\s*,\s*([0-9]{1,3})%\s*,\s*([0-9]*(?:\.[0-9]+)?)\s*\)$`,
+	"json": `^[\s\S]*$`, "base64": `^[A-Za-z0-9+/]*={0,2}$`, "base64url": `^[A-Za-z0-9_-]*$`,
+	"datetime": `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`,
+	"date":     `^\d{4}-\d{2}-\d{2}$`, "time": `^\d{2}:\d{2}:\d{2}$`,
+	"ip":          `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$`,
+	"ipv4":        `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$`,
+	"ipv6":        `^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$`,
+	"cidr":        `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/(?:[0-9]|[1-2][0-9]|3[0-2])$`,
+	"cidrv4":      `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/(?:[0-9]|[1-2][0-9]|3[0-2])$`,
+	"cidrv6":      `^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\/(?:[0-9]|[1-9][0-9]|1[0-2][0-8])$`,
+	"tcp_addr":    `^[a-zA-Z0-9.-]+:\d+$`,
+	"tcp4_addr":   `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):\d+$`,
+	"tcp6_addr":   `^\[(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\]:\d+$`,
+	"udp_addr":    `^[a-zA-Z0-9.-]+:\d+$`,
+	"udp4_addr":   `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):\d+$`,
+	"udp6_addr":   `^\[(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\]:\d+$`,
+	"unix_addr":   `^[a-zA-Z0-9._/-]+$`,
+	"mac":         `^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$`,
+	"hostname":    `^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`,
+	"fqdn":        `^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.$`,
+	"isbn":        `^(?:ISBN(?:-1[03])?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$|97[89][0-9]{10}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)(?:97[89][- ]?)?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]$`,
+	"isbn10":      `^(?:ISBN(?:-10)?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$)[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]$`,
+	"isbn13":      `^(?:ISBN(?:-13)?:? )?(?=[0-9]{13}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)97[89][- ]?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9]$`,
+	"issn":        `^[0-9]{4}-[0-9]{3}[0-9X]$`,
+	"uuid3":       `^[0-9a-f]{8}-[0-9a-f]{4}-3[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+	"uuid4":       `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
+	"uuid5":       `^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
+	"ulid":        `^[0-9A-HJKMNP-TV-Z]{26}$`,
+	"ascii":       `^[\x00-\x7F]*$`,
+	"printascii":  `^[\x20-\x7E]*$`,
+	"multibyte":   `^[\x00-\x7F]*$`,
+	"datauri":     `^data:([a-z]+\/[a-z0-9\-\+]+(;[a-z0-9\-\+]+\=[a-z0-9\-\+]+)?)?(;base64)?,([a-z0-9\!\$\&\'\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*)$`,
+	"latitude":    `^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?)$`,
+	"longitude":   `^[-+]?(180(\.0+)?|((1[0-7]\d)|([1-9]?\d))(\.\d+)?)$`,
+	"ssn":         `^\d{3}-?\d{2}-?\d{4}$`,
+	"credit_card": `^(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|3[0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})$`,
+	"mongodb":     `^[0-9a-fA-F]{24}$`,
+	"cron":        `^(\*|([0-5]?\d)) (\*|([01]?\d|2[0-3])) (\*|([012]?\d|3[01])) (\*|([0]?\d|1[0-2])) (\*|([0-6]))$`,
+}
+
+// applyValidationRule applies a single validation rule to constraints
+func applyValidationRule(rule string, constraints *ValidationConstraints) {
+	switch {
+	case rule == "dive":
+		constraints.Dive = true
+	case rule == "required":
+		constraints.Required = true
+	case strings.HasPrefix(rule, "min="):
+		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "min=")); err == nil {
+			constraints.Min = &[]float64{float64(val)}[0]
+		}
+	case strings.HasPrefix(rule, "max="):
+		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "max=")); err == nil {
+			constraints.Max = &[]float64{float64(val)}[0]
+		}
+	case strings.HasPrefix(rule, "len="):
+		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "len=")); err == nil {
+			constraints.MinLength = &val
+			constraints.MaxLength = &val
+		}
+	case strings.HasPrefix(rule, "minlen="):
+		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "minlen=")); err == nil {
+			constraints.MinLength = &val
+		}
+	case strings.HasPrefix(rule, "maxlen="):
+		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "maxlen=")); err == nil {
+			constraints.MaxLength = &val
+		}
+	case strings.HasPrefix(rule, "regexp="):
+		constraints.Pattern = strings.TrimPrefix(rule, "regexp=")
+	case strings.HasPrefix(rule, "oneof="):
+		enumPart := strings.TrimPrefix(rule, "oneof=")
+		for _, val := range strings.Split(enumPart, " ") {
+			constraints.Enum = append(constraints.Enum, strings.TrimSpace(val))
+		}
+	default:
+		if format, ok := validationFormatRules[rule]; ok {
+			constraints.Format = format
+		} else if pattern, ok := validationPatternRules[rule]; ok {
+			constraints.Pattern = pattern
+		}
+	}
+}
+
+//nolint:gocyclo // validation constraint extraction from struct tags
 func extractValidationConstraints(tag string) *ValidationConstraints {
 	if tag == "" {
 		return nil
 	}
 
 	constraints := &ValidationConstraints{}
+
+	// Parse binding tag (Gin's validation tag — uses same syntax as go-playground/validator)
+	if strings.Contains(tag, "binding:") {
+		parts := strings.Split(tag, "binding:")
+		if len(parts) > 1 {
+			bindingTag := strings.Trim(parts[1], "\"")
+			// Trim at next space-delimited tag boundary
+			if idx := strings.Index(bindingTag, "\" "); idx >= 0 {
+				bindingTag = bindingTag[:idx]
+			}
+			if strings.Contains(bindingTag, "required") {
+				constraints.Required = true
+			}
+		}
+	}
 
 	// Parse validate tag (common validation libraries like go-playground/validator)
 	if strings.Contains(tag, "validate:") {
@@ -887,210 +1373,10 @@ func extractValidationConstraints(tag string) *ValidationConstraints {
 			rules := getCachedMapperRegex(`([a-zA-Z_][a-zA-Z0-9_]*(?:=(?:[^,{}]|{[^}]*})*)?)`).FindAllStringSubmatch(validateTag, -1)
 			for _, ruleSet := range rules {
 				rule := strings.TrimSpace(ruleSet[1])
-				if rule == "required" {
-					constraints.Required = true
-				} else if strings.HasPrefix(rule, "min=") {
-					if val, err := strconv.Atoi(strings.TrimPrefix(rule, "min=")); err == nil {
-						// For numeric validation, use Min instead of MinLength
-						constraints.Min = &[]float64{float64(val)}[0]
-					}
-				} else if strings.HasPrefix(rule, "max=") {
-					if val, err := strconv.Atoi(strings.TrimPrefix(rule, "max=")); err == nil {
-						// For numeric validation, use Max instead of MaxLength
-						constraints.Max = &[]float64{float64(val)}[0]
-					}
-				} else if strings.HasPrefix(rule, "len=") {
-					// Length validation for strings, arrays, slices
-					if val, err := strconv.Atoi(strings.TrimPrefix(rule, "len=")); err == nil {
-						constraints.MinLength = &val
-						constraints.MaxLength = &val
-					}
-				} else if strings.HasPrefix(rule, "minlen=") {
-					// Minimum length for strings, arrays, slices
-					if val, err := strconv.Atoi(strings.TrimPrefix(rule, "minlen=")); err == nil {
-						constraints.MinLength = &val
-					}
-				} else if strings.HasPrefix(rule, "maxlen=") {
-					// Maximum length for strings, arrays, slices
-					if val, err := strconv.Atoi(strings.TrimPrefix(rule, "maxlen=")); err == nil {
-						constraints.MaxLength = &val
-					}
-				} else if strings.HasPrefix(rule, "regexp=") {
-					constraints.Pattern = strings.TrimPrefix(rule, "regexp=")
-				} else if strings.HasPrefix(rule, "oneof=") {
-					// One of validation - creates enum values
-					enumPart := strings.TrimPrefix(rule, "oneof=")
-					enumValues := strings.Split(enumPart, " ")
-					for _, val := range enumValues {
-						constraints.Enum = append(constraints.Enum, strings.TrimSpace(val))
-					}
-				} else if rule == "email" {
-					// Email validation - set pattern
-					constraints.Format = `email`
-				} else if rule == "url" {
-					// URL validation - set pattern
-					constraints.Format = `uri`
-				} else if rule == "uuid" {
-					// UUID validation - set pattern
-					constraints.Format = `uuid`
-				} else if rule == "alpha" {
-					// Alphabetic characters only
-					constraints.Pattern = `^[a-zA-Z]+$`
-				} else if rule == "alphanum" {
-					// Alphanumeric characters only
-					constraints.Pattern = `^[a-zA-Z0-9]+$`
-				} else if rule == "numeric" {
-					// Numeric characters only
-					constraints.Pattern = `^[0-9]+$`
-				} else if rule == "alphaunicode" {
-					// Unicode alphabetic characters only
-					constraints.Pattern = `^\p{L}+$`
-				} else if rule == "alphanumunicode" {
-					// Unicode alphanumeric characters only
-					constraints.Pattern = `^[\p{L}\p{N}]+$`
-				} else if rule == "hexadecimal" {
-					// Hexadecimal characters only
-					constraints.Pattern = `^[0-9a-fA-F]+$`
-				} else if rule == "hexcolor" {
-					// Hex color validation
-					constraints.Pattern = `^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$`
-				} else if rule == "rgb" {
-					// RGB color validation
-					constraints.Pattern = `^rgb\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*\)$`
-				} else if rule == "rgba" {
-					// RGBA color validation
-					constraints.Pattern = `^rgba\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]*(?:\.[0-9]+)?)\s*\)$`
-				} else if rule == "hsl" {
-					// HSL color validation
-					constraints.Pattern = `^hsl\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})%\s*,\s*([0-9]{1,3})%\s*\)$`
-				} else if rule == "hsla" {
-					// HSLA color validation
-					constraints.Pattern = `^hsla\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})%\s*,\s*([0-9]{1,3})%\s*,\s*([0-9]*(?:\.[0-9]+)?)\s*\)$`
-				} else if rule == "json" {
-					// JSON validation - basic pattern
-					constraints.Pattern = `^[\s\S]*$` // JSON is complex, this is a basic check
-				} else if rule == "base64" {
-					// Base64 validation
-					constraints.Pattern = `^[A-Za-z0-9+/]*={0,2}$`
-				} else if rule == "base64url" {
-					// Base64URL validation
-					constraints.Pattern = `^[A-Za-z0-9_-]*$`
-				} else if rule == "datetime" {
-					// DateTime validation (RFC3339)
-					constraints.Pattern = `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$`
-				} else if rule == "date" {
-					// Date validation (YYYY-MM-DD)
-					constraints.Pattern = `^\d{4}-\d{2}-\d{2}$`
-				} else if rule == "time" {
-					// Time validation (HH:MM:SS)
-					constraints.Pattern = `^\d{2}:\d{2}:\d{2}$`
-				} else if rule == "ip" {
-					// IP address validation
-					constraints.Pattern = `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$`
-				} else if rule == "ipv4" {
-					// IPv4 address validation
-					constraints.Pattern = `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$`
-				} else if rule == "ipv6" {
-					// IPv6 address validation
-					constraints.Pattern = `^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}$`
-				} else if rule == "cidr" {
-					// CIDR validation
-					constraints.Pattern = `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/(?:[0-9]|[1-2][0-9]|3[0-2])$`
-				} else if rule == "cidrv4" {
-					// CIDRv4 validation
-					constraints.Pattern = `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/(?:[0-9]|[1-2][0-9]|3[0-2])$`
-				} else if rule == "cidrv6" {
-					// CIDRv6 validation
-					constraints.Pattern = `^(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\/(?:[0-9]|[1-9][0-9]|1[0-2][0-8])$`
-				} else if rule == "tcp_addr" {
-					// TCP address validation
-					constraints.Pattern = `^[a-zA-Z0-9.-]+:\d+$`
-				} else if rule == "tcp4_addr" {
-					// TCP4 address validation
-					constraints.Pattern = `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):\d+$`
-				} else if rule == "tcp6_addr" {
-					// TCP6 address validation
-					constraints.Pattern = `^\[(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\]:\d+$`
-				} else if rule == "udp_addr" {
-					// UDP address validation
-					constraints.Pattern = `^[a-zA-Z0-9.-]+:\d+$`
-				} else if rule == "udp4_addr" {
-					// UDP4 address validation
-					constraints.Pattern = `^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?):\d+$`
-				} else if rule == "udp6_addr" {
-					// UDP6 address validation
-					constraints.Pattern = `^\[(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\]:\d+$`
-				} else if rule == "unix_addr" {
-					// Unix address validation
-					constraints.Pattern = `^[a-zA-Z0-9._/-]+$`
-				} else if rule == "mac" {
-					// MAC address validation
-					constraints.Pattern = `^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$`
-				} else if rule == "hostname" {
-					// Hostname validation
-					constraints.Pattern = `^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`
-				} else if rule == "fqdn" {
-					// FQDN validation
-					constraints.Pattern = `^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.$`
-				} else if rule == "isbn" {
-					// ISBN validation
-					constraints.Pattern = `^(?:ISBN(?:-1[03])?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$|97[89][0-9]{10}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)(?:97[89][- ]?)?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]$`
-				} else if rule == "isbn10" {
-					// ISBN-10 validation
-					constraints.Pattern = `^(?:ISBN(?:-10)?:? )?(?=[0-9X]{10}$|(?=(?:[0-9]+[- ]){3})[- 0-9X]{13}$)[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9X]$`
-				} else if rule == "isbn13" {
-					// ISBN-13 validation
-					constraints.Pattern = `^(?:ISBN(?:-13)?:? )?(?=[0-9]{13}$|(?=(?:[0-9]+[- ]){4})[- 0-9]{17}$)97[89][- ]?[0-9]{1,5}[- ]?[0-9]+[- ]?[0-9]+[- ]?[0-9]$`
-				} else if rule == "issn" {
-					// ISSN validation
-					constraints.Pattern = `^[0-9]{4}-[0-9]{3}[0-9X]$`
-				} else if rule == "uuid3" {
-					// UUID v3 validation
-					constraints.Pattern = `^[0-9a-f]{8}-[0-9a-f]{4}-3[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$`
-				} else if rule == "uuid4" {
-					// UUID v4 validation
-					constraints.Pattern = `^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-				} else if rule == "uuid5" {
-					// UUID v5 validation
-					constraints.Pattern = `^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`
-				} else if rule == "ulid" {
-					// ULID validation
-					constraints.Pattern = `^[0-9A-HJKMNP-TV-Z]{26}$`
-				} else if rule == "ascii" {
-					// ASCII validation
-					constraints.Pattern = `^[\x00-\x7F]*$`
-				} else if rule == "printascii" {
-					// Printable ASCII validation
-					constraints.Pattern = `^[\x20-\x7E]*$`
-				} else if rule == "multibyte" {
-					// Multibyte validation
-					constraints.Pattern = `^[\x00-\x7F]*$`
-				} else if rule == "datauri" {
-					// Data URI validation
-					constraints.Pattern = `^data:([a-z]+\/[a-z0-9\-\+]+(;[a-z0-9\-\+]+\=[a-z0-9\-\+]+)?)?(;base64)?,([a-z0-9\!\$\&\'\(\)\*\+\,\;\=\-\.\_\~\:\@\/\?\%\s]*)$`
-				} else if rule == "latitude" {
-					// Latitude validation
-					constraints.Pattern = `^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?)$`
-				} else if rule == "longitude" {
-					// Longitude validation
-					constraints.Pattern = `^[-+]?(180(\.0+)?|((1[0-7]\d)|([1-9]?\d))(\.\d+)?)$`
-				} else if rule == "ssn" {
-					// SSN validation
-					constraints.Pattern = `^\d{3}-?\d{2}-?\d{4}$`
-				} else if rule == "credit_card" {
-					// Credit card validation
-					constraints.Pattern = `^(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|3[0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})$`
-				} else if rule == "mongodb" {
-					// MongoDB ObjectID validation
-					constraints.Pattern = `^[0-9a-fA-F]{24}$`
-				} else if rule == "cron" {
-					// Cron expression validation
-					constraints.Pattern = `^(\*|([0-5]?\d)) (\*|([01]?\d|2[0-3])) (\*|([012]?\d|3[01])) (\*|([0]?\d|1[0-2])) (\*|([0-6]))$`
-				}
+				applyValidationRule(rule, constraints)
 			}
 		}
 	}
-
 	// Parse custom validation tags
 	if strings.Contains(tag, "min:") {
 		parts := strings.Split(tag, "min:")
@@ -1142,8 +1428,18 @@ func extractValidationConstraints(tag string) *ValidationConstraints {
 }
 
 // applyValidationConstraints applies validation constraints to an OpenAPI schema
+//
+//nolint:gocyclo // validation constraint mapping has inherent branching for type-specific rules
 func applyValidationConstraints(schema *Schema, constraints *ValidationConstraints) {
 	if schema == nil || constraints == nil {
+		return
+	}
+
+	// Handle dive: apply constraints to array items instead of the array itself
+	if constraints.Dive && schema.Type == "array" && schema.Items != nil {
+		itemConstraints := *constraints
+		itemConstraints.Dive = false
+		applyValidationConstraints(schema.Items, &itemConstraints)
 		return
 	}
 
@@ -1160,17 +1456,17 @@ func applyValidationConstraints(schema *Schema, constraints *ValidationConstrain
 	// Apply numeric constraints (for integer and number types)
 	if schema.Type == "integer" || schema.Type == "number" {
 		if constraints.Min != nil {
-			schema.Minimum = *constraints.Min
+			schema.Minimum = constraints.Min
 		}
 		if constraints.Max != nil {
-			schema.Maximum = *constraints.Max
+			schema.Maximum = constraints.Max
 		}
 		// Also check min/max from validate tags for numeric types
 		if constraints.MinLength != nil && schema.Type == "integer" {
-			schema.Minimum = float64(*constraints.MinLength)
+			schema.Minimum = floatPtr(float64(*constraints.MinLength))
 		}
 		if constraints.MaxLength != nil && schema.Type == "integer" {
-			schema.Maximum = float64(*constraints.MaxLength)
+			schema.Maximum = floatPtr(float64(*constraints.MaxLength))
 		}
 	}
 
@@ -1394,27 +1690,30 @@ func typeMatches(constantType, targetType string, meta *metadata.Metadata) bool 
 	constTypeParts := strings.Split(constantType, ".")
 	targetTypeParts := strings.Split(targetType, ".")
 
-	if len(constTypeParts) > 1 && len(targetTypeParts) > 1 {
+	switch {
+	case len(constTypeParts) > 1 && len(targetTypeParts) > 1:
 		// Both are package-qualified, compare the type names
 		constTypeName := constTypeParts[len(constTypeParts)-1]
 		targetTypeName := targetTypeParts[len(targetTypeParts)-1]
 		return constTypeName == targetTypeName
-	} else if len(constTypeParts) > 1 {
+	case len(constTypeParts) > 1:
 		// Constant is package-qualified, target is not
 		constTypeName := constTypeParts[len(constTypeParts)-1]
 		return constTypeName == targetType
-	} else if len(targetTypeParts) > 1 {
+	case len(targetTypeParts) > 1:
 		// Target is package-qualified, constant is not
 		targetTypeName := targetTypeParts[len(targetTypeParts)-1]
 		return constantType == targetTypeName
+	default:
+		return false
 	}
-
-	return false
 }
 
 const mapGoTypeToOpenAPISchemaKey = "mapGoTypeToOpenAPISchema"
 
 // mapGoTypeToOpenAPISchema maps Go types to OpenAPI schemas
+//
+//nolint:gocyclo // Go type to OpenAPI schema mapping with all Go types
 func mapGoTypeToOpenAPISchema(usedTypes map[string]*Schema, goType string, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema) {
 	schemas := map[string]*Schema{}
 	var schema *Schema
@@ -1633,6 +1932,39 @@ func mapGoTypeToOpenAPISchema(usedTypes map[string]*Schema, goType string, meta 
 		}
 	}
 
+	// Handle generic struct instantiation (e.g., "APIResponse[pkg.User]").
+	// Find the base struct, substitute type parameters, generate inline schema,
+	// and store it as a named component.
+	if bracketIdx := strings.Index(goType, "["); bracketIdx > 0 && !strings.HasPrefix(goType, "[]") && !strings.HasPrefix(goType, "map[") {
+		parts := TypeParts(goType)
+		typ := typeByName(parts, meta)
+		if typ != nil && getStringFromPool(meta, typ.Kind) == "struct" {
+			structSchema, newSchemas := generateStructSchema(usedTypes, goType, typ, meta, cfg, visitedTypes)
+			if structSchema != nil {
+				// Use schemaName for the component key to ensure $ref matches
+				componentKey := schemaName(goType, cfg)
+				schemas[goType] = structSchema
+				maps.Copy(schemas, newSchemas)
+				markUsedType(usedTypes, goType, structSchema)
+				return &Schema{Ref: refComponentsSchemasPrefix + componentKey}, schemas
+			}
+		}
+	}
+
+	// Handle []byte explicitly before generic slice handling.
+	// []byte maps to string/byte (base64) for struct fields.
+	// Response-writer context overrides to string/binary in ExtractResponse.
+	if goType == "[]byte" {
+		return &Schema{Type: "string", Format: "byte"}, schemas
+	}
+	// Also catch type aliases that resolve to []byte.
+	if strings.HasPrefix(goType, "[]") {
+		resolved := resolveUnderlyingType(goType, meta)
+		if resolved == "[]byte" {
+			return &Schema{Type: "string", Format: "byte"}, schemas
+		}
+	}
+
 	// Handle slice types
 	if strings.HasPrefix(goType, "[]") {
 		elementType := strings.TrimSpace(goType[2:])
@@ -1707,7 +2039,7 @@ func mapGoTypeToOpenAPISchema(usedTypes map[string]*Schema, goType string, meta 
 	case "int", "int8", "int16", "int32", "int64":
 		return &Schema{Type: "integer"}, schemas
 	case "uint", "uint8", "uint16", "uint32", "uint64", "byte":
-		return &Schema{Type: "integer", Minimum: 0}, schemas
+		return &Schema{Type: "integer", Minimum: floatPtr(0)}, schemas
 	case "float32", "float64":
 		return &Schema{Type: "number"}, schemas
 	case "bool":
@@ -1717,8 +2049,6 @@ func mapGoTypeToOpenAPISchema(usedTypes map[string]*Schema, goType string, meta 
 			Type:   "string",
 			Format: "date-time",
 		}, schemas
-	case "[]byte":
-		return &Schema{Type: "string", Format: "byte"}, schemas
 	case "[]string":
 		return &Schema{Type: "array", Items: &Schema{Type: "string"}}, schemas
 	case "[]time.Time":
@@ -1774,7 +2104,10 @@ func canAddRefSchemaForType(key string) bool {
 }
 
 func addRefSchemaForType(goType string) *Schema {
-	// For custom types not found in metadata, create a reference
+	// For custom types not found in metadata, create a reference.
+	// Note: short name shortening for $ref values is applied in a
+	// post-processing pass (disambiguateSchemaNames) to ensure
+	// consistency with component schema keys.
 	goType = strings.TrimPrefix(goType, "*")
 	return &Schema{Ref: refComponentsSchemasPrefix + schemaComponentNameReplacer.Replace(goType)}
 }

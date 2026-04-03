@@ -1,4 +1,4 @@
-// Copyright 2025 Ehab Terra
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 func TestDetectVersionInfo(t *testing.T) {
@@ -137,7 +137,7 @@ func TestLoadMetadata(t *testing.T) {
 	// We just check that it doesn't panic
 }
 
-func TestSetupRoutes(t *testing.T) {
+func TestSetupRoutes(_ *testing.T) {
 	config := &ServerConfig{
 		Host: "localhost",
 		Port: 8080,
@@ -484,7 +484,7 @@ func TestWriteError(t *testing.T) {
 }
 
 // Test the main function (this will exit, so we can't test it directly)
-func TestMainFunction(t *testing.T) {
+func TestMainFunction(_ *testing.T) {
 	// We can't test main() directly as it calls os.Exit()
 	// But we can test that the functions it calls work correctly
 	// This is already covered by the other tests

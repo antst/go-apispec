@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
@@ -9,7 +23,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 func TestMapGoTypeToOpenAPISchema_PointerTypes(t *testing.T) {
@@ -126,7 +140,6 @@ func TestMapGoTypeToOpenAPISchema_PointerTypes(t *testing.T) {
 }
 
 func TestAddTypeAndDependenciesWithMetadata_PointerTypes(t *testing.T) {
-
 	usedTypes := make(map[string]*Schema)
 	markUsedType(usedTypes, "*User", &Schema{Type: "object"})
 
@@ -471,9 +484,7 @@ func TestMapMetadataToOpenAPI_WithConfigInfo(t *testing.T) {
 		},
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:       `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
-					MethodFromCall:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`}, MethodFromCall: true,
 					PathFromArg:     true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
@@ -589,9 +600,7 @@ func TestMapMetadataToOpenAPI_WithSecuritySchemes(t *testing.T) {
 	cfg := &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:       `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
-					MethodFromCall:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`}, MethodFromCall: true,
 					PathFromArg:     true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
@@ -700,7 +709,7 @@ func TestDefaultAPISpecConfig(t *testing.T) {
 func TestBuildPathsFromRoutes(t *testing.T) {
 	// Test with empty routes
 	routes := []*RouteInfo{}
-	paths := buildPathsFromRoutes(routes)
+	paths := buildPathsFromRoutes(routes, nil)
 	if paths == nil {
 		t.Fatal("Paths should not be nil")
 	}
@@ -718,7 +727,7 @@ func TestBuildPathsFromRoutes(t *testing.T) {
 		},
 	}
 
-	paths = buildPathsFromRoutes(routes)
+	paths = buildPathsFromRoutes(routes, nil)
 	if len(paths) != 1 {
 		t.Errorf("Expected 1 path, got %d", len(paths))
 	}
@@ -926,7 +935,6 @@ func TestTypeByName(t *testing.T) {
 }
 
 func TestAddTypeAndDependenciesWithMetadata(t *testing.T) {
-
 	// Test adding type and dependencies
 	usedTypes := make(map[string]*Schema)
 	markUsedType(usedTypes, "User", &Schema{Type: "object"})
@@ -1477,7 +1485,7 @@ func TestResolveUnderlyingType_CircularReference(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.name, func(_ *testing.T) {
 			// This should not panic or cause stack overflow
 			// The function currently doesn't have recursion guards,
 			// which should cause infinite recursion

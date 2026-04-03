@@ -1,4 +1,4 @@
-module github.com/ehabterra/apispec/testdata/echo
+module github.com/antst/go-apispec/testdata/echo
 
 go 1.20
 

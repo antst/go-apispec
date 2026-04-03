@@ -1,4 +1,4 @@
-// Copyright 2025 Ehab Terra
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -372,20 +372,20 @@ func TestCalculateStats(t *testing.T) {
 	analyzer := NewPerformanceAnalyzer()
 
 	// Test with empty slice
-	avg, max, min := analyzer.calculateStats([]float64{})
-	if avg != 0 || max != 0 || min != 0 {
-		t.Errorf("Expected (0,0,0) for empty slice, got (%f,%f,%f)", avg, max, min)
+	avg, maxVal, minVal := analyzer.calculateStats([]float64{})
+	if avg != 0 || maxVal != 0 || minVal != 0 {
+		t.Errorf("Expected (0,0,0) for empty slice, got (%f,%f,%f)", avg, maxVal, minVal)
 	}
 
 	// Test with single value
-	avg, max, min = analyzer.calculateStats([]float64{5.0})
-	if avg != 5.0 || max != 5.0 || min != 5.0 {
-		t.Errorf("Expected (5.0,5.0,5.0) for single value, got (%f,%f,%f)", avg, max, min)
+	avg, maxVal, minVal = analyzer.calculateStats([]float64{5.0})
+	if avg != 5.0 || maxVal != 5.0 || minVal != 5.0 {
+		t.Errorf("Expected (5.0,5.0,5.0) for single value, got (%f,%f,%f)", avg, maxVal, minVal)
 	}
 
 	// Test with multiple values
 	values := []float64{1.0, 5.0, 3.0, 9.0, 2.0}
-	avg, max, min = analyzer.calculateStats(values)
+	avg, maxVal, minVal = analyzer.calculateStats(values)
 	expectedAvg := 4.0
 	expectedMax := 9.0
 	expectedMin := 1.0
@@ -393,11 +393,11 @@ func TestCalculateStats(t *testing.T) {
 	if avg != expectedAvg {
 		t.Errorf("Expected avg %f, got %f", expectedAvg, avg)
 	}
-	if max != expectedMax {
-		t.Errorf("Expected max %f, got %f", expectedMax, max)
+	if maxVal != expectedMax {
+		t.Errorf("Expected max %f, got %f", expectedMax, maxVal)
 	}
-	if min != expectedMin {
-		t.Errorf("Expected min %f, got %f", expectedMin, min)
+	if minVal != expectedMin {
+		t.Errorf("Expected min %f, got %f", expectedMin, minVal)
 	}
 }
 

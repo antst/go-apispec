@@ -16,7 +16,7 @@ A high-performance, gitignore-style pattern matching library for Go that support
 ## Quick Start
 
 ```go
-import "github.com/ehabterra/apispec/pkg/patterns"
+import "github.com/antst/go-apispec/pkg/patterns"
 
 // Simple pattern matching
 match := patterns.Match("*.go", "main.go")                    // true

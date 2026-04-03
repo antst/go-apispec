@@ -7,7 +7,7 @@ set -e
 
 APP_NAME="apispec"
 VERSION="0.0.1"
-REPO_URL="https://github.com/ehabterra/apispec"
+REPO_URL="https://github.com/antst/go-apispec"
 
 # Colors for output
 RED='\033[0;31m'
@@ -58,9 +58,9 @@ install_go_install() {
     
     if command_exists apispec; then
         print_warning "apispec is already installed. Updating..."
-        go install github.com/ehabterra/apispec/cmd/apispec@latest
+        go install github.com/antst/go-apispec/cmd/apispec@latest
     else
-        go install github.com/ehabterra/apispec/cmd/apispec@latest
+        go install github.com/antst/go-apispec/cmd/apispec@latest
     fi
     
     # Check if installation was successful

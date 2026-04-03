@@ -1,196 +1,99 @@
-# Interface Resolution in APISpec
+# Interface Resolution in go-apispec
 
 ## Overview
 
-APISpec now includes a minimal interface resolution system that allows you to resolve embedded interfaces in Go structs to their concrete implementations. This is particularly useful for handling dependency injection patterns like those found in go-clean-echo and similar frameworks.
+go-apispec resolves interface types to their concrete implementations at two levels:
 
-## The Problem
+1. **Embedded interface resolution** — when a struct embeds an interface and initializes it with a concrete type during construction (dependency injection pattern)
+2. **Route handler resolution** — when a route handler is registered via an interface method, the tool finds the concrete implementation's response types
 
-Go's interface embedding creates a "flattened" method set where interface methods become part of the parent struct. However, when analyzing code for OpenAPI generation, you need to know the actual concrete types to generate accurate schemas.
+Both are automatic — no manual configuration needed.
 
-### Example Pattern
+## Embedded Interface Resolution
+
+### The Pattern
+
 ```go
 type Handlers struct {
     AuthorHandler  // embedded interface
-    BookHandler   // embedded interface
+    BookHandler    // embedded interface
 }
 
 func New(s *services.Services) *Handlers {
     return &Handlers{
-        AuthorHandler: &authorHandler{s.Author},  // concrete implementation
-        BookHandler:   &bookHandler{s.Book},      // concrete implementation
+        AuthorHandler: &authorHandler{s.Author},
+        BookHandler:   &bookHandler{s.Book},
     }
 }
 ```
 
-In this case:
-- `Handlers.GetAuthors` exists at compile time
-- But you need to know it maps to `authorHandler.GetAuthors`
-- The interface type information is "erased" during embedding
+The metadata layer detects that `AuthorHandler` is initialized with `*authorHandler` by analyzing the struct literal in `New()`. The tracker tree maps interface methods to their concrete implementations automatically.
 
-## Solution
+### How It Works
 
-The interface resolution system provides a simple registry to map interface types to concrete implementations in specific struct contexts.
+During AST traversal, `registerEmbeddedInterfaceResolution()` in `metadata.go` detects `KeyValueExpr` assignments where the key is an interface field and the value is a concrete type. The mapping is stored in the tracker's interface resolution registry.
 
-## Usage
+During route extraction, when a method call like `h.GetAuthors()` is encountered on the `Handlers` struct, `ResolveInterfaceFromMetadata()` resolves `AuthorHandler` → `*authorHandler`, allowing the tool to trace into the concrete method's body for response types.
 
-### 1. Register Interface Resolutions
+## Route Handler Interface Resolution
 
-During your code analysis, register interface resolutions when you discover them:
+### The Pattern
 
 ```go
-// Create tracker tree
-tree := NewTrackerTree(meta, limits)
-
-// Register interface resolutions discovered during analysis
-tree.RegisterInterfaceResolution(
-    "AuthorHandler",           // Interface type
-    "Handlers",                // Struct type containing the embedded interface
-    "github.com/example/app",  // Package where Handlers is defined
-    "*authorHandler",          // Concrete implementation type
-)
-
-tree.RegisterInterfaceResolution(
-    "BookHandler",             // Interface type
-    "Handlers",                // Struct type containing the embedded interface
-    "github.com/example/app",  // Package where Handlers is defined
-    "*bookHandler",            // Concrete implementation type
-)
-```
-
-### 2. Resolve Interfaces
-
-When you need to resolve an interface method call:
-
-```go
-// Resolve Handlers.GetAuthors -> authorHandler.GetAuthors
-concreteType := tree.ResolveInterface("AuthorHandler", "Handlers", "github.com/example/app")
-// concreteType will be "*authorHandler"
-
-// Use this concrete type for further analysis, schema generation, etc.
-```
-
-### 3. Debug Interface Resolutions
-
-You can inspect all registered interface resolutions:
-
-```go
-resolutions := tree.GetInterfaceResolutions()
-for key, concreteType := range resolutions {
-    fmt.Printf("Interface %s in struct %s (%s) -> %s\n", 
-        key.InterfaceType, key.StructType, key.Pkg, concreteType)
+type ContentServer interface {
+    Serve(w http.ResponseWriter, r *http.Request)
 }
+
+type FileServer struct{}
+
+func (fs *FileServer) Serve(w http.ResponseWriter, r *http.Request) {
+    json.NewEncoder(w).Encode(FileMetadata{Name: "doc.pdf", Size: 1024})
+}
+
+// Route registered via interface:
+var server ContentServer = &FileServer{}
+r.Get("/files/serve", server.Serve)
+```
+
+### How It Works
+
+1. The route extractor detects that the handler (`server.Serve`) is a method on an interface type
+2. `isInterfaceHandler()` checks the metadata to confirm the type is an `interface` (not a struct)
+3. `resolveInterfaceHandler()` searches the call graph for concrete methods with the same name and package
+4. Response patterns are matched against the concrete method's call graph edges using a `callGraphEdgeNode` wrapper
+5. The concrete `FileServer.Serve` method's `Encode(FileMetadata{...})` call is detected and produces the correct response schema
+
+### Result
+
+```yaml
+/files/serve:
+  get:
+    operationId: ContentServer.Serve
+    responses:
+      "200":
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileMetadata'
 ```
 
 ## API Reference
 
 ### TrackerTree Methods
 
-#### `RegisterInterfaceResolution(interfaceType, structType, pkg, concreteType string)`
-Registers a mapping from an interface type to its concrete implementation in a specific struct context.
+- `RegisterInterfaceResolution(interfaceType, structType, pkg, concreteType string)` — register a mapping from interface to concrete type in a struct context
+- `ResolveInterface(interfaceType, structType, pkg string) string` — resolve interface to concrete type
+- `ResolveInterfaceFromMetadata(recvType, funcType, pkg string) string` — resolve using metadata's `ImplementedBy` tracking
+- `GetInterfaceResolutions() map[interfaceKey]string` — return all registered resolutions
+- `SyncInterfaceResolutionsFromMetadata()` — populate resolutions from metadata analysis
 
-**Parameters:**
-- `interfaceType`: The interface type name (e.g., "AuthorHandler")
-- `structType`: The struct type containing the embedded interface (e.g., "Handlers")
-- `pkg`: Package where the struct is defined (e.g., "github.com/example/app")
-- `concreteType`: The concrete implementation type (e.g., "*authorHandler")
+### Metadata Analysis
 
-#### `ResolveInterface(interfaceType, structType, pkg string) string`
-Resolves an interface type to its concrete implementation in a struct context.
-
-**Parameters:**
-- `interfaceType`: The interface type name
-- `structType`: The struct type containing the embedded interface
-- `pkg`: Package where the struct is defined
-
-**Returns:**
-- The concrete type if found
-- The original interface type if no resolution exists
-
-#### `GetInterfaceResolutions() map[interfaceKey]string`
-Returns all registered interface resolutions for debugging purposes.
-
-## Integration with Existing Code
-
-The interface resolution system is designed to integrate seamlessly with APISpec's existing architecture:
-
-1. **Minimal Changes**: Only adds a new map and three methods to TrackerTree
-2. **No Breaking Changes**: All existing functionality remains unchanged
-3. **Performance**: Simple map lookups with no reflection overhead
-4. **Extensible**: Can be enhanced to handle more complex patterns
-
-## When to Use
-
-Use interface resolution when you encounter:
-
-- **Embedded interfaces** in structs
-- **Dependency injection** patterns
-- **Interface flattening** that hides concrete types
-- **Method dispatch** that needs concrete type information
-
-## Example Integration
-
-Here's how you might integrate this into your existing APISpec analysis:
-
-```go
-// In your existing analysis code
-func analyzeStructField(field *ast.Field, tree *TrackerTree, pkg string) {
-    if field.Type != nil {
-        // Check if this is an embedded interface
-        if ident, ok := field.Type.(*ast.Ident); ok {
-            if isInterface(ident.Name) {
-                // This is an embedded interface
-                structType := getCurrentStructName()
-                concreteType := findConcreteImplementation(field, tree)
-                
-                if concreteType != "" {
-                    tree.RegisterInterfaceResolution(
-                        ident.Name,      // interface type
-                        structType,      // struct type
-                        pkg,            // package
-                        concreteType,    // concrete implementation
-                    )
-                }
-            }
-        }
-    }
-}
-
-// Later, when you need to resolve a method call
-func resolveMethodCall(receiver, method string, tree *TrackerTree, pkg string) string {
-    // Try to resolve interface to concrete type
-    concreteType := tree.ResolveInterface(receiver, "Handlers", pkg)
-    
-    if concreteType != receiver {
-        // Interface was resolved, use concrete type
-        return concreteType + "." + method
-    }
-    
-    // No resolution, use original
-    return receiver + "." + method
-}
-```
-
-## Benefits
-
-1. **Accurate Schema Generation**: Generate OpenAPI specs based on concrete types, not interfaces
-2. **Better Type Resolution**: Follow method calls to actual implementations
-3. **Dependency Injection Support**: Handle common Go patterns for web frameworks
-4. **Minimal Overhead**: Simple map-based lookup system
-5. **Easy Integration**: Drop-in addition to existing TrackerTree functionality
+- `analyzeInterfaceImplementations()` — populates `Type.Implements` and `Type.ImplementedBy` fields for all struct/interface pairs
+- `registerEmbeddedInterfaceResolution()` — detects concrete types in struct literal initializers
 
 ## Limitations
 
-1. **Manual Registration**: Interface resolutions must be discovered and registered during analysis
-2. **Package-Specific**: Resolutions are tied to specific package contexts
-3. **No Automatic Discovery**: The system doesn't automatically detect interface implementations
-
-## Future Enhancements
-
-Potential future improvements could include:
-
-1. **Automatic Discovery**: Automatically detect interface implementations during AST analysis
-2. **Pattern Matching**: Use regex patterns to match interface names to implementation names
-3. **Cross-Package Resolution**: Handle interface implementations across package boundaries
-4. **Generic Support**: Handle generic interface implementations
-5. **Method-Level Resolution**: Resolve specific methods, not just entire interfaces
+- Route handler resolution requires the interface and implementation to be in the same package (or the call graph to contain both)
+- If multiple concrete types implement the same interface, the first match in the call graph is used
+- Interface resolution for handler dispatch works for method-style registration (`server.Serve`), not for wrapped function patterns

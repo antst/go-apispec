@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
@@ -14,6 +28,8 @@ const (
 )
 
 // getTypeName extracts a type name from an AST expression
+//
+//nolint:gocyclo // AST type name extraction with multiple node types
 func getTypeName(nd ast.Node, info *types.Info) string {
 	if nd == nil {
 		return ""
@@ -78,11 +94,28 @@ func getTypeName(nd ast.Node, info *types.Info) string {
 }
 
 // getPosition returns a string representation of a position
+// repoRoot caches the repository/module root for stripping absolute paths.
+// Set via SetRepoRoot() by the engine before metadata generation.
+var repoRoot string
+
+// SetRepoRoot sets the repository root prefix to strip from source positions,
+// making all paths in metadata relative and portable across machines.
+func SetRepoRoot(root string) {
+	if root != "" && !strings.HasSuffix(root, "/") {
+		root += "/"
+	}
+	repoRoot = root
+}
+
 func getPosition(pos token.Pos, fset *token.FileSet) string {
 	if !pos.IsValid() || fset == nil {
 		return ""
 	}
-	return fset.Position(pos).String()
+	p := fset.Position(pos).String()
+	if repoRoot != "" {
+		p = strings.TrimPrefix(p, repoRoot)
+	}
+	return p
 }
 
 // getFuncPosition returns the position of a function declaration

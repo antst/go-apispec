@@ -1,4 +1,4 @@
-// Copyright 2025 Ehab Terra
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ func TestFrameworkDetector_Configure(t *testing.T) {
 	fd := NewFrameworkDetector()
 
 	// Test default values
-	if fd.config.IncludeExternalPackages != false {
+	if fd.config.IncludeExternalPackages {
 		t.Error("Expected default IncludeExternalPackages to be false")
 	}
 	// MaxImportDepth has a default value in the configuration
@@ -30,7 +30,7 @@ func TestFrameworkDetector_Configure(t *testing.T) {
 	// Test configuration
 	fd.Configure(true, 5)
 
-	if fd.config.IncludeExternalPackages != true {
+	if !fd.config.IncludeExternalPackages {
 		t.Error("Expected IncludeExternalPackages to be true after Configure")
 	}
 	if fd.config.MaxImportDepth != 5 {
@@ -182,7 +182,7 @@ func TestFrameworkDetector_GetConfig(t *testing.T) {
 	config := fd.GetConfig()
 
 	// Test that it returns a valid config
-	if config.IncludeExternalPackages != false {
+	if config.IncludeExternalPackages {
 		t.Error("Expected default IncludeExternalPackages to be false")
 	}
 	// MaxImportDepth has a default value in the configuration, so we just check it's set
@@ -228,7 +228,7 @@ func TestNewFrameworkDetectorWithConfig(t *testing.T) {
 		return
 	}
 
-	if fd.config.IncludeExternalPackages != true {
+	if !fd.config.IncludeExternalPackages {
 		t.Error("Expected IncludeExternalPackages to be true")
 	}
 
@@ -240,7 +240,7 @@ func TestNewFrameworkDetectorWithConfig(t *testing.T) {
 func TestDefaultFrameworkDetectorConfig(t *testing.T) {
 	config := DefaultFrameworkDetectorConfig()
 
-	if config.IncludeExternalPackages != false {
+	if config.IncludeExternalPackages {
 		t.Error("Expected default IncludeExternalPackages to be false")
 	}
 

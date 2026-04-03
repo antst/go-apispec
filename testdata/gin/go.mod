@@ -1,4 +1,4 @@
-module github.com/ehabterra/apispec/testdata/gin
+module github.com/antst/go-apispec/testdata/gin
 
 go 1.24.3
 

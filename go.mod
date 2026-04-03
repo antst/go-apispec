@@ -1,4 +1,4 @@
-module github.com/ehabterra/apispec
+module github.com/antst/go-apispec
 
 go 1.25.0
 

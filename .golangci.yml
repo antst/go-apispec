@@ -1,0 +1,75 @@
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - errorlint
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - gocyclo
+    - misspell
+    - unconvert
+    - unparam
+    - revive
+    - gocritic
+    - gosec
+    - prealloc
+    - whitespace
+  settings:
+    gocyclo:
+      min-complexity: 20
+    staticcheck:
+      checks:
+        - "all"
+        - "-ST1000"
+    revive:
+      enable-all-rules: false
+      rules:
+        - name: package-comments
+          disabled: true
+        - name: exported
+          disabled: true
+        - name: unused-parameter
+        - name: unreachable-code
+        - name: redefines-builtin-id
+        - name: defer
+        - name: constant-logical-expr
+        - name: bool-literal-in-expr
+        - name: atomic
+        - name: error-strings
+  exclusions:
+    presets: []
+    rules:
+      - path: "_test\\.go"
+        linters:
+          - unparam
+          - errcheck
+          - gosec
+          - gocritic
+          - gocyclo
+          - errorlint
+      - path: "testdata/"
+        linters:
+          - errcheck
+          - gosec
+          - govet
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/antst/go-apispec
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
