@@ -342,3 +342,269 @@ func TestStrPtr_WithVariousInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestCallArgToString_AllKindBranches(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{StringPool: sp}
+	provider := NewContextProvider(meta)
+
+	makeArg := func(kind string) *metadata.CallArgument {
+		a := metadata.NewCallArgument(meta)
+		a.SetKind(kind)
+		return a
+	}
+
+	// KindLiteral — strips quotes
+	lit := makeArg(metadata.KindLiteral)
+	lit.SetValue(`"hello"`)
+	if got := provider.callArgToString(lit, nil); got != "hello" {
+		t.Errorf("KindLiteral: got %q, want %q", got, "hello")
+	}
+
+	// KindKeyValue — returns ""
+	kv := makeArg(metadata.KindKeyValue)
+	if got := provider.callArgToString(kv, nil); got != "" {
+		t.Errorf("KindKeyValue: got %q, want empty", got)
+	}
+
+	// KindMapType with X and Fun
+	mt := makeArg(metadata.KindMapType)
+	mtKey := makeArg(metadata.KindIdent)
+	mtKey.SetName("string")
+	mtKey.SetType("string")
+	mtVal := makeArg(metadata.KindIdent)
+	mtVal.SetName("int")
+	mtVal.SetType("int")
+	mt.X = mtKey
+	mt.Fun = mtVal
+	if got := provider.callArgToString(mt, nil); got != "map[string]int" {
+		t.Errorf("KindMapType: got %q, want %q", got, "map[string]int")
+	}
+
+	// KindMapType without children
+	mt2 := makeArg(metadata.KindMapType)
+	if got := provider.callArgToString(mt2, nil); got != "map" {
+		t.Errorf("KindMapType nil: got %q, want %q", got, "map")
+	}
+
+	// KindUnary with X
+	un := makeArg(metadata.KindUnary)
+	unX := makeArg(metadata.KindIdent)
+	unX.SetName("User")
+	unX.SetType("User")
+	un.X = unX
+	if got := provider.callArgToString(un, nil); got != "*User" {
+		t.Errorf("KindUnary: got %q, want %q", got, "*User")
+	}
+
+	// KindUnary without X
+	un2 := makeArg(metadata.KindUnary)
+	if got := provider.callArgToString(un2, nil); got != "*" {
+		t.Errorf("KindUnary nil: got %q, want %q", got, "*")
+	}
+
+	// KindArrayType with X
+	at := makeArg(metadata.KindArrayType)
+	atX := makeArg(metadata.KindIdent)
+	atX.SetName("string")
+	atX.SetType("string")
+	at.X = atX
+	if got := provider.callArgToString(at, nil); got != "[]string" {
+		t.Errorf("KindArrayType: got %q, want %q", got, "[]string")
+	}
+
+	// KindArrayType without X
+	at2 := makeArg(metadata.KindArrayType)
+	if got := provider.callArgToString(at2, nil); got != "[]" {
+		t.Errorf("KindArrayType nil: got %q, want %q", got, "[]")
+	}
+
+	// KindIndex with slice type
+	idx := makeArg(metadata.KindIndex)
+	idxX := makeArg(metadata.KindIdent)
+	idxX.SetName("users")
+	idxX.SetType("[]User")
+	idx.X = idxX
+	if got := provider.callArgToString(idx, nil); got != "User" {
+		t.Errorf("KindIndex slice: got %q, want %q", got, "User")
+	}
+
+	// KindIndex with map type
+	idx2 := makeArg(metadata.KindIndex)
+	idx2X := makeArg(metadata.KindIdent)
+	idx2X.SetName("m")
+	idx2X.SetType("map[string]int")
+	idx2.X = idx2X
+	if got := provider.callArgToString(idx2, nil); got != "int" {
+		t.Errorf("KindIndex map: got %q, want %q", got, "int")
+	}
+
+	// KindIndex without X
+	idx3 := makeArg(metadata.KindIndex)
+	if got := provider.callArgToString(idx3, nil); got != "" {
+		t.Errorf("KindIndex nil: got %q, want empty", got)
+	}
+
+	// KindCompositeLit with X
+	cl := makeArg(metadata.KindCompositeLit)
+	clX := makeArg(metadata.KindIdent)
+	clX.SetName("Config")
+	clX.SetType("Config")
+	cl.X = clX
+	if got := provider.callArgToString(cl, nil); got != "Config" {
+		t.Errorf("KindCompositeLit: got %q, want %q", got, "Config")
+	}
+
+	// KindCompositeLit without X
+	cl2 := makeArg(metadata.KindCompositeLit)
+	if got := provider.callArgToString(cl2, nil); got != "" {
+		t.Errorf("KindCompositeLit nil: got %q, want empty", got)
+	}
+
+	// Custom separator
+	sep := "/"
+	sepArg := makeArg(metadata.KindIdent)
+	sepArg.SetName("handler")
+	sepArg.SetType("Handler")
+	sepArg.SetPkg("myapp")
+	if got := provider.callArgToString(sepArg, &sep); got == "" {
+		t.Error("Custom separator: got empty string")
+	}
+
+	// KindIdent with builtin type
+	bi := makeArg(metadata.KindIdent)
+	bi.SetName("x")
+	bi.SetType("string")
+	if got := provider.callArgToString(bi, nil); got != "string" {
+		t.Errorf("builtin type: got %q, want %q", got, "string")
+	}
+
+	// KindIdent with pointer to builtin
+	pb := makeArg(metadata.KindIdent)
+	pb.SetName("x")
+	pb.SetType("*int")
+	if got := provider.callArgToString(pb, nil); got != "*int" {
+		t.Errorf("pointer builtin: got %q, want %q", got, "*int")
+	}
+
+	// KindIdent with slice of builtin
+	sb := makeArg(metadata.KindIdent)
+	sb.SetName("x")
+	sb.SetType("[]byte")
+	if got := provider.callArgToString(sb, nil); got != "[]byte" {
+		t.Errorf("slice builtin: got %q, want %q", got, "[]byte")
+	}
+
+	// KindIdent with map type
+	mp := makeArg(metadata.KindIdent)
+	mp.SetName("m")
+	mp.SetType("map[string]int")
+	if got := provider.callArgToString(mp, nil); got != "map[string]int" {
+		t.Errorf("map type: got %q, want %q", got, "map[string]int")
+	}
+
+	// KindIdent with func type (should return name, not type)
+	fn := makeArg(metadata.KindIdent)
+	fn.SetName("handler")
+	fn.SetType("func()")
+	if got := provider.callArgToString(fn, nil); got == "" {
+		t.Error("func type: got empty string")
+	}
+
+	// KindSelector with X and Sel
+	sel := makeArg(metadata.KindSelector)
+	selX := metadata.NewCallArgument(meta)
+	selX.SetKind(metadata.KindIdent)
+	selX.SetName("http")
+	selX.SetPkg("net/http")
+	sel.X = selX
+	selSel := metadata.NewCallArgument(meta)
+	selSel.SetName("StatusOK")
+	sel.Sel = selSel
+	if got := provider.callArgToString(sel, nil); got == "" {
+		t.Error("KindSelector: got empty string")
+	}
+
+	// KindSelector without X
+	sel2 := makeArg(metadata.KindSelector)
+	sel2Sel := metadata.NewCallArgument(meta)
+	sel2Sel.SetName("Method")
+	sel2.Sel = sel2Sel
+	if got := provider.callArgToString(sel2, nil); got != "Method" {
+		t.Errorf("KindSelector no X: got %q, want %q", got, "Method")
+	}
+
+	// KindCall with Fun
+	call := makeArg(metadata.KindCall)
+	callFun := makeArg(metadata.KindIdent)
+	callFun.SetName("NewUser")
+	callFun.SetType("User")
+	call.Fun = callFun
+	if got := provider.callArgToString(call, nil); got == "" {
+		t.Error("KindCall: got empty string")
+	}
+
+	// KindCall without Fun
+	call2 := makeArg(metadata.KindCall)
+	if got := provider.callArgToString(call2, nil); got != "call(...)" {
+		t.Errorf("KindCall no Fun: got %q, want %q", got, "call(...)")
+	}
+
+	// KindCall with pkg
+	call3 := makeArg(metadata.KindCall)
+	call3Fun := makeArg(metadata.KindIdent)
+	call3Fun.SetName("Parse")
+	call3.Fun = call3Fun
+	call3.SetPkg("encoding/json")
+	call3.SetName("Decode")
+	if got := provider.callArgToString(call3, nil); got == "" {
+		t.Error("KindCall with pkg: got empty string")
+	}
+
+	// KindTypeConversion with Fun
+	tc := makeArg(metadata.KindTypeConversion)
+	tcFun := makeArg(metadata.KindIdent)
+	tcFun.SetName("string")
+	tcFun.SetType("string")
+	tc.Fun = tcFun
+	if got := provider.callArgToString(tc, nil); got != "string" {
+		t.Errorf("KindTypeConversion: got %q, want %q", got, "string")
+	}
+
+	// KindTypeConversion without Fun
+	tc2 := makeArg(metadata.KindTypeConversion)
+	if got := provider.callArgToString(tc2, nil); got != "" {
+		t.Errorf("KindTypeConversion nil: got %q, want empty", got)
+	}
+
+	// KindInterfaceType
+	iface := makeArg(metadata.KindInterfaceType)
+	if got := provider.callArgToString(iface, nil); got != "interface{}" {
+		t.Errorf("KindInterfaceType: got %q, want %q", got, "interface{}")
+	}
+
+	// KindRaw
+	raw := makeArg(metadata.KindRaw)
+	raw.SetRaw("someRawExpr")
+	if got := provider.callArgToString(raw, nil); got == "" {
+		t.Error("KindRaw: got empty string")
+	}
+
+	// KindIdent with pkg and custom type (non-builtin)
+	ct := makeArg(metadata.KindIdent)
+	ct.SetName("User")
+	ct.SetType("myapp.User")
+	ct.SetPkg("myapp")
+	if got := provider.callArgToString(ct, nil); got == "" {
+		t.Error("KindIdent custom type: got empty string")
+	}
+
+	// KindIdent with type ending in name (package suffix match)
+	ps := makeArg(metadata.KindIdent)
+	ps.SetName("myapp")
+	ps.SetPkg("github.com/org/myapp")
+	ps.SetType("")
+	if got := provider.callArgToString(ps, nil); got == "" {
+		t.Error("KindIdent pkg suffix: got empty string")
+	}
+}
