@@ -92,6 +92,56 @@ func main() {
 	}
 }
 
+func TestDetect_AllFrameworks(t *testing.T) {
+	tests := []struct {
+		name       string
+		importPath string
+		expected   string
+	}{
+		{"gin", "github.com/gin-gonic/gin", "gin"},
+		{"chi", "github.com/go-chi/chi/v5", "chi"},
+		{"echo", "github.com/labstack/echo/v4", "echo"},
+		{"fiber", "github.com/gofiber/fiber/v2", "fiber"},
+		{"mux", "github.com/gorilla/mux", "mux"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			goFile := filepath.Join(tempDir, "main.go")
+			content := `package main
+import "` + tt.importPath + `"
+var _ = ` + tt.name + `.New
+`
+			if err := os.WriteFile(goFile, []byte(content), 0644); err != nil {
+				t.Fatal(err)
+			}
+			detector := NewFrameworkDetector()
+			fw, err := detector.Detect(tempDir)
+			if err != nil {
+				t.Fatalf("Detect failed: %v", err)
+			}
+			if fw != tt.expected {
+				t.Errorf("Expected %s, got %s", tt.expected, fw)
+			}
+		})
+	}
+}
+
+func TestDetect_SkipsUnparsableFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tempDir, "bad.go"), []byte("not valid go"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	detector := NewFrameworkDetector()
+	fw, err := detector.Detect(tempDir)
+	if err != nil {
+		t.Fatalf("Detect failed: %v", err)
+	}
+	if fw != "net/http" {
+		t.Errorf("Expected net/http fallback, got %s", fw)
+	}
+}
+
 func TestCollectGoFiles(t *testing.T) {
 	// Create a temporary directory with mixed file types
 	tempDir, err := os.MkdirTemp("", "apispec_test_collect")
