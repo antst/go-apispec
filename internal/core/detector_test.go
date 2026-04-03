@@ -40,14 +40,14 @@ func TestDetect_NoGoFiles(t *testing.T) {
 	}()
 
 	detector := NewFrameworkDetector()
-	framework, err := detector.Detect(tempDir)
+	frameworks, err := detector.Detect(tempDir)
 	if err != nil {
 		t.Fatalf("Detect failed: %v", err)
 	}
 
-	// Should return "net/http" as default when no Go files are found
-	if framework != "net/http" {
-		t.Errorf("Expected net/http framework, got %s", framework)
+	// Should return ["net/http"] as default when no Go files are found
+	if len(frameworks) != 1 || frameworks[0] != "net/http" {
+		t.Errorf("Expected [net/http], got %v", frameworks)
 	}
 }
 
@@ -81,14 +81,14 @@ func main() {
 	}
 
 	detector := NewFrameworkDetector()
-	framework, err := detector.Detect(tempDir)
+	frameworks, err := detector.Detect(tempDir)
 	if err != nil {
 		t.Fatalf("Detect failed: %v", err)
 	}
 
 	// Should detect net/http framework
-	if framework != "net/http" {
-		t.Errorf("Expected net/http framework, got %s", framework)
+	if len(frameworks) != 1 || frameworks[0] != "net/http" {
+		t.Errorf("Expected [net/http], got %v", frameworks)
 	}
 }
 
@@ -150,6 +150,60 @@ func main() {}`
 		if !found {
 			t.Errorf("Expected Go file %s not found", expectedFile)
 		}
+	}
+}
+
+func TestDetect_MultipleFrameworks(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "apispec_test_multi")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(tempDir); err != nil {
+			t.Errorf("Failed to remove temp directory: %v", err)
+		}
+	}()
+
+	// Create a file importing Chi
+	chiFile := filepath.Join(tempDir, "chi_routes.go")
+	err = os.WriteFile(chiFile, []byte(`package main
+import "github.com/go-chi/chi/v5"
+func chiRoutes(r chi.Router) {}
+`), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write chi file: %v", err)
+	}
+
+	// Create a file importing Gin
+	ginFile := filepath.Join(tempDir, "gin_routes.go")
+	err = os.WriteFile(ginFile, []byte(`package main
+import "github.com/gin-gonic/gin"
+func ginRoutes(r *gin.Engine) {}
+`), 0644)
+	if err != nil {
+		t.Fatalf("Failed to write gin file: %v", err)
+	}
+
+	detector := NewFrameworkDetector()
+	frameworks, err := detector.Detect(tempDir)
+	if err != nil {
+		t.Fatalf("Detect failed: %v", err)
+	}
+
+	if len(frameworks) != 2 {
+		t.Fatalf("Expected 2 frameworks, got %d: %v", len(frameworks), frameworks)
+	}
+
+	// Both chi and gin should be detected (order depends on file walk order)
+	seen := make(map[string]bool)
+	for _, fw := range frameworks {
+		seen[fw] = true
+	}
+	if !seen["chi"] {
+		t.Error("Expected chi to be detected")
+	}
+	if !seen["gin"] {
+		t.Error("Expected gin to be detected")
 	}
 }
 
