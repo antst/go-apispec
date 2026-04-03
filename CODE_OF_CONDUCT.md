@@ -21,7 +21,7 @@ APISpec is a welcoming and inclusive project. We value contributions from everyo
 
 ## Enforcement
 
-If you experience or witness unacceptable behavior, please report it by contacting ehabterra@hotmail.com. All reports will be handled with discretion and respect for privacy.
+If you experience or witness unacceptable behavior, please report it by contacting antst@gmail.com. All reports will be handled with discretion and respect for privacy.
 
 Community leaders will address violations fairly and may take actions ranging from a warning to removing participants from the project, depending on the severity.
 

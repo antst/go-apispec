@@ -1,9 +1,23 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
 	"testing"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 func TestExtractor_ComplexRouteExtraction(t *testing.T) {
@@ -101,54 +115,44 @@ func TestExtractor_ComplexRouteExtraction(t *testing.T) {
 	cfg := &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:       `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
-					MethodFromCall:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
+
+					RecvTypeRegex: "^github\\.com/gin-gonic/gin\\.\\*(Engine|RouterGroup)$"}, MethodFromCall: true,
 					PathFromArg:     true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
 					HandlerArgIndex: 1,
-					RecvTypeRegex:   "^github\\.com/gin-gonic/gin\\.\\*(Engine|RouterGroup)$",
 				},
 			},
 			RequestBodyPatterns: []RequestBodyPattern{
-				{
-					CallRegex:    `^(?i)(BindJSON|ShouldBindJSON|BindXML|BindYAML|BindForm|ShouldBind)$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(BindJSON|ShouldBindJSON|BindXML|BindYAML|BindForm|ShouldBind)$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
 			},
 			ResponsePatterns: []ResponsePattern{
-				{
-					CallRegex:      `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`,
-					StatusArgIndex: 0,
-					TypeArgIndex:   1,
-					TypeFromArg:    true,
-					StatusFromArg:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`}, StatusArgIndex: 0,
+					TypeArgIndex:  1,
+					TypeFromArg:   true,
+					StatusFromArg: true,
 				},
 			},
 			ParamPatterns: []ParamPattern{
-				{
-					CallRegex:     "^Param$",
-					ParamIn:       "path",
+				{BasePattern: BasePattern{CallRegex: "^Param$"}, ParamIn: "path",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^Query$",
-					ParamIn:       "query",
+				{BasePattern: BasePattern{CallRegex: "^Query$"}, ParamIn: "query",
 					ParamArgIndex: 0,
 				},
 			},
 			MountPatterns: []MountPattern{
-				{
-					CallRegex:      `^Group$`,
-					PathFromArg:    true,
+				{BasePattern: BasePattern{CallRegex: `^Group$`,
+
+					RecvTypeRegex: "^github\\.com/gin-gonic/gin\\.\\*(Engine|RouterGroup)$"}, PathFromArg: true,
 					RouterFromArg:  true,
 					PathArgIndex:   0,
 					RouterArgIndex: 1,
 					IsMount:        true,
-					RecvTypeRegex:  "^github\\.com/gin-gonic/gin\\.\\*(Engine|RouterGroup)$",
 				},
 			},
 		},
@@ -298,17 +302,13 @@ func TestExtractor_PatternMatching(t *testing.T) {
 	cfg := &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:       `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
-					MethodFromCall:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`}, MethodFromCall: true,
 					PathFromArg:     true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
 					HandlerArgIndex: 1,
 				},
-				{
-					CallRegex:       `^HandleFunc$`,
-					MethodFromCall:  false,
+				{BasePattern: BasePattern{CallRegex: `^HandleFunc$`}, MethodFromCall: false,
 					PathFromArg:     true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
@@ -316,17 +316,13 @@ func TestExtractor_PatternMatching(t *testing.T) {
 				},
 			},
 			MountPatterns: []MountPattern{
-				{
-					CallRegex:      `^Group$`,
-					PathFromArg:    true,
+				{BasePattern: BasePattern{CallRegex: `^Group$`}, PathFromArg: true,
 					RouterFromArg:  true,
 					PathArgIndex:   0,
 					RouterArgIndex: 1,
 					IsMount:        true,
 				},
-				{
-					CallRegex:      `^Mount$`,
-					PathFromArg:    true,
+				{BasePattern: BasePattern{CallRegex: `^Mount$`}, PathFromArg: true,
 					RouterFromArg:  true,
 					PathArgIndex:   0,
 					RouterArgIndex: 1,
@@ -334,48 +330,34 @@ func TestExtractor_PatternMatching(t *testing.T) {
 				},
 			},
 			RequestBodyPatterns: []RequestBodyPattern{
-				{
-					CallRegex:    `^(?i)(BindJSON|ShouldBindJSON|BindXML|BindYAML|BindForm|ShouldBind)$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(BindJSON|ShouldBindJSON|BindXML|BindYAML|BindForm|ShouldBind)$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
-				{
-					CallRegex:    `^Decode$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^Decode$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
 			},
 			ResponsePatterns: []ResponsePattern{
-				{
-					CallRegex:      `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`,
-					StatusArgIndex: 0,
-					TypeArgIndex:   1,
-					TypeFromArg:    true,
-					StatusFromArg:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`}, StatusArgIndex: 0,
+					TypeArgIndex:  1,
+					TypeFromArg:   true,
+					StatusFromArg: true,
 				},
-				{
-					CallRegex:    `^Marshal$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^Marshal$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
 			},
 			ParamPatterns: []ParamPattern{
-				{
-					CallRegex:     "^Param$",
-					ParamIn:       "path",
+				{BasePattern: BasePattern{CallRegex: "^Param$"}, ParamIn: "path",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^Query$",
-					ParamIn:       "query",
+				{BasePattern: BasePattern{CallRegex: "^Query$"}, ParamIn: "query",
 					ParamArgIndex: 0,
 				},
-				{
-					CallRegex:     "^GetHeader$",
-					ParamIn:       "header",
+				{BasePattern: BasePattern{CallRegex: "^GetHeader$"}, ParamIn: "header",
 					ParamArgIndex: 0,
 				},
 			},
@@ -566,9 +548,7 @@ func TestExtractor_ComplexTypeHandling(t *testing.T) {
 	cfg := &APISpecConfig{
 		Framework: FrameworkConfig{
 			RoutePatterns: []RoutePattern{
-				{
-					CallRegex:       `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`,
-					MethodFromCall:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$`}, MethodFromCall: true,
 					PathFromArg:     true,
 					HandlerFromArg:  true,
 					PathArgIndex:    0,
@@ -576,20 +556,16 @@ func TestExtractor_ComplexTypeHandling(t *testing.T) {
 				},
 			},
 			RequestBodyPatterns: []RequestBodyPattern{
-				{
-					CallRegex:    `^(?i)(BindJSON|ShouldBindJSON|BindXML|BindYAML|BindForm|ShouldBind)$`,
-					TypeArgIndex: 0,
-					TypeFromArg:  true,
-					Deref:        true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(BindJSON|ShouldBindJSON|BindXML|BindYAML|BindForm|ShouldBind)$`}, TypeArgIndex: 0,
+					TypeFromArg: true,
+					Deref:       true,
 				},
 			},
 			ResponsePatterns: []ResponsePattern{
-				{
-					CallRegex:      `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`,
-					StatusArgIndex: 0,
-					TypeArgIndex:   1,
-					TypeFromArg:    true,
-					StatusFromArg:  true,
+				{BasePattern: BasePattern{CallRegex: `^(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$`}, StatusArgIndex: 0,
+					TypeArgIndex:  1,
+					TypeFromArg:   true,
+					StatusFromArg: true,
 				},
 			},
 		},

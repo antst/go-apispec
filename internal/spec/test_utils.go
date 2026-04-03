@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
@@ -15,7 +29,7 @@ import (
 //
 //	defer RecoverFromPanic(t, "TestName")
 func RecoverFromPanic(t *testing.T, testName string) {
-	if r := recover(); r != nil {
+	if r := recover(); r != nil { //nolint:revive // recover is valid here because this function is always called via defer
 		// Check if it's a stack overflow
 		if err, ok := r.(runtime.Error); ok && strings.Contains(err.Error(), "stack overflow") {
 			t.Errorf("Test %s failed with stack overflow: %v", testName, err)

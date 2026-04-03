@@ -1,4 +1,4 @@
-module github.com/ehabterra/apispec/testdata/fiber
+module github.com/antst/go-apispec/testdata/fiber
 
 go 1.24.3
 

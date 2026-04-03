@@ -1,4 +1,4 @@
-// Copyright 2025 Ehab Terra
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -28,9 +28,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ehabterra/apispec/internal/engine"
-	"github.com/ehabterra/apispec/internal/metadata"
-	"github.com/ehabterra/apispec/internal/spec"
+	"github.com/antst/go-apispec/internal/engine"
+	"github.com/antst/go-apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/spec"
 )
 
 //go:embed server_ui.html
@@ -193,7 +193,8 @@ func main() {
 		log.Printf("⚙️  Page size: %d, Max depth: %d", config.PageSize, config.MaxDepth)
 	}
 
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	httpServer := &http.Server{Addr: addr, ReadHeaderTimeout: 10 * time.Second}
+	if err := httpServer.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
 }
@@ -340,7 +341,7 @@ func (s *DiagramServer) SetupRoutes() {
 }
 
 // handleIndex serves the embedded interactive UI
-func (s *DiagramServer) handleIndex(w http.ResponseWriter, r *http.Request) {
+func (s *DiagramServer) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	// Read the embedded HTML template
 	templateBytes, err := serverUITemplate.ReadFile("server_ui.html")
 	if err != nil {
@@ -537,6 +538,8 @@ type PackageHierarchyResponse struct {
 }
 
 // handlePackageHierarchy serves the package hierarchy
+//
+//nolint:gocyclo // complex HTTP handler with query parameter parsing
 func (s *DiagramServer) handlePackageHierarchy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -678,6 +681,8 @@ func (s *DiagramServer) handlePackageHierarchy(w http.ResponseWriter, r *http.Re
 }
 
 // handlePackageBasedDiagram serves diagram data filtered by selected packages
+//
+//nolint:gocyclo // HTTP handler with multiple request parameters
 func (s *DiagramServer) handlePackageBasedDiagram(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -802,6 +807,8 @@ func (s *DiagramServer) handlePackageBasedDiagram(w http.ResponseWriter, r *http
 
 // generatePackageBasedData generates diagram data filtered by selected packages
 // If isolate is true, only includes nodes and edges within the selected packages (no external relations)
+//
+//nolint:gocyclo // data generation with multiple filter dimensions
 func (s *DiagramServer) generatePackageBasedData(selectedPackages []string, depth int, functions, files, receivers, signatures, generics []string, scopeFilter string, isolate bool) *spec.PaginatedCytoscapeData {
 	// Generate all data first based on diagram type (cached)
 	allData := s.getAllData(s.config.DiagramType, true)
@@ -1098,7 +1105,7 @@ func (s *DiagramServer) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, response)
 }
 
-// handleExport serves diagram export in various formats
+//nolint:gocyclo // export handler with multiple format options
 func (s *DiagramServer) handleExport(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writeError(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1353,7 +1360,7 @@ func (s *DiagramServer) generatePaginatedData(page, pageSize, depth int, package
 	}
 }
 
-// generatePaginatedDataInternal is the internal implementation without timeout
+//nolint:gocyclo // paginated data generation with multiple filters
 func (s *DiagramServer) generatePaginatedDataInternal(page, pageSize, depth int, packages, functions, files, receivers, signatures, generics []string, scopeFilter string) *spec.PaginatedCytoscapeData {
 	// Check cache first
 	cacheKey := fmt.Sprintf("%s-%d-%d-%d-%v-%v-%v-%v-%v-%v-%s", s.config.DiagramType, page, pageSize, depth, packages, functions, files, receivers, signatures, generics, scopeFilter)

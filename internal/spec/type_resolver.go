@@ -1,10 +1,24 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 // TypeResolverImpl implements TypeResolver
@@ -439,7 +453,8 @@ func (t *TypeResolverImpl) extractBaseTypeAndParams(genericType string) (string,
 // extractParameterName extracts the parameter name from a parameter string
 func (t *TypeResolverImpl) extractParameterName(param string) string {
 	// For simple parameters like "K", "V", "T", just return as is
-	if len(param) == 1 && strings.Contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", strings.ToUpper(param)) {
+	upperParam := strings.ToUpper(param)
+	if len(param) == 1 && upperParam >= "A" && upperParam <= "Z" {
 		return param
 	}
 
@@ -460,7 +475,8 @@ func (t *TypeResolverImpl) extractParameterName(param string) string {
 	words := strings.Fields(param)
 	if len(words) > 0 {
 		firstWord := words[0]
-		if len(firstWord) == 1 && strings.Contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ", strings.ToUpper(firstWord)) {
+		upperFirst := strings.ToUpper(firstWord)
+		if len(firstWord) == 1 && upperFirst >= "A" && upperFirst <= "Z" {
 			return firstWord
 		}
 	}
@@ -557,7 +573,7 @@ func (t *TypeResolverImpl) splitTypeParameters(paramStr string) []string {
 func (t *TypeResolverImpl) generateParameterName(index int) string {
 	// Use single letters: T, U, V, W, X, Y, Z, then T1, U1, etc.
 	if index < 26 {
-		return string(rune('T' + index))
+		return string(rune('T' + index)) //nolint:gosec // index is bounded to < 26
 	}
 	// For more than 26 parameters, use T1, U1, etc.
 	base := index % 26

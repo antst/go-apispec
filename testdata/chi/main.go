@@ -3,9 +3,9 @@ package main
 import (
 	"net/http"
 
-	"github.com/ehabterra/apispec/testdata/chi/payment"
-	"github.com/ehabterra/apispec/testdata/chi/products"
-	"github.com/ehabterra/apispec/testdata/chi/users"
+	"github.com/antst/go-apispec/testdata/chi/payment"
+	"github.com/antst/go-apispec/testdata/chi/products"
+	"github.com/antst/go-apispec/testdata/chi/users"
 	"github.com/go-chi/chi/v5"
 )
 

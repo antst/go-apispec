@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
@@ -180,6 +194,8 @@ func isTypeConversion(call *ast.CallExpr, info *types.Info) bool {
 }
 
 // getCalleeFunctionNameAndPackage extracts function name, package, and receiver type from a call expression
+//
+//nolint:gocyclo,unparam // AST expression analysis with multiple node types; funcMap passed through recursion
 func getCalleeFunctionNameAndPackage(expr ast.Expr, file *ast.File, pkgName string, fileToInfo map[*ast.File]*types.Info, funcMap map[string]*ast.FuncDecl, fset *token.FileSet) (string, string, string) {
 	switch x := expr.(type) {
 	case *ast.Ident:
@@ -188,7 +204,6 @@ func getCalleeFunctionNameAndPackage(expr ast.Expr, file *ast.File, pkgName stri
 
 	case *ast.SelectorExpr:
 		if ident, ok := x.X.(*ast.Ident); ok {
-
 			// If not an import, try to resolve as variable/method
 			if info, exists := fileToInfo[file]; exists {
 				if obj := info.ObjectOf(ident); obj != nil {
@@ -254,7 +269,6 @@ func getCalleeFunctionNameAndPackage(expr ast.Expr, file *ast.File, pkgName stri
 		return getCalleeFunctionNameAndPackage(x.X, file, pkgName, fileToInfo, funcMap, fset)
 	case *ast.FuncLit:
 		return fmt.Sprintf("FuncLit:%s", getPosition(x.Pos(), fset)), pkgName, ""
-
 	}
 	return "", "", ""
 }
@@ -368,6 +382,7 @@ func TraceVariableOrigin(
 	return traceVariableOriginHelper(varName, funcName, pkgName, metadata, visited)
 }
 
+//nolint:gocyclo // recursive variable origin tracing through AST
 func traceVariableOriginHelper(
 	varName string,
 	funcName string,

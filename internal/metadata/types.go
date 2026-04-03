@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
@@ -430,6 +444,11 @@ type Function struct {
 	// Type parameter names for generics
 	TypeParams []string `yaml:"type_params,omitempty"`
 
+	// ConstantReturnValue holds the literal return value for simple functions
+	// that always return the same constant (e.g., func getStatus() int { return 200 }).
+	// Empty means not a simple constant function.
+	ConstantReturnValue string `yaml:"constant_return_value,omitempty"`
+
 	// Return value origins for tracing through return values
 	ReturnVars []CallArgument `yaml:"return_vars,omitempty"`
 
@@ -466,7 +485,16 @@ type StructInstance struct {
 	Fields   map[int]int `yaml:"fields,omitempty"`
 }
 
-// Assignment represents a variable assignment
+// Assignment represents a variable assignment.
+
+// BranchContext represents a control-flow branch annotation on a call graph edge or assignment.
+type BranchContext struct {
+	BlockIndex    int32    `yaml:"block_index"`
+	BlockKind     string   `yaml:"block_kind,omitempty"` // "if-then", "if-else", "switch-case", ""
+	ParentStmtPos int      `yaml:"parent_stmt_pos,omitempty"`
+	CaseValues    []string `yaml:"case_values,omitempty"` // For switch-case: literal values from case clause (e.g., "GET", "POST")
+}
+
 type Assignment struct {
 	VariableName int          `yaml:"variable_name,omitempty"`
 	Pkg          int          `yaml:"pkg,omitempty"`
@@ -481,6 +509,9 @@ type Assignment struct {
 	CalleeFunc  string `yaml:"callee_func,omitempty"`
 	CalleePkg   string `yaml:"callee_pkg,omitempty"`
 	ReturnIndex int    `yaml:"return_index,omitempty"`
+
+	// Branch context from CFG analysis (nil = unconditional)
+	Branch *BranchContext `yaml:"branch,omitempty"`
 }
 
 // CallArgument represents a function call argument or expression
@@ -518,7 +549,7 @@ type CallArgument struct {
 	Meta *Metadata `yaml:"-"`
 }
 
-// Helper methods to get string values from StringPool indices
+// GetKind returns the kind string from StringPool.
 func (a *CallArgument) GetKind() string {
 	if a != nil && a.Meta != nil && a.Kind >= 0 && a.Meta.StringPool != nil {
 		kind := a.Meta.StringPool.GetString(a.Kind)
@@ -617,7 +648,7 @@ func NewCallArgument(meta *Metadata) *CallArgument {
 	}
 }
 
-// SetString methods to set string values using StringPool
+// SetKind sets the kind string in StringPool.
 func (a *CallArgument) SetKind(kind string) {
 	if a.Meta.StringPool != nil {
 		a.Kind = a.Meta.StringPool.Get(kind)
@@ -715,12 +746,14 @@ func (a *CallArgument) ID() string {
 }
 
 // ID returns a unique identifier for the call argument
+//
+//nolint:gocyclo // call argument ID generation with multiple field combinations
 func (a *CallArgument) id(sep string) (string, string) {
 	var typeParam string
 
 	typeParams := a.TypeParams()
 	if len(typeParams) > 0 {
-		var genericParts []string
+		genericParts := make([]string, 0, len(typeParams))
 		for param, concrete := range typeParams {
 			genericParts = append(genericParts, fmt.Sprintf("%s=%s", param, concrete))
 		}
@@ -968,6 +1001,9 @@ type CallGraphEdge struct {
 	// NEW: Parent function tracking for function literals
 	ParentFunction *Call `yaml:"parent_function,omitempty"` // The function that contains this call (for function literals)
 
+	// Branch context from CFG analysis (nil = unconditional)
+	Branch *BranchContext `yaml:"branch,omitempty"`
+
 	meta *Metadata
 }
 
@@ -1173,6 +1209,8 @@ func (m *Metadata) extractReturnTypeFromSignature(signature CallArgument) string
 }
 
 // extractTypeFromCallArgument extracts the type from a CallArgument
+//
+//nolint:gocyclo // type extraction from call argument with multiple sources
 func (m *Metadata) extractTypeFromCallArgument(arg *CallArgument) string {
 	// Set the Meta reference
 	arg.Meta = m

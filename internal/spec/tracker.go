@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
@@ -6,7 +20,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 // Object pools for frequently created objects
@@ -696,6 +710,390 @@ func classifyArgument(arg *metadata.CallArgument) ArgumentType {
 	}
 }
 
+// resolveSelectorMethod resolves a selector's method call by finding matching call graph edges
+// and creating child nodes for each matching edge. It handles receiver type resolution
+// including interface-to-concrete type mapping.
+func resolveSelectorMethod(tree *TrackerTree, meta *metadata.Metadata, argNode *TrackerNode, selectorArg *metadata.CallArgument, originVar, varName string, visited map[string]int, assignmentIndex *assigmentIndexMap, limits metadata.TrackerLimits) {
+	// Get the correct edge for method calls
+	funcNameIndex := selectorArg.Sel.Name
+	recvType := strings.ReplaceAll(originVar, selectorArg.Sel.GetPkg()+".", "")
+	// If the selector is a method, we need to get the type of the receiver
+	if selectorArg.Sel.Type != -1 && originVar == varName {
+		recvType = selectorArg.X.GetType()
+		recvType = strings.ReplaceAll(recvType, selectorArg.Sel.GetPkg()+".", "")
+	}
+
+	// First check if ReceiverType is available (for function return values)
+	if selectorArg.ReceiverType != nil && originVar == varName {
+		recvType = selectorArg.ReceiverType.GetName()
+	}
+
+	var FuncType string
+
+	if selectorArg.X.GetKind() == metadata.KindSelector && selectorArg.X.X.Type != -1 {
+		FuncType = selectorArg.X.X.GetType()
+		FuncType = strings.ReplaceAll(FuncType, selectorArg.X.X.GetPkg()+".", "")
+		FuncType = strings.TrimPrefix(FuncType, "*")
+	} else if selectorArg.X.GetKind() == metadata.KindCall && selectorArg.X.Fun.Type != -1 {
+		FuncType = selectorArg.X.Fun.GetType()
+		FuncType = strings.ReplaceAll(FuncType, selectorArg.X.Fun.GetPkg()+".", "")
+		FuncType = strings.TrimPrefix(FuncType, "*")
+	}
+
+	// Resolve interface types to concrete types using interface resolution
+	concreteRecvType := tree.ResolveInterfaceFromMetadata(recvType, FuncType, selectorArg.Sel.GetPkg())
+	if concreteRecvType != recvType {
+		recvType = concreteRecvType
+	}
+
+	recvTypeIndex := meta.StringPool.Get(recvType)
+	starRecvTypeIndex := meta.StringPool.Get("*" + recvType)
+	pkgNameIndex := selectorArg.Sel.Pkg
+
+	// Look for a call graph edge where this function is the caller
+	for _, ArgEdge := range meta.CallGraph {
+		if ArgEdge.Caller.Name == funcNameIndex && ArgEdge.Caller.Pkg == pkgNameIndex && (ArgEdge.Caller.RecvType == recvTypeIndex || ArgEdge.Caller.RecvType == starRecvTypeIndex) {
+			funcEdge := &ArgEdge
+			id := funcEdge.Callee.ID()
+			if childNode := NewTrackerNode(tree, meta, argNode.Key(), id, funcEdge, nil, visited, assignmentIndex, limits); childNode != nil {
+				argNode.AddChild(childNode)
+			}
+		}
+	}
+}
+
+// linkSelectorToAssignment links a selector argument to its assignment and variable nodes.
+func linkSelectorToAssignment(tree *TrackerTree, meta *metadata.Metadata, argNode *TrackerNode, arg *metadata.CallArgument, edge *metadata.CallGraphEdge, assignmentIndex *assigmentIndexMap) {
+	varName := metadata.CallArgToString(arg)
+	// Trace the base object
+	baseVar, originPkg, _, _ := metadata.TraceVariableOrigin(
+		varName,
+		getString(meta, edge.Caller.Name),
+		getString(meta, edge.Caller.Pkg),
+		meta,
+	)
+
+	var parentType = arg.X.GetType()
+	// Handle nested selectors: if arg.X is a selector, extract base from arg.X.X
+
+	// For nested selectors, use the base variable's type
+	if arg.X != nil && arg.X.GetKind() == metadata.KindSelector && arg.X.X != nil && arg.X.Sel != nil && arg.X.Sel.GetKind() == metadata.KindIdent {
+		// Nested selector case: extract base from arg.X.X
+		// arg.X is a selector (e.g., obj.field), arg.X.X is the base (e.g., obj)
+		parentType = arg.X.X.GetType()
+	}
+
+	// Link to assignment if exists
+	akey := assignmentKey{
+		Name:      baseVar,
+		Pkg:       originPkg,
+		Type:      arg.GetType(),
+		Container: getString(meta, edge.Caller.Name),
+	}
+
+	if parentType != "" {
+		akey.Container = parentType
+	}
+
+	if assignmentNode, ok := (*assignmentIndex)[akey]; ok {
+		// TODO: This is a workaround for parameter tracing issue.
+		// Proper solution needed to trace parameters passed through functional options
+		// (e.g., router parameters: WithOrderRouter(orderRouter) -> r.orderRouter = orderRouter -> router.Mount("/orders", r.orderRouter))
+		// See testdata/router_mount_options/ for example case.
+		// Current workaround: Set assignmentNode's parent to argNode (reverse link: assignment <- usage)
+		// This allows tracking where assignments are used but is confusing and may not handle all cases correctly.
+		assignmentNode.Parent = argNode
+	}
+
+	// Link to variable node if exists
+	pkey := paramKey{
+		Name:      baseVar,
+		Pkg:       originPkg,
+		Container: getString(meta, edge.Caller.Name),
+	}
+
+	if parents, ok := tree.variableNodes[pkey]; ok && len(parents) > 0 {
+		// Link to most recent assignment (last in slice) for cleaner tree structure
+		mostRecentParent := parents[len(parents)-1]
+		mostRecentParent.Children = append(mostRecentParent.Children, argNode)
+	}
+}
+
+// traceSelectorOrigin traces a selector argument's variable origin and links it to
+// its assignment and variable nodes. Returns the origin variable name and package.
+func traceSelectorOrigin(tree *TrackerTree, meta *metadata.Metadata, argNode *TrackerNode, arg *metadata.CallArgument, edge *metadata.CallGraphEdge, assignmentIndex *assigmentIndexMap) (string, string) {
+	varName := metadata.CallArgToString(arg.X)
+	// Enhanced variable tracing and assignment linking
+	originVar, originPkg, _, _ := metadata.TraceVariableOrigin(
+		varName,
+		getString(meta, edge.Caller.Name),
+		getString(meta, edge.Caller.Pkg),
+		meta,
+	)
+
+	// Link to assignment if exists
+	akey := assignmentKey{
+		Name:      originVar,
+		Pkg:       originPkg,
+		Type:      arg.GetType(),
+		Container: getString(meta, edge.Caller.Name),
+	}
+
+	if parent, ok := (*assignmentIndex)[akey]; ok {
+		parent.Children = append(parent.Children, argNode)
+	}
+
+	// Link param
+	pkey := paramKey{
+		Name:      originVar,
+		Pkg:       originPkg,
+		Container: getString(meta, edge.Caller.Name),
+	}
+
+	if parents, ok := tree.variableNodes[pkey]; ok && len(parents) > 0 {
+		// Link to the most recent assignment (last in slice) as it represents
+		// the actual value at the point of use
+		mostRecentParent := parents[len(parents)-1]
+		mostRecentParent.Children = append(mostRecentParent.Children, argNode)
+	}
+
+	return originVar, varName
+}
+
+// processFuncCallSelectorMethod resolves method edges for a function-call argument
+// whose Fun is a selector expression (e.g., obj.Method(...)). It links the argNode
+// to variable/assignment nodes and finds matching call graph edges.
+// Returns true if argNode was appended to result (caller must include it).
+func processFuncCallSelectorMethod(tree *TrackerTree, meta *metadata.Metadata, argNode *TrackerNode, selectorArg *metadata.CallArgument, edge *metadata.CallGraphEdge, visited map[string]int, assignmentIndex *assigmentIndexMap, limits metadata.TrackerLimits) bool {
+	varName := metadata.CallArgToString(selectorArg.X)
+
+	pkey := paramKey{
+		Name:      varName,
+		Pkg:       getString(meta, edge.Caller.Pkg),
+		Container: getString(meta, edge.Caller.Name),
+	}
+
+	if parents, ok := tree.variableNodes[pkey]; ok && len(parents) > 0 {
+		// Link to most recent assignment (last in slice) for cleaner tree structure
+		mostRecentParent := parents[len(parents)-1]
+		mostRecentParent.Children = append(mostRecentParent.Children, argNode)
+	}
+
+	if selectorArg.Sel.GetKind() != metadata.KindIdent || (!strings.HasPrefix(selectorArg.Sel.GetType(), "func(") && !strings.HasPrefix(selectorArg.Sel.GetType(), "func[")) {
+		return false
+	}
+
+	// Enhanced variable tracing and assignment linking
+	originVar, originPkg, _, _ := metadata.TraceVariableOrigin(
+		varName,
+		getString(meta, edge.Caller.Name),
+		getString(meta, edge.Caller.Pkg),
+		meta,
+	)
+
+	// Link to assignment if exists
+	akey := assignmentKey{
+		Name:      originVar,
+		Pkg:       originPkg,
+		Type:      selectorArg.X.GetType(),
+		Container: getString(meta, edge.Caller.Name),
+	}
+
+	if parent, ok := (*assignmentIndex)[akey]; ok {
+		parent.Children = append(parent.Children, argNode)
+	}
+
+	// Resolve the selector method and find matching call graph edges.
+	// Uses selectorArg (arg.Fun) with its own pkgNameIndex resolution via GetPkg().
+	resolveFuncCallSelectorEdges(tree, meta, argNode, selectorArg, originVar, varName, visited, assignmentIndex, limits)
+
+	return true
+}
+
+// resolveFuncCallSelectorEdges finds and links call graph edges for a function-call
+// selector expression. It resolves receiver types (including interface resolution)
+// and creates child nodes for matching edges.
+func resolveFuncCallSelectorEdges(tree *TrackerTree, meta *metadata.Metadata, argNode *TrackerNode, selectorArg *metadata.CallArgument, originVar, varName string, visited map[string]int, assignmentIndex *assigmentIndexMap, limits metadata.TrackerLimits) {
+	funcNameIndex := selectorArg.Sel.Name
+	recvType := strings.ReplaceAll(originVar, selectorArg.Sel.GetPkg()+".", "")
+
+	// First check if ReceiverType is available (for function return values)
+	if selectorArg.ReceiverType != nil && originVar == varName {
+		recvType = selectorArg.ReceiverType.GetName()
+	}
+
+	var FuncType string
+
+	if selectorArg.X.GetKind() == metadata.KindSelector && selectorArg.X.X.Type != -1 {
+		FuncType = selectorArg.X.X.GetType()
+		FuncType = strings.ReplaceAll(FuncType, selectorArg.X.X.GetPkg()+".", "")
+		FuncType = strings.TrimPrefix(FuncType, "*")
+	} else if selectorArg.X.GetKind() == metadata.KindCall && selectorArg.X.Fun.Type != -1 {
+		FuncType = selectorArg.X.Fun.GetType()
+		FuncType = strings.ReplaceAll(FuncType, selectorArg.X.X.GetPkg()+".", "")
+		FuncType = strings.TrimPrefix(FuncType, "*")
+	}
+
+	// Resolve interface types to concrete types using interface resolution
+	concreteRecvType := tree.ResolveInterfaceFromMetadata(recvType, FuncType, selectorArg.Sel.GetPkg())
+	if concreteRecvType != recvType {
+		recvType = concreteRecvType
+	}
+
+	recvTypeIndex := meta.StringPool.Get(recvType)
+	starRecvTypeIndex := meta.StringPool.Get("*" + recvType)
+	pkgNameIndex := meta.StringPool.Get(selectorArg.Sel.GetPkg())
+
+	// Look for a call graph edge where this function is the caller
+	for _, ArgEdge := range meta.CallGraph {
+		if ArgEdge.Caller.Name == funcNameIndex && ArgEdge.Caller.Pkg == pkgNameIndex && (ArgEdge.Caller.RecvType == recvTypeIndex || ArgEdge.Caller.RecvType == starRecvTypeIndex) {
+			funcEdge := &ArgEdge
+			id := funcEdge.Callee.ID()
+			if childNode := NewTrackerNode(tree, meta, argNode.Key(), id, funcEdge, nil, visited, assignmentIndex, limits); childNode != nil {
+				argNode.AddChild(childNode)
+			}
+		}
+	}
+}
+
+// processArgFunctionCall handles the ArgTypeFunctionCall case in argument processing.
+// It links selector-based function calls to their variable nodes and assignments,
+// resolves method calls, and recursively processes nested arguments.
+func processArgFunctionCall(tree *TrackerTree, meta *metadata.Metadata, parentNode *TrackerNode, argNode *TrackerNode, arg *metadata.CallArgument, edge *metadata.CallGraphEdge, argEdge *metadata.CallGraphEdge, argID string, argIndex int, visited map[string]int, assignmentIndex *assigmentIndexMap, limits metadata.TrackerLimits) []*TrackerNode {
+	var result []*TrackerNode
+
+	if arg.Fun != nil && arg.Fun.GetKind() == metadata.KindSelector && arg.Fun.X.Type != -1 {
+		if processFuncCallSelectorMethod(tree, meta, argNode, arg.Fun, edge, visited, assignmentIndex, limits) {
+			result = append(result, argNode)
+		}
+	}
+
+	// Process function call arguments recursively
+	if argNode := NewTrackerNode(tree, meta, parentNode.Key(), argID, argEdge, arg, visited, assignmentIndex, limits); argNode != nil {
+		argNode.Parent = parentNode
+		argNode.ArgType = ArgTypeFunctionCall
+		argNode.IsArgument = true
+		argNode.ArgIndex = argIndex
+		argNode.ArgContext = fmt.Sprintf("%s.%s", getString(meta, edge.Caller.Name), getString(meta, edge.Callee.Name))
+
+		// Process nested arguments
+		if len(arg.Args) > 0 {
+			argNode.AddChildren(processArguments(tree, meta, argNode, argEdge, visited, assignmentIndex, limits))
+		}
+
+		result = append(result, argNode)
+		if arg.Fun != nil && arg.Fun.Position != -1 {
+			tree.positions[arg.Fun.GetPosition()] = true
+		}
+	}
+
+	return result
+}
+
+// processArgVariable handles the ArgTypeVariable case in argument processing.
+// It traces variable origins, links to assignments, and connects to variable nodes.
+func processArgVariable(tree *TrackerTree, meta *metadata.Metadata, argNode *TrackerNode, arg *metadata.CallArgument, edge *metadata.CallGraphEdge, assignmentIndex *assigmentIndexMap) {
+	varName := metadata.CallArgToString(arg)
+	// Enhanced variable tracing and assignment linking
+	originVar, originPkg, _, _ := metadata.TraceVariableOrigin(
+		varName,
+		getString(meta, edge.Caller.Name),
+		getString(meta, edge.Caller.Pkg),
+		meta,
+	)
+
+	// Link to assignment if exists
+	akey := assignmentKey{
+		Name:      originVar,
+		Pkg:       originPkg,
+		Type:      arg.GetType(),
+		Container: getString(meta, edge.Caller.Name),
+	}
+
+	if parent, ok := (*assignmentIndex)[akey]; ok {
+		parent.Children = append(parent.Children, argNode)
+		argNode.Parent = parent
+	} else {
+		akey = assignmentKey{
+			Name:      varName,
+			Pkg:       getString(meta, edge.Callee.Pkg),
+			Type:      arg.GetType(),
+			Container: getString(meta, edge.Caller.Name),
+		}
+
+		if assignmentNode, ok := (*assignmentIndex)[akey]; ok {
+			assignmentNode.Parent = argNode
+		}
+	}
+
+	pkey := paramKey{
+		Name:      originVar,
+		Pkg:       originPkg,
+		Container: getString(meta, edge.Caller.Name),
+	}
+
+	if parents, ok := tree.variableNodes[pkey]; ok && len(parents) > 0 {
+		// Link to the most recent assignment (last in slice) as it represents
+		// the actual value at the point of use. This creates a cleaner tree
+		// structure while preserving the logical relationship.
+		mostRecentParent := parents[len(parents)-1]
+		mostRecentParent.Children = append(mostRecentParent.Children, argNode)
+
+		// Optionally: Store reference to all possible origins for completeness
+		// This allows tracking all possible values without cluttering the tree
+		if argNode.RootAssignmentMap == nil {
+			argNode.RootAssignmentMap = make(map[string][]metadata.Assignment, 1)
+		}
+		// The RootAssignmentMap will be populated by the assignment linking above
+	}
+}
+
+// processArgSelector handles the ArgTypeSelector case in argument processing.
+// It processes field/method access, resolves selector methods, and links to assignments.
+func processArgSelector(tree *TrackerTree, meta *metadata.Metadata, argNode *TrackerNode, arg *metadata.CallArgument, edge *metadata.CallGraphEdge, visited map[string]int, assignmentIndex *assigmentIndexMap, limits metadata.TrackerLimits) {
+	// Handling a function inside the selector
+	// Process field/method access
+	if arg.X == nil {
+		return
+	}
+
+	if arg.Sel.GetKind() == metadata.KindIdent && (strings.HasPrefix(arg.Sel.GetType(), "func(") || strings.HasPrefix(arg.Sel.GetType(), "func[")) {
+		originVar, varName := traceSelectorOrigin(tree, meta, argNode, arg, edge, assignmentIndex)
+		resolveSelectorMethod(tree, meta, argNode, arg, originVar, varName, visited, assignmentIndex, limits)
+	}
+
+	linkSelectorToAssignment(tree, meta, argNode, arg, edge, assignmentIndex)
+}
+
+// processArgUnary handles the ArgTypeUnary case in argument processing.
+// It processes unary expressions (*ptr, &val) and traces their operands.
+func processArgUnary(meta *metadata.Metadata, argNode *TrackerNode, arg *metadata.CallArgument, edge *metadata.CallGraphEdge, assignmentIndex *assigmentIndexMap) {
+	// Process unary expressions (*ptr, &val)
+	if arg.X == nil {
+		return
+	}
+	// Trace the operand
+	if arg.X.GetKind() != metadata.KindIdent {
+		return
+	}
+
+	originVar, originPkg, _, _ := metadata.TraceVariableOrigin(
+		arg.X.GetName(),
+		getString(meta, edge.Caller.Name),
+		getString(meta, edge.Caller.Pkg),
+		meta,
+	)
+
+	if parent, ok := (*assignmentIndex)[assignmentKey{
+		Name:      originVar,
+		Pkg:       originPkg,
+		Type:      arg.X.GetType(),
+		Container: getString(meta, edge.Caller.Name),
+	}]; ok {
+		parent.Children = append(parent.Children, argNode)
+	}
+}
+
 // processArguments processes arguments with enhanced classification and tracking
 func processArguments(tree *TrackerTree, meta *metadata.Metadata, parentNode *TrackerNode, edge *metadata.CallGraphEdge, visited map[string]int, assignmentIndex *assigmentIndexMap, limits metadata.TrackerLimits) []*TrackerNode {
 	if edge == nil {
@@ -734,7 +1132,6 @@ func processArguments(tree *TrackerTree, meta *metadata.Metadata, parentNode *Tr
 		}
 
 		argNode := newArgumentNode(tree, parentNode, argID, argNodeEdge, arg)
-
 		if argNode == nil {
 			continue
 		}
@@ -747,365 +1144,18 @@ func processArguments(tree *TrackerTree, meta *metadata.Metadata, parentNode *Tr
 
 		switch argType {
 		case ArgTypeFunctionCall:
-			if arg.Fun != nil && arg.Fun.GetKind() == metadata.KindSelector && arg.Fun.X.Type != -1 {
-				selectorArg := arg.Fun
-				varName := metadata.CallArgToString(selectorArg.X)
-
-				pkey := paramKey{
-					Name:      varName,
-					Pkg:       getString(meta, edge.Caller.Pkg),
-					Container: getString(meta, edge.Caller.Name),
-				}
-
-				if parents, ok := tree.variableNodes[pkey]; ok && len(parents) > 0 {
-					// Link to most recent assignment (last in slice) for cleaner tree structure
-					mostRecentParent := parents[len(parents)-1]
-					mostRecentParent.Children = append(mostRecentParent.Children, argNode)
-				}
-
-				if selectorArg.Sel.GetKind() == metadata.KindIdent && strings.HasPrefix(selectorArg.Sel.GetType(), "func(") || strings.HasPrefix(selectorArg.Sel.GetType(), "func[") {
-					// Enhanced variable tracing and assignment linking
-					originVar, originPkg, _, _ := metadata.TraceVariableOrigin(
-						varName,
-						getString(meta, edge.Caller.Name),
-						getString(meta, edge.Caller.Pkg),
-						meta,
-					)
-
-					// Link to assignment if exists
-					akey := assignmentKey{
-						Name:      originVar,
-						Pkg:       originPkg,
-						Type:      selectorArg.X.GetType(),
-						Container: getString(meta, edge.Caller.Name),
-					}
-
-					if parent, ok := (*assignmentIndex)[akey]; ok {
-						parent.Children = append(parent.Children, argNode)
-					}
-
-					children = append(children, argNode)
-
-					// Get the correct edge for selector arguments
-					funcNameIndex := selectorArg.Sel.Name
-					recvType := strings.ReplaceAll(originVar, selectorArg.Sel.GetPkg()+".", "")
-
-					// First check if ReceiverType is available (for function return values)
-					if selectorArg.ReceiverType != nil && originVar == varName {
-						recvType = selectorArg.ReceiverType.GetName()
-					}
-
-					var FuncType string
-
-					if selectorArg.X.GetKind() == metadata.KindSelector && selectorArg.X.X.Type != -1 {
-						FuncType = selectorArg.X.X.GetType()
-						FuncType = strings.ReplaceAll(FuncType, selectorArg.X.X.GetPkg()+".", "")
-						FuncType = strings.TrimPrefix(FuncType, "*")
-					} else if selectorArg.X.GetKind() == metadata.KindCall && selectorArg.X.Fun.Type != -1 {
-						FuncType = selectorArg.X.Fun.GetType()
-						FuncType = strings.ReplaceAll(FuncType, selectorArg.X.X.GetPkg()+".", "")
-						FuncType = strings.TrimPrefix(FuncType, "*")
-					}
-
-					// Resolve interface types to concrete types using interface resolution
-					concreteRecvType := tree.ResolveInterfaceFromMetadata(recvType, FuncType, selectorArg.Sel.GetPkg())
-					if concreteRecvType != recvType {
-						recvType = concreteRecvType
-					}
-
-					recvTypeIndex := meta.StringPool.Get(recvType)
-					starRecvTypeIndex := meta.StringPool.Get("*" + recvType)
-					pkgNameIndex := meta.StringPool.Get(selectorArg.Sel.GetPkg())
-
-					var funcEdge *metadata.CallGraphEdge
-
-					// Look for a call graph edge where this function is the caller
-					for _, ArgEdge := range meta.CallGraph {
-						if ArgEdge.Caller.Name == funcNameIndex && ArgEdge.Caller.Pkg == pkgNameIndex && (ArgEdge.Caller.RecvType == recvTypeIndex || ArgEdge.Caller.RecvType == starRecvTypeIndex) {
-							funcEdge = &ArgEdge
-							id := funcEdge.Callee.ID()
-							if childNode := NewTrackerNode(tree, meta, argNode.Key(), id, funcEdge, nil, visited, assignmentIndex, limits); childNode != nil {
-								argNode.AddChild(childNode)
-							}
-						}
-					}
-				}
-			}
-
-			// Process function call arguments recursively
-			if argNode := NewTrackerNode(tree, meta, parentNode.Key(), argID, argEdge, arg, visited, assignmentIndex, limits); argNode != nil {
-				argNode.Parent = parentNode
-				argNode.ArgType = ArgTypeFunctionCall
-				argNode.IsArgument = true
-				argNode.ArgIndex = i
-				argNode.ArgContext = fmt.Sprintf("%s.%s", getString(meta, edge.Caller.Name), getString(meta, edge.Callee.Name))
-
-				// Process nested arguments
-				if len(arg.Args) > 0 {
-					argNode.AddChildren(processArguments(tree, meta, argNode, argEdge, visited, assignmentIndex, limits))
-				}
-
-				children = append(children, argNode)
-				if arg.Fun != nil && arg.Fun.Position != -1 {
-					tree.positions[arg.Fun.GetPosition()] = true
-				}
-			}
-
+			children = append(children, processArgFunctionCall(tree, meta, parentNode, argNode, arg, edge, argEdge, argID, i, visited, assignmentIndex, limits)...)
 		case ArgTypeVariable:
-			varName := metadata.CallArgToString(arg)
-			// Enhanced variable tracing and assignment linking
-			originVar, originPkg, _, _ := metadata.TraceVariableOrigin(
-				varName,
-				getString(meta, edge.Caller.Name),
-				getString(meta, edge.Caller.Pkg),
-				meta,
-			)
-
-			// Link to assignment if exists
-			akey := assignmentKey{
-				Name:      originVar,
-				Pkg:       originPkg,
-				Type:      arg.GetType(),
-				Container: getString(meta, edge.Caller.Name),
-			}
-
-			if parent, ok := (*assignmentIndex)[akey]; ok {
-				parent.Children = append(parent.Children, argNode)
-				argNode.Parent = parent
-			} else {
-				akey = assignmentKey{
-					Name:      varName,
-					Pkg:       getString(meta, edge.Callee.Pkg),
-					Type:      arg.GetType(),
-					Container: getString(meta, edge.Caller.Name),
-				}
-
-				if assignmentNode, ok := (*assignmentIndex)[akey]; ok {
-					assignmentNode.Parent = argNode
-				}
-			}
-
-			pkey := paramKey{
-				Name:      originVar,
-				Pkg:       originPkg,
-				Container: getString(meta, edge.Caller.Name),
-			}
-
-			if parents, ok := tree.variableNodes[pkey]; ok && len(parents) > 0 {
-				// Link to the most recent assignment (last in slice) as it represents
-				// the actual value at the point of use. This creates a cleaner tree
-				// structure while preserving the logical relationship.
-				mostRecentParent := parents[len(parents)-1]
-				mostRecentParent.Children = append(mostRecentParent.Children, argNode)
-
-				// Optionally: Store reference to all possible origins for completeness
-				// This allows tracking all possible values without cluttering the tree
-				if argNode.RootAssignmentMap == nil {
-					argNode.RootAssignmentMap = make(map[string][]metadata.Assignment, 1)
-				}
-				// The RootAssignmentMap will be populated by the assignment linking above
-			}
+			processArgVariable(tree, meta, argNode, arg, edge, assignmentIndex)
 			children = append(children, argNode)
-
-		case ArgTypeLiteral:
-			// Store literal for type inference
-			children = append(children, argNode)
-
 		case ArgTypeSelector:
-			// Handling a function inside the selector
-			// Process field/method access
-			if arg.X != nil {
-				if arg.Sel.GetKind() == metadata.KindIdent && (strings.HasPrefix(arg.Sel.GetType(), "func(") || strings.HasPrefix(arg.Sel.GetType(), "func[")) {
-					varName := metadata.CallArgToString(arg.X)
-					// Enhanced variable tracing and assignment linking
-					originVar, originPkg, _, _ := metadata.TraceVariableOrigin(
-						varName,
-						getString(meta, edge.Caller.Name),
-						getString(meta, edge.Caller.Pkg),
-						meta,
-					)
-
-					// Link to assignment if exists
-					akey := assignmentKey{
-						Name:      originVar,
-						Pkg:       originPkg,
-						Type:      arg.GetType(),
-						Container: getString(meta, edge.Caller.Name),
-					}
-
-					if parent, ok := (*assignmentIndex)[akey]; ok {
-						parent.Children = append(parent.Children, argNode)
-					}
-
-					// Link param
-					pkey := paramKey{
-						Name:      originVar,
-						Pkg:       originPkg,
-						Container: getString(meta, edge.Caller.Name),
-					}
-
-					if parents, ok := tree.variableNodes[pkey]; ok && len(parents) > 0 {
-						// Link to the most recent assignment (last in slice) as it represents
-						// the actual value at the point of use
-						mostRecentParent := parents[len(parents)-1]
-						mostRecentParent.Children = append(mostRecentParent.Children, argNode)
-					}
-
-					// Get the correct edge for method calls
-					funcNameIndex := arg.Sel.Name
-					recvType := strings.ReplaceAll(originVar, arg.Sel.GetPkg()+".", "")
-					// If the selector is a method, we need to get the type of the receiver
-					if arg.Sel.Type != -1 && originVar == varName {
-						recvType = arg.X.GetType()
-						recvType = strings.ReplaceAll(recvType, arg.Sel.GetPkg()+".", "")
-					}
-
-					// First check if ReceiverType is available (for function return values)
-					if arg.ReceiverType != nil && originVar == varName {
-						recvType = arg.ReceiverType.GetName()
-					}
-
-					var FuncType string
-
-					if arg.X.GetKind() == metadata.KindSelector && arg.X.X.Type != -1 {
-						FuncType = arg.X.X.GetType()
-						FuncType = strings.ReplaceAll(FuncType, arg.X.X.GetPkg()+".", "")
-						FuncType = strings.TrimPrefix(FuncType, "*")
-					} else if arg.X.GetKind() == metadata.KindCall && arg.X.Fun.Type != -1 {
-						FuncType = arg.X.Fun.GetType()
-						FuncType = strings.ReplaceAll(FuncType, arg.X.Fun.GetPkg()+".", "")
-						FuncType = strings.TrimPrefix(FuncType, "*")
-					}
-
-					// Resolve interface types to concrete types using interface resolution
-					concreteRecvType := tree.ResolveInterfaceFromMetadata(recvType, FuncType, arg.Sel.GetPkg())
-					if concreteRecvType != recvType {
-						recvType = concreteRecvType
-					}
-
-					recvTypeIndex := meta.StringPool.Get(recvType)
-					starRecvTypeIndex := meta.StringPool.Get("*" + recvType)
-					pkgNameIndex := arg.Sel.Pkg
-
-					var funcEdge *metadata.CallGraphEdge
-
-					// Look for a call graph edge where this function is the caller
-					for _, ArgEdge := range meta.CallGraph {
-						if ArgEdge.Caller.Name == funcNameIndex && ArgEdge.Caller.Pkg == pkgNameIndex && (ArgEdge.Caller.RecvType == recvTypeIndex || ArgEdge.Caller.RecvType == starRecvTypeIndex) {
-							funcEdge = &ArgEdge
-							id := funcEdge.Callee.ID()
-							if childNode := NewTrackerNode(tree, meta, argNode.Key(), id, funcEdge, nil, visited, assignmentIndex, limits); childNode != nil {
-								argNode.AddChild(childNode)
-							}
-						}
-					}
-
-				}
-				varName := metadata.CallArgToString(arg)
-				// Trace the base object
-				baseVar, originPkg, _, _ := metadata.TraceVariableOrigin(
-					varName,
-					getString(meta, edge.Caller.Name),
-					getString(meta, edge.Caller.Pkg),
-					meta,
-				)
-
-				var parentType = arg.X.GetType()
-				// Handle nested selectors: if arg.X is a selector, extract base from arg.X.X
-
-				// For nested selectors, use the base variable's type
-				if arg.X != nil && arg.X.GetKind() == metadata.KindSelector && arg.X.X != nil && arg.X.Sel != nil && arg.X.Sel.GetKind() == metadata.KindIdent {
-					// Nested selector case: extract base from arg.X.X
-					// arg.X is a selector (e.g., obj.field), arg.X.X is the base (e.g., obj)
-					parentType = arg.X.X.GetType()
-				}
-
-				// Link to assignment if exists
-				akey := assignmentKey{
-					Name:      baseVar,
-					Pkg:       originPkg,
-					Type:      arg.GetType(),
-					Container: getString(meta, edge.Caller.Name),
-				}
-
-				if parentType != "" {
-					akey.Container = parentType
-				}
-
-				if assignmentNode, ok := (*assignmentIndex)[akey]; ok {
-					// TODO: This is a workaround for parameter tracing issue.
-					// Proper solution needed to trace parameters passed through functional options
-					// (e.g., router parameters: WithOrderRouter(orderRouter) -> r.orderRouter = orderRouter -> router.Mount("/orders", r.orderRouter))
-					// See testdata/router_mount_options/ for example case.
-					// Current workaround: Set assignmentNode's parent to argNode (reverse link: assignment <- usage)
-					// This allows tracking where assignments are used but is confusing and may not handle all cases correctly.
-					assignmentNode.Parent = argNode
-				}
-
-				// Link to variable node if exists
-				pkey := paramKey{
-					Name:      baseVar,
-					Pkg:       originPkg,
-					Container: getString(meta, edge.Caller.Name),
-				}
-
-				if parents, ok := tree.variableNodes[pkey]; ok && len(parents) > 0 {
-					// Link to most recent assignment (last in slice) for cleaner tree structure
-					mostRecentParent := parents[len(parents)-1]
-					mostRecentParent.Children = append(mostRecentParent.Children, argNode)
-				}
-
-				children = append(children, argNode)
-			} else {
-				children = append(children, argNode)
-			}
-
+			processArgSelector(tree, meta, argNode, arg, edge, visited, assignmentIndex, limits)
+			children = append(children, argNode)
 		case ArgTypeUnary:
-			// Process unary expressions (*ptr, &val)
-			if arg.X != nil {
-				// Trace the operand
-				if arg.X.GetKind() == metadata.KindIdent {
-					originVar, originPkg, _, _ := metadata.TraceVariableOrigin(
-						arg.X.GetName(),
-						getString(meta, edge.Caller.Name),
-						getString(meta, edge.Caller.Pkg),
-						meta,
-					)
-
-					if parent, ok := (*assignmentIndex)[assignmentKey{
-						Name:      originVar,
-						Pkg:       originPkg,
-						Type:      arg.X.GetType(),
-						Container: getString(meta, edge.Caller.Name),
-					}]; ok {
-						parent.Children = append(parent.Children, argNode)
-					}
-					children = append(children, argNode)
-				} else {
-					children = append(children, argNode)
-				}
-			} else {
-				children = append(children, argNode)
-			}
-
-		case ArgTypeBinary:
-			// Process binary expressions (a + b)
+			processArgUnary(meta, argNode, arg, edge, assignmentIndex)
 			children = append(children, argNode)
-
-		case ArgTypeIndex:
-			// Process index expressions (arr[i])
-			children = append(children, argNode)
-
-		case ArgTypeComposite:
-			// Process composite literals (struct{})
-			children = append(children, argNode)
-
-		case ArgTypeTypeAssert:
-			// Process type assertions (val.(type))
-			children = append(children, argNode)
-
 		default:
-			// Complex expressions
+			// Handles ArgTypeLiteral, ArgTypeBinary, ArgTypeIndex, ArgTypeComposite, ArgTypeTypeAssert, and complex expressions
 			children = append(children, argNode)
 		}
 	}
@@ -1140,6 +1190,8 @@ func newArgumentNode(tree *TrackerTree, parentNode *TrackerNode, argID string, e
 }
 
 // NewTrackerNode creates a new TrackerNode for the tree.
+//
+//nolint:gocyclo // tracker node creation with multiple initialization paths
 func NewTrackerNode(tree *TrackerTree, meta *metadata.Metadata, parentID, id string, parentEdge *metadata.CallGraphEdge, callArg *metadata.CallArgument, visited map[string]int, assignmentIndex *assigmentIndexMap, limits metadata.TrackerLimits) *TrackerNode {
 	if id == "" {
 		return nil

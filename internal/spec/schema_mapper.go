@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
@@ -18,6 +32,8 @@ func NewSchemaMapper(cfg *APISpecConfig) *SchemaMapperImpl {
 }
 
 // MapGoTypeToOpenAPISchema maps Go types to OpenAPI schemas
+//
+//nolint:gocyclo // Go type to OpenAPI schema mapping
 func (s *SchemaMapperImpl) MapGoTypeToOpenAPISchema(goType string) *Schema {
 	// Check type mappings first
 	for _, mapping := range s.cfg.TypeMapping {
@@ -61,7 +77,7 @@ func (s *SchemaMapperImpl) MapGoTypeToOpenAPISchema(goType string) *Schema {
 				case "uint", "uint8", "uint16", "uint32", "uint64", "byte":
 					return &Schema{
 						Type:                 "object",
-						AdditionalProperties: &Schema{Type: "integer", Minimum: 0},
+						AdditionalProperties: &Schema{Type: "integer", Minimum: floatPtr(0)},
 					}
 				case "float32", "float64":
 					return &Schema{
@@ -96,7 +112,7 @@ func (s *SchemaMapperImpl) MapGoTypeToOpenAPISchema(goType string) *Schema {
 		case "int", "int8", "int16", "int32", "int64":
 			return &Schema{Type: "array", Items: &Schema{Type: "integer"}}
 		case "uint", "uint8", "uint16", "uint32", "uint64", "byte":
-			return &Schema{Type: "array", Items: &Schema{Type: "integer", Minimum: 0}}
+			return &Schema{Type: "array", Items: &Schema{Type: "integer", Minimum: floatPtr(0)}}
 		case "float32", "float64":
 			return &Schema{Type: "array", Items: &Schema{Type: "number"}}
 		case "bool":
@@ -119,7 +135,7 @@ func (s *SchemaMapperImpl) MapGoTypeToOpenAPISchema(goType string) *Schema {
 	case "int", "int8", "int16", "int32", "int64":
 		return &Schema{Type: "integer"}
 	case "uint", "uint8", "uint16", "uint32", "uint64", "byte":
-		return &Schema{Type: "integer", Minimum: 0}
+		return &Schema{Type: "integer", Minimum: floatPtr(0)}
 	case "float32", "float64":
 		return &Schema{Type: "number"}
 	case "bool":
@@ -145,7 +161,7 @@ func (s *SchemaMapperImpl) MapGoTypeToOpenAPISchema(goType string) *Schema {
 	}
 }
 
-// Map of status code names
+// HTTPStatusByName maps HTTP status code names to their numeric values.
 var HTTPStatusByName = map[string]int{
 	// 1xx
 	"StatusContinue":           100,

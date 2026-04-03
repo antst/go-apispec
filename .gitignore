@@ -6,8 +6,6 @@ main
 
 # Go modules
 vendor/
-
-# Dependency directories (remove the comment below if you use Go modules)
 Gopkg.lock
 Gopkg.toml
 
@@ -18,6 +16,7 @@ Gopkg.toml
 *.swo
 *.bak
 .DS_Store
+Thumbs.db
 
 # APISpec generated files
 metadata.yaml
@@ -27,28 +26,33 @@ metadata-call-graph.yaml
 diagram.html
 used-config.yaml
 openapi*.yaml
+openapi.json
+
+# Build artifacts
+/apispec
+/apidiag
 
 # Test output
 *.log
-
-# OS files
-Thumbs.db
-
-openapi.json
 output.txt
 test_output.txt
 coverage.txt
 coverage.html
+coverage.out
 
-/apispec
-/apidiag
+# Profiling output
+profiles*/
+*.prof
 
 # Test temporary directories
 testdata/temp/
 cmd/apispec/testdata/temp/
 
-# Profiling output
-profiles*/
-
 # Playground optimized
 playground*.go
+
+# Project tooling (local only)
+.claude/
+CLAUDE.md
+specs/
+.specify/

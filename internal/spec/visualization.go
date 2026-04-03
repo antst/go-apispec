@@ -1,10 +1,24 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
 	"fmt"
 	"strings"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 const (
@@ -97,11 +111,13 @@ type CytoscapeEdge struct {
 }
 
 type CytoscapeEdgeData struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Label  string `json:"label,omitempty"`
-	Type   string `json:"type,omitempty"`
+	ID          string `json:"id"`
+	Source      string `json:"source"`
+	Target      string `json:"target"`
+	Label       string `json:"label,omitempty"`
+	Type        string `json:"type,omitempty"`
+	BranchKind  string `json:"branch_kind,omitempty"`  // "if-then", "if-else", "switch-case", ""
+	BranchLabel string `json:"branch_label,omitempty"` // e.g. "GET", "POST" for switch cases
 }
 
 // DrawTrackerTreeCytoscape generates Cytoscape.js JSON data for the tracker tree.
@@ -136,6 +152,8 @@ func DrawTrackerTreeCytoscapeWithMetadata(nodes []TrackerNodeInterface, meta *me
 
 // OrderTrackerTreeNodesDepthFirst orders Cytoscape nodes from a tracker tree in depth-first order
 // starting from root nodes (main function) down to leaves, across all branches
+//
+//nolint:gocyclo // depth-first node ordering with root detection
 func OrderTrackerTreeNodesDepthFirst(data *CytoscapeData) []CytoscapeNode {
 	if len(data.Nodes) == 0 {
 		return data.Nodes
@@ -186,12 +204,13 @@ func OrderTrackerTreeNodesDepthFirst(data *CytoscapeData) []CytoscapeNode {
 	}
 
 	// Prioritize main root first
-	if mainRoot != nil {
+	switch {
+	case mainRoot != nil:
 		roots = append(roots, mainRoot)
 		roots = append(roots, otherRoots...)
-	} else if len(otherRoots) > 0 {
+	case len(otherRoots) > 0:
 		roots = otherRoots
-	} else {
+	default:
 		// If no roots found by depth 0, use minimum depth nodes
 		for i := range data.Nodes {
 			node := &data.Nodes[i]
@@ -247,6 +266,8 @@ func OrderTrackerTreeNodesDepthFirst(data *CytoscapeData) []CytoscapeNode {
 // TraverseTrackerTreeBranchOrder returns nodes in branch-first order:
 // Complete one branch (with all sub-branches) depth-first before moving to next branch.
 // Each node appears exactly once in the order.
+//
+//nolint:gocyclo // branch-order tree traversal with root prioritization
 func TraverseTrackerTreeBranchOrder(data *CytoscapeData) []CytoscapeNode {
 	if len(data.Nodes) == 0 {
 		return nil
@@ -295,12 +316,13 @@ func TraverseTrackerTreeBranchOrder(data *CytoscapeData) []CytoscapeNode {
 	}
 
 	// Prioritize main root, fallback to minimum depth if no roots found
-	if mainRoot != "" {
+	switch {
+	case mainRoot != "":
 		roots = append(roots, mainRoot)
 		roots = append(roots, otherRoots...)
-	} else if len(otherRoots) > 0 {
+	case len(otherRoots) > 0:
 		roots = otherRoots
-	} else {
+	default:
 		// Fallback: use minimum depth nodes
 		for i := range data.Nodes {
 			n := &data.Nodes[i]
@@ -390,6 +412,8 @@ func DrawCallGraphCytoscape(meta *metadata.Metadata) *CytoscapeData {
 }
 
 // processCallGraphEdge processes a call graph edge and adds nodes/edges to the Cytoscape data
+//
+//nolint:gocyclo // call graph edge to cytoscape data conversion
 func processCallGraphEdge(meta *metadata.Metadata, edge *metadata.CallGraphEdge, data *CytoscapeData, visitedNodes, nodePairEdges map[string]bool, edgeIDNodeMap map[string]string, nodeCounter, edgeCounter *int) {
 	if edge == nil {
 		return
@@ -569,24 +593,38 @@ func processCallGraphEdge(meta *metadata.Metadata, edge *metadata.CallGraphEdge,
 
 	// Create edge between caller and callee only if we haven't already created one between these nodes
 	if callerNodeID != "" && calleeNodeID != "" {
-		// Create a unique key for this node pair (source -> target)
-		nodePairKey := callerNodeID + "->" + calleeNodeID
+		// Extract branch context for edge annotation
+		var branchKind, branchLabel string
+		if edge.Branch != nil {
+			branchKind = edge.Branch.BlockKind
+			if len(edge.Branch.CaseValues) > 0 {
+				branchLabel = strings.Join(edge.Branch.CaseValues, ", ")
+			}
+		}
 
-		// Only create edge if we haven't already created one between these nodes
+		// Include branch label in the dedup key so different branches produce separate edges
+		nodePairKey := callerNodeID + "->" + calleeNodeID + ":" + branchLabel
+
+		// Only create edge if we haven't already created one between these nodes with this branch
 		if !nodePairEdges[nodePairKey] {
 			edgeID := fmt.Sprintf("edge_%d", *edgeCounter)
 			*edgeCounter++
 
-			data.Edges = append(data.Edges, CytoscapeEdge{
-				Data: CytoscapeEdgeData{
-					ID:     edgeID,
-					Source: callerNodeID,
-					Target: calleeNodeID,
-					Type:   "calls",
-				},
-			})
+			edgeData := CytoscapeEdgeData{
+				ID:     edgeID,
+				Source: callerNodeID,
+				Target: calleeNodeID,
+				Type:   "calls",
+			}
 
-			// Mark this node pair as having an edge
+			if branchKind != "" {
+				edgeData.BranchKind = branchKind
+				edgeData.BranchLabel = branchLabel
+			}
+
+			data.Edges = append(data.Edges, CytoscapeEdge{Data: edgeData})
+
+			// Mark this node pair + branch as having an edge
 			nodePairEdges[nodePairKey] = true
 		}
 	}
@@ -782,6 +820,7 @@ func callArgument(callArgument *metadata.CallArgument) *metadata.CallArgument {
 	return callArgument
 }
 
+//nolint:gocyclo // recursive node rendering with depth tracking
 func drawNodeCytoscapeWithDepth(node TrackerNodeInterface, data *CytoscapeData, nodeMap map[string]string, baseKeyToNodeIndex map[string]int, edgeSet map[string]bool, childrenProcessed map[string]bool, edgeCounter, nodeCounter *int, meta *metadata.Metadata, depth int) string {
 	if node == nil {
 		return ""
@@ -838,7 +877,8 @@ func drawNodeCytoscapeWithDepth(node TrackerNodeInterface, data *CytoscapeData, 
 	// Add tracker tree specific data if available
 	if trackerNode, ok := node.(*TrackerNode); ok {
 		// Determine node type and set appropriate data
-		if trackerNode.IsArgument {
+		switch {
+		case trackerNode.IsArgument:
 			// This is an argument node
 			if isNewNode {
 				nodeData.Type = "argument"
@@ -856,7 +896,7 @@ func drawNodeCytoscapeWithDepth(node TrackerNodeInterface, data *CytoscapeData, 
 					nodeData.ArgResolvedType = callArgument.GetResolvedType()
 				}
 			}
-		} else if trackerNode.CallGraphEdge != nil {
+		case trackerNode.CallGraphEdge != nil:
 			// This is a function node with an edge
 			if isNewNode {
 				nodeData.Type = "function"
@@ -914,7 +954,7 @@ func drawNodeCytoscapeWithDepth(node TrackerNodeInterface, data *CytoscapeData, 
 					}
 				}
 			}
-		} else if trackerNode.CallArgument != nil {
+		case trackerNode.CallArgument != nil:
 			// This is a call argument node (not a function)
 			if isNewNode {
 				nodeData.Type = "call_argument"
@@ -925,7 +965,7 @@ func drawNodeCytoscapeWithDepth(node TrackerNodeInterface, data *CytoscapeData, 
 				nodeData.ArgType = callArgument.GetType()
 				nodeData.ArgResolvedType = callArgument.GetResolvedType()
 			}
-		} else {
+		default:
 			// This is a generic node (variable, literal, etc.)
 			if isNewNode {
 				nodeData.Type = "generic"

@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
@@ -221,7 +235,7 @@ func (fd *FrameworkDetector) AnalyzeFrameworkDependencies(
 	pkgs []*packages.Package,
 	pkgsMetadata map[string]map[string]*ast.File,
 	fileToInfo map[*ast.File]*types.Info,
-	fset *token.FileSet,
+	_ *token.FileSet,
 ) (*FrameworkDependencyList, error) {
 	// Build package map
 	for _, pkg := range pkgs {
@@ -288,7 +302,6 @@ func (fd *FrameworkDetector) findAllFrameworkPackages(
 	pkgsMetadata map[string]map[string]*ast.File,
 	fileToInfo map[*ast.File]*types.Info,
 ) []*FrameworkDependency {
-
 	allPackages := make([]*FrameworkDependency, 0)
 	processed := make(map[string]bool)
 
@@ -440,7 +453,6 @@ func (fd *FrameworkDetector) findImportedPackages(
 	pkgs []*packages.Package,
 	processed map[string]bool,
 ) []*FrameworkDependency {
-
 	importedPackages := make([]*FrameworkDependency, 0)
 	importedPackagePaths := make(map[string]bool)
 

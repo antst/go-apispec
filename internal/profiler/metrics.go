@@ -1,4 +1,4 @@
-// Copyright 2025 Ehab Terra
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -165,12 +165,12 @@ func (mc *MetricsCollector) WriteToFile(filePath string) error {
 
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
 	// Write metrics to file
-	file, err := os.Create(filePath)
+	file, err := os.Create(filePath) //nolint:gosec // filePath is derived from profiler config
 	if err != nil {
 		return fmt.Errorf("failed to create metrics file: %w", err)
 	}

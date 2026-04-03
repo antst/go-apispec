@@ -33,7 +33,7 @@ Click *the image above to watch the full demo on YouTube*
 
 ```bash
 # Clone the repository
-git clone https://github.com/ehabterra/apispec.git
+git clone https://github.com/antst/go-apispec.git
 cd apispec
 
 # Build the API diagram server
@@ -47,7 +47,7 @@ make build-apidiag
 
 ```bash
 # Install to your Go bin directory
-go install github.com/ehabterra/apispec/cmd/apidiag@latest
+go install github.com/antst/go-apispec/cmd/apidiag@latest
 
 # Make sure your Go bin is in PATH
 export PATH=$HOME/go/bin:$PATH

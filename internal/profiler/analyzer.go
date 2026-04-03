@@ -1,4 +1,4 @@
-// Copyright 2025 Ehab Terra
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -177,16 +177,16 @@ func (pa *PerformanceAnalyzer) analyzeTimerMetrics(name string, metrics []Metric
 		values[i] = metric.Value
 	}
 
-	avg, max, min := pa.calculateStats(values)
+	avg, maxVal, minVal := pa.calculateStats(values)
 
 	// Check against thresholds
 	if threshold, exists := pa.thresholds["execution_time"]; exists {
-		if max > threshold.Critical {
+		if maxVal > threshold.Critical {
 			issues = append(issues, PerformanceIssue{
 				Type:        "slow_execution",
 				Severity:    "critical",
-				Description: fmt.Sprintf("Function %s took %f ms (max), exceeding critical threshold of %f ms", name, max/1000000, threshold.Critical/1000000),
-				Value:       max,
+				Description: fmt.Sprintf("Function %s took %f ms (max), exceeding critical threshold of %f ms", name, maxVal/1000000, threshold.Critical/1000000),
+				Value:       maxVal,
 				Unit:        "ns",
 				Threshold:   threshold.Critical,
 				Suggestions: []string{
@@ -197,8 +197,8 @@ func (pa *PerformanceAnalyzer) analyzeTimerMetrics(name string, metrics []Metric
 				},
 				Metadata: map[string]interface{}{
 					"average": avg,
-					"min":     min,
-					"max":     max,
+					"min":     minVal,
+					"max":     maxVal,
 					"count":   len(metrics),
 				},
 			})
@@ -216,8 +216,8 @@ func (pa *PerformanceAnalyzer) analyzeTimerMetrics(name string, metrics []Metric
 				},
 				Metadata: map[string]interface{}{
 					"average": avg,
-					"min":     min,
-					"max":     max,
+					"min":     minVal,
+					"max":     maxVal,
 					"count":   len(metrics),
 				},
 			})
@@ -344,27 +344,27 @@ func (pa *PerformanceAnalyzer) isGoroutineMetric(name string) bool {
 }
 
 // calculateStats calculates basic statistics for a slice of values
-func (pa *PerformanceAnalyzer) calculateStats(values []float64) (avg, max, min float64) {
+func (pa *PerformanceAnalyzer) calculateStats(values []float64) (avg, maxVal, minVal float64) {
 	if len(values) == 0 {
 		return 0, 0, 0
 	}
 
 	sum := 0.0
-	max = values[0]
-	min = values[0]
+	maxVal = values[0]
+	minVal = values[0]
 
 	for _, v := range values {
 		sum += v
-		if v > max {
-			max = v
+		if v > maxVal {
+			maxVal = v
 		}
-		if v < min {
-			min = v
+		if v < minVal {
+			minVal = v
 		}
 	}
 
 	avg = sum / float64(len(values))
-	return avg, max, min
+	return avg, maxVal, minVal
 }
 
 // generateRecommendations generates general recommendations based on issues

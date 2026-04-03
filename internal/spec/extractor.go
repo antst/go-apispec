@@ -1,13 +1,29 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/ehabterra/apispec/internal/metadata"
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 // Regex cache for performance optimization
@@ -47,6 +63,52 @@ const (
 	defaultSep = "."
 )
 
+// isBodylessStatusCode returns true for HTTP status codes that must not
+// include a message body per RFC 7231: 1xx informational, 204 No Content,
+// and 304 Not Modified.
+func isBodylessStatusCode(code int) bool {
+	return (code >= 100 && code < 200) || code == 204 || code == 304
+}
+
+func floatPtrEqual(a, b *float64) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+// schemasEqual checks if two schemas are structurally equivalent.
+func schemasEqual(a, b *Schema) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	if a.Type != b.Type || a.Format != b.Format || a.Ref != b.Ref {
+		return false
+	}
+	if !floatPtrEqual(a.Minimum, b.Minimum) || !floatPtrEqual(a.Maximum, b.Maximum) {
+		return false
+	}
+	if a.Items != nil && b.Items != nil {
+		return schemasEqual(a.Items, b.Items)
+	}
+	if a.Items != nil || b.Items != nil {
+		return false
+	}
+	if a.AdditionalProperties != nil && b.AdditionalProperties != nil {
+		return schemasEqual(a.AdditionalProperties, b.AdditionalProperties)
+	}
+	if a.AdditionalProperties != nil || b.AdditionalProperties != nil {
+		return false
+	}
+	return true
+}
+
 // RouteInfo represents extracted route information
 type RouteInfo struct {
 	Path      string
@@ -67,6 +129,9 @@ type RouteInfo struct {
 
 	// Resolved router group prefix (if any)
 	GroupPrefix string
+
+	// Content-Type detected from Header().Set("Content-Type", value) calls
+	detectedContentType string
 }
 
 func NewRouteInfo() *RouteInfo {
@@ -94,6 +159,12 @@ type ResponseInfo struct {
 	ContentType string
 	BodyType    string
 	Schema      *Schema
+	// AlternativeSchemas holds additional schemas when multiple response
+	// types share the same status code (e.g., ErrorResponse and map[string]string
+	// both returned on 400). These get wrapped in oneOf during serialization.
+	AlternativeSchemas []*Schema
+	// Branch context from CFG analysis (nil = unconditional)
+	Branch *metadata.BranchContext
 }
 
 // Extractor provides a cleaner, more modular approach to extraction
@@ -111,6 +182,62 @@ type Extractor struct {
 	requestMatchers  []RequestPatternMatcher
 	responseMatchers []ResponsePatternMatcher
 	paramMatchers    []ParamPatternMatcher
+}
+
+// checkContentTypePattern checks if a node matches a Content-Type header set pattern
+// (e.g., w.Header().Set("Content-Type", "image/png")) and stores the detected
+// content type on all route responses.
+func (e *Extractor) checkContentTypePattern(node TrackerNodeInterface, route *RouteInfo) {
+	edge := node.GetEdge()
+	if edge == nil {
+		return
+	}
+	callName := e.contextProvider.GetString(edge.Callee.Name)
+	recvType := e.contextProvider.GetString(edge.Callee.RecvType)
+	recvPkg := e.contextProvider.GetString(edge.Callee.Pkg)
+
+	fqRecvType := recvPkg
+	if fqRecvType != "" && recvType != "" {
+		fqRecvType += "." + recvType
+	} else if recvType != "" {
+		fqRecvType = recvType
+	}
+
+	for _, pattern := range e.cfg.Framework.ContentTypePatterns {
+		if pattern.CallRegex != "" {
+			re, err := getCachedRegex(pattern.CallRegex)
+			if err != nil || !re.MatchString(callName) {
+				continue
+			}
+		}
+		if pattern.RecvTypeRegex != "" {
+			re, err := getCachedRegex(pattern.RecvTypeRegex)
+			if err != nil || !re.MatchString(fqRecvType) {
+				continue
+			}
+		}
+		if len(edge.Args) > pattern.HeaderNameArgIndex {
+			headerName := e.contextProvider.GetArgumentInfo(edge.Args[pattern.HeaderNameArgIndex])
+			headerName = strings.Trim(headerName, "\"")
+			if strings.EqualFold(headerName, "Content-Type") && len(edge.Args) > pattern.HeaderValueArgIndex {
+				val := e.contextProvider.GetArgumentInfo(edge.Args[pattern.HeaderValueArgIndex])
+				val = strings.Trim(val, "\"")
+				if val != "" {
+					// Override content type on existing responses that use the
+					// default. Don't override responses with pattern-specific
+					// content types (e.g., http.Error → text/plain).
+					defaultCT := e.cfg.Defaults.ResponseContentType
+					for _, resp := range route.Response {
+						if resp.ContentType == defaultCT {
+							resp.ContentType = val
+						}
+					}
+					// Store for future responses that haven't been added yet
+					route.detectedContentType = val
+				}
+			}
+		}
+	}
 }
 
 // NewExtractor creates a new refactored extractor
@@ -294,6 +421,41 @@ func (e *Extractor) handleRouteNode(node TrackerNodeInterface, routeInfo *RouteI
 	visitedEdges := make(map[string]bool)
 	e.extractRouteChildren(node, routeInfo, mountTags, routes, visitedEdges)
 
+	// If no responses were found and the handler is an interface method,
+	// try to resolve to the concrete implementation and re-extract.
+	// Only trigger for types confirmed as interfaces in the metadata.
+	if len(routeInfo.Response) == 0 && routeInfo.Function != "" {
+		if e.isInterfaceHandler(routeInfo) {
+			e.resolveInterfaceHandler(node, routeInfo, mountTags, routes, visitedEdges)
+		}
+	}
+
+	// Override response Content-Type if handler sets it via Header().Set().
+	// Only apply to responses using the default content type — don't override
+	// responses that already have a pattern-specific type (e.g., http.Error
+	// sets "text/plain; charset=utf-8" via DefaultContentType on the pattern).
+	if routeInfo.detectedContentType != "" {
+		defaultCT := e.cfg.Defaults.ResponseContentType
+		for _, resp := range routeInfo.Response {
+			if resp.ContentType == defaultCT {
+				resp.ContentType = routeInfo.detectedContentType
+			}
+		}
+	}
+
+	// Detect conditional HTTP methods from CFG branch context.
+	// If responses have switch-case branch contexts with HTTP method case values,
+	// split into separate RouteInfo entries per method.
+	if methodRoutes := e.splitByConditionalMethods(routeInfo); len(methodRoutes) > 0 {
+		for _, mr := range methodRoutes {
+			e.overrideApplier.ApplyOverrides(mr)
+			if mr.IsValid() && routes != nil {
+				*routes = append(*routes, mr)
+			}
+		}
+		return
+	}
+
 	// Apply overrides
 	e.overrideApplier.ApplyOverrides(routeInfo)
 
@@ -352,36 +514,315 @@ func (e *Extractor) findTargetNode(assignment *metadata.CallArgument) TrackerNod
 	return nil
 }
 
-// extractRouteChildren extracts request, response, and params from children nodes
-func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *RouteInfo, mountTags []string, routes *[]*RouteInfo, visitedEdges map[string]bool) {
-	for _, child := range routeNode.GetChildren() {
-		// Check for route patterns in children nodes
-		if isRoute := e.executeRoutePattern(child, route); isRoute {
-			e.handleRouteNode(child, route, "", mountTags, routes)
-		}
-
-		// Extract request
-		if req := e.extractRequestFromNode(child, route); req != nil {
-			route.Request = req
-		}
-
-		// Extract response
-		if resp := e.extractResponseFromNode(child, route, visitedEdges); resp != nil && (resp.BodyType != "" || resp.StatusCode != 0) {
-			route.Response[fmt.Sprintf("%d", resp.StatusCode)] = resp
-		}
-
-		// Extract parameters
-		if param := e.extractParamFromNode(child, route); param != nil {
-			route.Params = append(route.Params, *param)
-		}
-
-		// Recursive extraction
-		e.extractRouteChildren(child, route, mountTags, routes, visitedEdges)
+// resolveCallReturnValue looks up a function's constant return value
+// from the metadata. Returns the constant string or empty if not found.
+func (r *ResponsePatternMatcherImpl) resolveCallReturnValue(arg *metadata.CallArgument) string {
+	var funcName string
+	if arg.Fun != nil {
+		funcName = r.contextProvider.GetArgumentInfo(arg.Fun)
 	}
+	if funcName == "" {
+		return ""
+	}
+	// Strip package prefix
+	if idx := strings.LastIndex(funcName, "."); idx >= 0 {
+		funcName = funcName[idx+1:]
+	}
+	// The ContextProvider wraps metadata — use the GetFunctionConstantReturn
+	// method if available, or search through metadata directly.
+	if cp, ok := r.contextProvider.(*ContextProviderImpl); ok && cp.meta != nil {
+		for _, pkg := range cp.meta.Packages {
+			for _, file := range pkg.Files {
+				if fn, exists := file.Functions[funcName]; exists && fn.ConstantReturnValue != "" {
+					return fn.ConstantReturnValue
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// isInterfaceHandler checks if the route handler's receiver type is an interface.
+func (e *Extractor) isInterfaceHandler(route *RouteInfo) bool {
+	meta := e.tree.GetMetadata()
+	if meta == nil {
+		return false
+	}
+	sp := meta.StringPool
+
+	// Extract the type name from the function (e.g., "pkg-->ContentServer.Serve" → "ContentServer")
+	funcName := route.Function
+	parts := strings.Split(funcName, TypeSep)
+	if len(parts) < 2 {
+		return false
+	}
+	methodPart := parts[len(parts)-1]
+	dotIdx := strings.LastIndex(methodPart, ".")
+	if dotIdx <= 0 {
+		return false
+	}
+	typeName := methodPart[:dotIdx]
+
+	// Check if this type is an interface in the metadata
+	for _, pkg := range meta.Packages {
+		for name, typ := range pkg.Types {
+			if name == typeName && sp.GetString(typ.Kind) == "interface" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resolveInterfaceHandler checks if the route handler is an interface method.
+// If so, searches the call graph for concrete implementations with the same
+// method name and extracts responses from their call edges directly.
+func (e *Extractor) resolveInterfaceHandler(_ TrackerNodeInterface, route *RouteInfo, _ []string, _ *[]*RouteInfo, _ map[string]bool) {
+	funcName := route.Function
+	if idx := strings.LastIndex(funcName, "."); idx >= 0 {
+		funcName = funcName[idx+1:]
+	}
+	if funcName == "" {
+		return
+	}
+
+	meta := e.tree.GetMetadata()
+	if meta == nil {
+		return
+	}
+
+	// Search the call graph for edges where the caller is a concrete method
+	// with the same name AND in the same package as the route handler.
+	routePkg := route.Package
+	for i := range meta.CallGraph {
+		edge := &meta.CallGraph[i]
+		callerName := e.contextProvider.GetString(edge.Caller.Name)
+		callerRecvType := e.contextProvider.GetString(edge.Caller.RecvType)
+		callerPkg := e.contextProvider.GetString(edge.Caller.Pkg)
+
+		if callerName != funcName || callerRecvType == "" {
+			continue
+		}
+		// Only match concrete methods in the same package as the route
+		if routePkg != "" && !strings.Contains(callerPkg, routePkg) && !strings.Contains(routePkg, callerPkg) {
+			continue
+		}
+
+		// Found a call from the concrete implementation — check if it's
+		// a response-writing call (Encode, Write, JSON, etc.)
+		calleeName := e.contextProvider.GetString(edge.Callee.Name)
+		for _, matcher := range e.responseMatchers {
+			// Create a minimal node wrapper for this edge
+			mockNode := &callGraphEdgeNode{edge: edge}
+			if matcher.MatchNode(mockNode) {
+				resp := matcher.ExtractResponse(mockNode, route)
+				if resp != nil && (resp.BodyType != "" || resp.StatusCode != 0) {
+					key := fmt.Sprintf("%d", resp.StatusCode)
+					route.Response[key] = resp
+				}
+			}
+			_ = calleeName
+		}
+	}
+}
+
+// callGraphEdgeNode wraps a CallGraphEdge to implement TrackerNodeInterface
+// for use in pattern matching against raw call graph edges.
+type callGraphEdgeNode struct {
+	edge *metadata.CallGraphEdge
+}
+
+func (n *callGraphEdgeNode) GetEdge() *metadata.CallGraphEdge                       { return n.edge }
+func (n *callGraphEdgeNode) GetKey() string                                         { return "" }
+func (n *callGraphEdgeNode) GetChildren() []TrackerNodeInterface                    { return nil }
+func (n *callGraphEdgeNode) GetParent() TrackerNodeInterface                        { return nil }
+func (n *callGraphEdgeNode) GetArgument() *metadata.CallArgument                    { return nil }
+func (n *callGraphEdgeNode) GetTypeParamMap() map[string]string                     { return nil }
+func (n *callGraphEdgeNode) GetArgType() metadata.ArgumentType                      { return 0 }
+func (n *callGraphEdgeNode) GetArgIndex() int                                       { return -1 }
+func (n *callGraphEdgeNode) GetArgContext() string                                  { return "" }
+func (n *callGraphEdgeNode) GetRootAssignmentMap() map[string][]metadata.Assignment { return nil }
+
+// splitByConditionalMethods checks if a route's responses have CFG branch
+// context with HTTP method case values (e.g., switch r.Method case "GET").
+// If so, returns separate RouteInfo entries per method. Returns nil if no
+// conditional methods are detected.
+func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
+	// Collect HTTP methods from response branch contexts
+	methodResponses := make(map[string]map[string]*ResponseInfo) // method → statusCode → response
+
+	for statusCode, resp := range route.Response {
+		if resp.Branch == nil || resp.Branch.BlockKind != "switch-case" || len(resp.Branch.CaseValues) == 0 {
+			continue
+		}
+		for _, val := range resp.Branch.CaseValues {
+			method := strings.ToUpper(val)
+			if !isValidHTTPMethodStr(method) {
+				continue
+			}
+			if methodResponses[method] == nil {
+				methodResponses[method] = make(map[string]*ResponseInfo)
+			}
+			methodResponses[method][statusCode] = resp
+		}
+	}
+
+	if len(methodResponses) < 2 {
+		return nil // Not enough methods to split
+	}
+
+	var result []*RouteInfo
+	for method, responses := range methodResponses {
+		mr := &RouteInfo{
+			Path:                route.Path,
+			MountPath:           route.MountPath,
+			Method:              method,
+			Handler:             route.Handler,
+			Package:             route.Package,
+			File:                route.File,
+			Function:            route.Function,
+			Summary:             route.Summary,
+			Tags:                route.Tags,
+			Request:             route.Request,
+			Response:            responses,
+			Params:              route.Params,
+			UsedTypes:           route.UsedTypes,
+			Metadata:            route.Metadata,
+			GroupPrefix:         route.GroupPrefix,
+			detectedContentType: route.detectedContentType,
+		}
+		result = append(result, mr)
+	}
+	return result
+}
+
+func isValidHTTPMethodStr(s string) bool {
+	switch s {
+	case "GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD":
+		return true
+	}
+	return false
+}
+
+// ExtractionCallback is called for each node during unified tree visitor traversal.
+type ExtractionCallback func(node TrackerNodeInterface, route *RouteInfo)
+
+// visitChildren recursively traverses a node's children, calling each callback
+// for every visited node. Handles recursion and visited tracking in one place.
+func (e *Extractor) visitChildren(node TrackerNodeInterface, route *RouteInfo, callbacks []ExtractionCallback) {
+	for _, child := range node.GetChildren() {
+		for _, cb := range callbacks {
+			cb(child, route)
+		}
+		e.visitChildren(child, route, callbacks)
+	}
+}
+
+// extractRouteChildren extracts request, response, and params from children nodes
+// using the unified visitor with registered callbacks.
+func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *RouteInfo, mountTags []string, routes *[]*RouteInfo, visitedEdges map[string]bool) {
+	callbacks := []ExtractionCallback{
+		// Route-in-route detection
+		func(node TrackerNodeInterface, route *RouteInfo) {
+			if isRoute := e.executeRoutePattern(node, route); isRoute {
+				e.handleRouteNode(node, route, "", mountTags, routes)
+			}
+		},
+		// Request extraction
+		func(node TrackerNodeInterface, route *RouteInfo) {
+			if req := e.extractRequestFromNode(node, route); req != nil {
+				route.Request = req
+			}
+		},
+		// Response extraction with schema merging
+		func(node TrackerNodeInterface, route *RouteInfo) {
+			resp := e.extractResponseFromNode(node, route, visitedEdges)
+			if resp == nil || (resp.BodyType == "" && resp.StatusCode == 0) {
+				return
+			}
+			key := fmt.Sprintf("%d", resp.StatusCode)
+			if existing, ok := route.Response[key]; ok && resp.Schema != nil {
+				if existing.Schema == nil {
+					existing.BodyType = resp.BodyType
+					existing.Schema = resp.Schema
+				} else {
+					isDuplicate := schemasEqual(existing.Schema, resp.Schema)
+					if !isDuplicate {
+						for _, alt := range existing.AlternativeSchemas {
+							if schemasEqual(alt, resp.Schema) {
+								isDuplicate = true
+								break
+							}
+						}
+					}
+					if !isDuplicate {
+						existing.AlternativeSchemas = append(existing.AlternativeSchemas, resp.Schema)
+					}
+				}
+			} else {
+				route.Response[key] = resp
+			}
+		},
+		// Parameter extraction
+		func(node TrackerNodeInterface, route *RouteInfo) {
+			if param := e.extractParamFromNode(node, route); param != nil {
+				route.Params = append(route.Params, *param)
+			}
+		},
+		// Content-Type detection
+		e.checkContentTypePattern,
+		// Map index parameter extraction (mux.Vars)
+		e.extractParamsFromAssignmentMaps,
+	}
+
+	e.visitChildren(routeNode, route, callbacks)
 
 	// Extract parameters from the route node itself
 	if param := e.extractParamFromNode(routeNode, route); param != nil {
 		route.Params = append(route.Params, *param)
+	}
+}
+
+// extractParamsFromAssignmentMaps scans a node's assignment map for map index
+// expressions with string literal keys. When a variable is assigned from a
+// map index (e.g., id := vars["id"]), the key is extracted as a path parameter.
+// This handles patterns like mux.Vars(r)["id"] where the parameter name comes
+// from the map access, not from a function call argument.
+func (e *Extractor) extractParamsFromAssignmentMaps(node TrackerNodeInterface, route *RouteInfo) {
+	edge := node.GetEdge()
+	if edge == nil || edge.AssignmentMap == nil {
+		return
+	}
+
+	existingParams := make(map[string]bool)
+	for _, p := range route.Params {
+		existingParams[p.Name] = true
+	}
+
+	for _, assignments := range edge.AssignmentMap {
+		for _, assignment := range assignments {
+			val := &assignment.Value
+			if val.GetKind() != metadata.KindIndex {
+				continue
+			}
+			// The index key is in val.Fun
+			if val.Fun == nil || val.Fun.GetKind() != metadata.KindLiteral {
+				continue
+			}
+			key := e.contextProvider.GetArgumentInfo(val.Fun)
+			key = strings.Trim(key, "\"")
+			if key == "" || existingParams[key] {
+				continue
+			}
+			// Add as a path parameter
+			route.Params = append(route.Params, Parameter{
+				Name:     key,
+				In:       "path",
+				Required: true,
+				Schema:   &Schema{Type: "string"},
+			})
+			existingParams[key] = true
+		}
 	}
 }
 
@@ -440,6 +881,15 @@ func joinPaths(a, b string) string {
 	b = strings.TrimLeft(b, "/")
 	if a == "" {
 		return "/" + b
+	}
+	// Avoid double-mounting: if b already starts with a's last segment,
+	// strip the overlap. e.g. joinPaths("/payment", "payment/process") → "/payment/process"
+	aBase := a
+	if idx := strings.LastIndex(a, "/"); idx >= 0 {
+		aBase = a[idx+1:]
+	}
+	if aBase != "" && strings.HasPrefix(b, aBase+"/") {
+		return a + "/" + b[len(aBase)+1:]
 	}
 	return a + "/" + b
 }
@@ -503,47 +953,7 @@ func NewResponsePatternMatcher(pattern ResponsePattern, cfg *APISpecConfig, cont
 
 // MatchNode checks if a node matches the response pattern
 func (r *ResponsePatternMatcherImpl) MatchNode(node TrackerNodeInterface) bool {
-	if node == nil || node.GetEdge() == nil {
-		return false
-	}
-
-	edge := node.GetEdge()
-	callName := r.contextProvider.GetString(edge.Callee.Name)
-	recvType := r.contextProvider.GetString(edge.Callee.RecvType)
-	recvPkg := r.contextProvider.GetString(edge.Callee.Pkg)
-
-	// Build fully qualified receiver type
-	fqRecvType := recvPkg
-	if fqRecvType != "" && recvType != "" {
-		fqRecvType += "." + recvType
-	} else if recvType != "" {
-		fqRecvType = recvType
-	}
-
-	// Check call regex
-	if r.pattern.CallRegex != "" && !r.matchPattern(r.pattern.CallRegex, callName) {
-		return false
-	}
-
-	// Check function name regex
-	if r.pattern.FunctionNameRegex != "" {
-		funcName := r.contextProvider.GetString(edge.Caller.Name)
-		if !r.matchPattern(r.pattern.FunctionNameRegex, funcName) {
-			return false
-		}
-	}
-
-	// Check receiver type
-	if r.pattern.RecvTypeRegex != "" {
-		re, err := getCachedRegex(r.pattern.RecvTypeRegex)
-		if err != nil || !re.MatchString(fqRecvType) {
-			return false
-		}
-	} else if r.pattern.RecvType != "" && r.pattern.RecvType != fqRecvType {
-		return false
-	}
-
-	return true
+	return baseMatchNode(node, r.pattern.BasePattern, r.contextProvider)
 }
 
 // GetPattern returns the response pattern
@@ -553,28 +963,21 @@ func (r *ResponsePatternMatcherImpl) GetPattern() interface{} {
 
 // GetPriority returns the priority of this pattern
 func (r *ResponsePatternMatcherImpl) GetPriority() int {
-	priority := 0
-	if r.pattern.CallRegex != "" {
-		priority += 10
-	}
-	if r.pattern.FunctionNameRegex != "" {
-		priority += 5
-	}
-	if r.pattern.RecvTypeRegex != "" || r.pattern.RecvType != "" {
-		priority += 3
-	}
-	return priority
+	return basePriority(r.pattern.BasePattern)
 }
 
 // ExtractResponse extracts response information from a matched node
+//
+//nolint:gocyclo // response extraction with multiple pattern types
 func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, route *RouteInfo) *ResponseInfo {
 	var (
 		statusResolved bool
 	)
 
-	// Get least status code from response map
+	// Get least status code from response map (sorted for determinism)
 	leastStatusCode := 0
-	for _, resp := range route.Response {
+	for _, key := range slices.Sorted(maps.Keys(route.Response)) {
+		resp := route.Response[key]
 		if resp.StatusCode < leastStatusCode {
 			leastStatusCode = resp.StatusCode
 		}
@@ -592,10 +995,29 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 
 	edge := node.GetEdge()
 	if r.pattern.StatusFromArg && len(edge.Args) > r.pattern.StatusArgIndex {
-		statusStr := r.contextProvider.GetArgumentInfo(edge.Args[r.pattern.StatusArgIndex])
+		arg := edge.Args[r.pattern.StatusArgIndex]
+		statusStr := r.contextProvider.GetArgumentInfo(arg)
 		if status, ok := r.schemaMapper.MapStatusCode(statusStr); ok {
 			statusResolved = true
 			respInfo.StatusCode = status
+		} else if arg.GetKind() == metadata.KindIdent {
+			// Status code stored in a variable — resolve via assignment map
+			if assignments, exists := edge.AssignmentMap[arg.GetName()]; exists && len(assignments) > 0 {
+				assignedValue := r.contextProvider.GetArgumentInfo(&assignments[0].Value)
+				if status, ok := r.schemaMapper.MapStatusCode(assignedValue); ok {
+					statusResolved = true
+					respInfo.StatusCode = status
+				}
+			}
+		} else if arg.GetKind() == metadata.KindCall {
+			// Status code from function call — check if the callee has a
+			// constant return value (e.g., func getStatus() int { return 200 })
+			if resolved := r.resolveCallReturnValue(arg); resolved != "" {
+				if status, ok := r.schemaMapper.MapStatusCode(resolved); ok {
+					statusResolved = true
+					respInfo.StatusCode = status
+				}
+			}
 		}
 	}
 
@@ -605,10 +1027,12 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 	}
 
 	if r.pattern.TypeFromArg && len(edge.Args) > r.pattern.TypeArgIndex {
-		// If status code is not from argument, find the first response with no body type
+		// If status code is not from argument, find the lowest valid status code
+		// with no body type assigned yet. Skip bodyless codes (1xx, 204, 304).
 		if !r.pattern.StatusFromArg {
-			for _, resp := range route.Response {
-				if resp.BodyType == "" && resp.StatusCode >= 100 && resp.StatusCode < 600 {
+			for _, key := range slices.Sorted(maps.Keys(route.Response)) {
+				resp := route.Response[key]
+				if resp.BodyType == "" && resp.StatusCode >= 100 && resp.StatusCode < 600 && !isBodylessStatusCode(resp.StatusCode) {
 					respInfo.StatusCode = resp.StatusCode
 					break
 				}
@@ -617,20 +1041,38 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 
 		arg := edge.Args[r.pattern.TypeArgIndex]
 
-		// If the argument is a type conversion, get the value of the original argument
+		// If the argument is a type conversion (e.g., []byte("text")),
+		// use the conversion target type, not the inner literal.
+		var conversionTargetType string
 		if arg.GetKind() == metadata.KindTypeConversion {
-			arg = arg.Args[0]
+			conversionTargetType = r.contextProvider.GetArgumentInfo(arg)
+			if len(arg.Args) > 0 {
+				arg = arg.Args[0]
+			}
 		}
 
 		bodyType := r.contextProvider.GetArgumentInfo(arg)
+		// Prefer the conversion target type if available
+		if conversionTargetType != "" {
+			bodyType = conversionTargetType
+		}
+
+		// Preserve generic type from the argument's raw type info.
+		// When the arg type is a generic instantiation (e.g., "APIResponse[pkg.User]"),
+		// use it instead of the resolved type which may lose the wrapper.
+		rawArgType := r.contextProvider.GetString(arg.Type)
+		if strings.Contains(rawArgType, "[") && !strings.HasPrefix(rawArgType, "[]") && !strings.HasPrefix(rawArgType, "map[") {
+			bodyType = rawArgType
+		}
 
 		// Check if this is a literal value - if so, determine appropriate type
 		if arg.GetKind() == metadata.KindLiteral {
 			// For literal values, determine the appropriate type based on the value
 			bodyType = determineLiteralType(bodyType)
-		} else {
-
-			// Trace type origin for non-literal arguments
+		} else if !strings.Contains(bodyType, "[") || strings.HasPrefix(bodyType, "[]") || strings.HasPrefix(bodyType, "map[") {
+			// Trace type origin for non-literal, non-generic arguments.
+			// Skip type resolution for generic types (e.g., "APIResponse[User]")
+			// to preserve the wrapper type and enable generic struct instantiation.
 			bodyType = r.resolveTypeOrigin(arg, node, bodyType)
 
 			// Apply dereferencing if needed
@@ -641,12 +1083,58 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 
 		respInfo.BodyType = preprocessingBodyType(bodyType)
 
-		schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
-		respInfo.Schema = schema
+		// In response-writer context, []byte means raw binary content.
+		if bodyType == "[]byte" {
+			respInfo.Schema = &Schema{Type: "string", Format: "binary"}
+		} else {
+			schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
+			respInfo.Schema = schema
+		}
+	}
+
+	// If no type was extracted from args but the pattern specifies a default
+	// body type (e.g., fmt.Fprintf → "string", io.Copy → "[]byte"), use it.
+	if respInfo.BodyType == "" && r.pattern.DefaultBodyType != "" {
+		bodyType := r.pattern.DefaultBodyType
+		respInfo.BodyType = preprocessingBodyType(bodyType)
+		if bodyType == "[]byte" {
+			// For io.Copy, try to trace the reader source to distinguish
+			// binary (os.Open) from text (strings.NewReader).
+			isBinary := true
+			if len(edge.Args) > 1 {
+				readerArg := edge.Args[1]
+				readerInfo := r.contextProvider.GetArgumentInfo(readerArg)
+				if strings.Contains(readerInfo, "strings") || strings.Contains(readerInfo, "NewReader") {
+					isBinary = false
+				}
+				// Also check assignment map for variable readers
+				if readerArg.GetKind() == metadata.KindIdent {
+					if assignments, exists := edge.AssignmentMap[readerArg.GetName()]; exists && len(assignments) > 0 {
+						assignedInfo := r.contextProvider.GetArgumentInfo(&assignments[0].Value)
+						if strings.Contains(assignedInfo, "strings") || strings.Contains(assignedInfo, "NewReader") {
+							isBinary = false
+						}
+					}
+				}
+			}
+			if isBinary {
+				respInfo.Schema = &Schema{Type: "string", Format: "binary"}
+			} else {
+				respInfo.Schema = &Schema{Type: "string"}
+			}
+		} else {
+			schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
+			respInfo.Schema = schema
+		}
 	}
 
 	if !statusResolved && respInfo.BodyType == "" {
 		return nil
+	}
+
+	// Propagate branch context from the call graph edge
+	if node.GetEdge() != nil {
+		respInfo.Branch = node.GetEdge().Branch
 	}
 
 	return respInfo
@@ -654,35 +1142,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
 func (r *ResponsePatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
-	// NEW: If the argument has resolved type information, use it
-	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
-		return resolvedType
-	}
-
-	// If it's a generic type with a concrete resolution, use it
-	if arg.IsGenericType && arg.GenericTypeName != -1 {
-		if concreteType, exists := node.GetTypeParamMap()[arg.GetGenericTypeName()]; exists {
-			return concreteType
-		}
-	}
-
-	// Original logic for type resolution
-	if arg.GetKind() == metadata.KindIdent {
-		// Check if this variable has assignments that might give us more type information
-		edge := node.GetEdge()
-		if assignments, exists := edge.AssignmentMap[arg.GetName()]; exists {
-			for _, assignment := range assignments {
-				if assignment.ConcreteType != 0 {
-					concreteType := r.contextProvider.GetString(assignment.ConcreteType)
-					if concreteType != "" {
-						return concreteType
-					}
-				}
-			}
-		}
-	}
-
-	return originalType
+	return sharedResolveTypeOrigin(arg, node, originalType, r.contextProvider, false)
 }
 
 // ParamPatternMatcherImpl implements ParamPatternMatcher
@@ -701,47 +1161,7 @@ func NewParamPatternMatcher(pattern ParamPattern, cfg *APISpecConfig, contextPro
 
 // MatchNode checks if a node matches the param pattern
 func (p *ParamPatternMatcherImpl) MatchNode(node TrackerNodeInterface) bool {
-	if node == nil || node.GetEdge() == nil {
-		return false
-	}
-
-	edge := node.GetEdge()
-	callName := p.contextProvider.GetString(edge.Callee.Name)
-	recvType := p.contextProvider.GetString(edge.Callee.RecvType)
-	recvPkg := p.contextProvider.GetString(edge.Callee.Pkg)
-
-	// Build fully qualified receiver type
-	fqRecvType := recvPkg
-	if fqRecvType != "" && recvType != "" {
-		fqRecvType += "." + recvType
-	} else if recvType != "" {
-		fqRecvType = recvType
-	}
-
-	// Check call regex
-	if p.pattern.CallRegex != "" && !p.matchPattern(p.pattern.CallRegex, callName) {
-		return false
-	}
-
-	// Check function name regex
-	if p.pattern.FunctionNameRegex != "" {
-		funcName := p.contextProvider.GetString(edge.Caller.Name)
-		if !p.matchPattern(p.pattern.FunctionNameRegex, funcName) {
-			return false
-		}
-	}
-
-	// Check receiver type
-	if p.pattern.RecvTypeRegex != "" {
-		re, err := getCachedRegex(p.pattern.RecvTypeRegex)
-		if err != nil || !re.MatchString(fqRecvType) {
-			return false
-		}
-	} else if p.pattern.RecvType != "" && p.pattern.RecvType != fqRecvType {
-		return false
-	}
-
-	return true
+	return baseMatchNode(node, p.pattern.BasePattern, p.contextProvider)
 }
 
 // GetPattern returns the param pattern
@@ -751,17 +1171,7 @@ func (p *ParamPatternMatcherImpl) GetPattern() interface{} {
 
 // GetPriority returns the priority of this pattern
 func (p *ParamPatternMatcherImpl) GetPriority() int {
-	priority := 0
-	if p.pattern.CallRegex != "" {
-		priority += 10
-	}
-	if p.pattern.FunctionNameRegex != "" {
-		priority += 5
-	}
-	if p.pattern.RecvTypeRegex != "" || p.pattern.RecvType != "" {
-		priority += 3
-	}
-	return priority
+	return basePriority(p.pattern.BasePattern)
 }
 
 // ExtractParam extracts parameter information from a matched node
@@ -812,35 +1222,7 @@ func (p *ParamPatternMatcherImpl) ExtractParam(node TrackerNodeInterface, route 
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
 func (p *ParamPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
-	// NEW: If the argument has resolved type information, use it
-	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
-		return resolvedType
-	}
-
-	// If it's a generic type with a concrete resolution, use it
-	if arg.IsGenericType && arg.GenericTypeName != -1 {
-		if concreteType, exists := node.GetTypeParamMap()[arg.GetGenericTypeName()]; exists {
-			return concreteType
-		}
-	}
-
-	// Original logic for type resolution
-	if arg.GetKind() == metadata.KindIdent {
-		// Check if this variable has assignments that might give us more type information
-		edge := node.GetEdge()
-		if assignments, exists := edge.AssignmentMap[arg.GetName()]; exists {
-			for _, assignment := range assignments {
-				if assignment.ConcreteType != 0 {
-					concreteType := p.contextProvider.GetString(assignment.ConcreteType)
-					if concreteType != "" {
-						return concreteType
-					}
-				}
-			}
-		}
-	}
-
-	return originalType
+	return sharedResolveTypeOrigin(arg, node, originalType, p.contextProvider, false)
 }
 
 // OverrideApplierImpl implements OverrideApplier
@@ -866,8 +1248,8 @@ func (o *OverrideApplierImpl) ApplyOverrides(routeInfo *RouteInfo) {
 				res.StatusCode = override.ResponseStatus
 			}
 			if override.ResponseType != "" && routeInfo.Response != nil {
-				for _, res := range routeInfo.Response {
-					res.BodyType = preprocessingBodyType(override.ResponseType)
+				for _, key := range slices.Sorted(maps.Keys(routeInfo.Response)) {
+					routeInfo.Response[key].BodyType = preprocessingBodyType(override.ResponseType)
 				}
 			}
 			if len(override.Tags) > 0 {

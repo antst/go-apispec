@@ -1,4 +1,21 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package spec
+
+// floatPtr returns a pointer to a float64 value.
+func floatPtr(v float64) *float64 { return &v }
 
 // OpenAPISpec represents the root OpenAPI specification
 type OpenAPISpec struct {
@@ -85,7 +102,7 @@ type Parameter struct {
 	Required    bool                   `yaml:"required,omitempty" json:"required,omitempty"`
 	Schema      *Schema                `yaml:"schema,omitempty" json:"schema,omitempty"`
 	Example     interface{}            `yaml:"example,omitempty" json:"example,omitempty"`
-	Extensions  map[string]interface{} `yaml:",inline" json:",inline"`
+	Extensions  map[string]interface{} `yaml:",inline" json:"Extensions,omitempty"`
 }
 
 // RequestBody represents an OpenAPI request body
@@ -141,8 +158,8 @@ type Schema struct {
 	MinLength            int                    `yaml:"minLength,omitempty" json:"minLength,omitempty"`
 	MaxLength            int                    `yaml:"maxLength,omitempty" json:"maxLength,omitempty"`
 	Pattern              string                 `yaml:"pattern,omitempty" json:"pattern,omitempty"`
-	Minimum              float64                `yaml:"minimum,omitempty" json:"minimum,omitempty"`
-	Maximum              float64                `yaml:"maximum,omitempty" json:"maximum,omitempty"`
+	Minimum              *float64               `yaml:"minimum,omitempty" json:"minimum,omitempty"`
+	Maximum              *float64               `yaml:"maximum,omitempty" json:"maximum,omitempty"`
 	ExclusiveMinimum     bool                   `yaml:"exclusiveMinimum,omitempty" json:"exclusiveMinimum,omitempty"`
 	ExclusiveMaximum     bool                   `yaml:"exclusiveMaximum,omitempty" json:"exclusiveMaximum,omitempty"`
 	MultipleOf           float64                `yaml:"multipleOf,omitempty" json:"multipleOf,omitempty"`

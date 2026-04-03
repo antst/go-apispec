@@ -1,6 +1,6 @@
-# apispec
+# go-apispec — Call Graph Visualization
 
-**License:** This project is licensed under the Apache License 2.0, Copyright 2025 Ehab Terra. See the [LICENSE](./LICENSE) and [NOTICE](./NOTICE) files for details.
+**License:** Apache License 2.0. See [LICENSE](../LICENSE) and [NOTICE](../NOTICE).
 
 # Cytoscape.js Call Tree Diagram
 
@@ -58,10 +58,10 @@ This implementation provides a **tree-based call diagram** using Cytoscape.js th
 
 ## Usage
 
-The diagram is automatically generated when you run the apispec tool:
+The diagram is generated with the `--diagram` flag:
 
 ```bash
-./apispec -config your-config.yaml
+apispec --dir ./your-project --diagram diagram.html
 ```
 
 This creates `diagram.html` which you can open in any web browser.
@@ -107,10 +107,14 @@ Works in all modern browsers:
 ## File Structure
 
 ```
-apispec/
-├── internal/spec/mapper.go    # Cytoscape generation logic
-├── diagram.html              # Generated interactive diagram
-└── CYTOGRAPHE_README.md      # This documentation
+go-apispec/
+├── internal/spec/visualization.go                # Cytoscape generation logic
+├── internal/spec/export.go                       # Export functions
+├── internal/spec/paginated_export.go             # Paginated diagram support
+├── internal/spec/templates/cytoscape_template.html   # Main diagram template
+├── internal/spec/templates/paginated_template.html   # Paginated diagram template
+├── internal/spec/templates/server_template.html      # Server-based diagram template
+└── docs/CYTOGRAPHE_README.md                     # This documentation
 ```
 
-The implementation is integrated into the existing `MapMetadataToOpenAPI` function and automatically generates the diagram alongside the OpenAPI specification. 
+The visualization code is in `internal/spec/visualization.go` and `export.go`. HTML templates are in `internal/spec/templates/` and embedded via `//go:embed`. Edges carry CFG branch context (if-then, if-else, switch-case) with color-coded rendering and case value labels.

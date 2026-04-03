@@ -1,3 +1,17 @@
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
@@ -16,6 +30,8 @@ const (
 )
 
 // ExprToCallArgument returns a structured CallArgument for an expression.
+//
+//nolint:gocyclo // AST expression to call argument conversion
 func ExprToCallArgument(expr ast.Expr, info *types.Info, pkgName string, fset *token.FileSet, meta *Metadata) *CallArgument {
 	if expr == nil {
 		arg := NewCallArgument(meta)
@@ -166,7 +182,6 @@ func handleSelector(e *ast.SelectorExpr, info *types.Info, pkgName string, fset 
 							receiverArg.SetType(receiverType)
 						}
 					}
-
 				}
 				typeStr = strings.TrimPrefix(obj.Type().String(), pkg+defaultSep)
 			}
@@ -542,6 +557,8 @@ func CallArgToString(arg *CallArgument) string {
 }
 
 // callArgToString converts a CallArgument to its string representation
+//
+//nolint:gocyclo // call argument to string serialization with multiple types
 func callArgToString(arg *CallArgument, parent *CallArgument) string {
 	switch arg.GetKind() {
 	case KindIdent:

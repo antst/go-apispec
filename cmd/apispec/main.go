@@ -1,4 +1,4 @@
-// Copyright 2025 Ehab Terra
+// Copyright 2025 Ehab Terra, 2025-2026 Anton Starikov
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,19 +16,22 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"time"
 
-	"github.com/ehabterra/apispec/internal/engine"
-	"github.com/ehabterra/apispec/internal/profiler"
-	"github.com/ehabterra/apispec/spec"
 	"gopkg.in/yaml.v3"
+
+	"github.com/antst/go-apispec/internal/engine"
+	"github.com/antst/go-apispec/internal/profiler"
+	"github.com/antst/go-apispec/spec"
 )
 
 // stringSliceFlag implements flag.Value for string slices
@@ -51,6 +54,29 @@ var (
 	GoVersion = "unknown"
 )
 
+// extractVCSInfo extracts VCS information from build settings
+func extractVCSInfo(settings []debug.BuildSetting) (hasVCSInfo, isModified bool) {
+	for _, setting := range settings {
+		switch setting.Key {
+		case "vcs.revision":
+			hasVCSInfo = true
+			if len(setting.Value) >= 7 {
+				Commit = setting.Value[:7] // Short commit hash
+			} else {
+				Commit = setting.Value
+			}
+		case "vcs.time":
+			hasVCSInfo = true
+			BuildDate = setting.Value
+		case "vcs.modified":
+			if setting.Value == "true" {
+				isModified = true
+			}
+		}
+	}
+	return hasVCSInfo, isModified
+}
+
 // detectVersionInfo attempts to detect version information at runtime
 func detectVersionInfo() {
 	// If version info was already injected via -ldflags, don't override it
@@ -71,26 +97,7 @@ func detectVersionInfo() {
 		}
 
 		// Extract commit, build time, and other VCS info from build settings
-		hasVCSInfo := false
-		isModified := false
-		for _, setting := range info.Settings {
-			switch setting.Key {
-			case "vcs.revision":
-				hasVCSInfo = true
-				if len(setting.Value) >= 7 {
-					Commit = setting.Value[:7] // Short commit hash
-				} else {
-					Commit = setting.Value
-				}
-			case "vcs.time":
-				hasVCSInfo = true
-				BuildDate = setting.Value
-			case "vcs.modified":
-				if setting.Value == "true" {
-					isModified = true
-				}
-			}
-		}
+		hasVCSInfo, isModified := extractVCSInfo(info.Settings)
 
 		// Add dirty flag if modified (but only if we don't already have it)
 		if isModified && !strings.Contains(Version, "+dirty") {
@@ -107,7 +114,7 @@ func detectVersionInfo() {
 	if Version == "0.0.1" || Version == "(devel)" {
 		// This happens when installed via go install without VCS info
 		// Try to at least show that it's a go install version
-		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Path == "github.com/ehabterra/apispec" {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Path == "github.com/antst/go-apispec" {
 			Version = "latest (go install)"
 		} else {
 			Version = "unknown (go install)"
@@ -169,6 +176,9 @@ type CLIConfig struct {
 	AutoIncludeFrameworkPackages bool
 	AutoExcludeTests             bool
 	AutoExcludeMocks             bool
+	// Output naming
+	ShortNames    bool
+	ShortNamesSet bool // tracks whether the flag was explicitly set
 	// Profiling options
 	CPUProfile         bool
 	MemProfile         bool
@@ -298,6 +308,9 @@ func parseFlags(args []string) (*CLIConfig, error) {
 
 	fs.BoolVar(&config.SkipCGOPackages, "skip-cgo", true, "Skip packages with CGO dependencies that may cause build errors")
 
+	// Output naming flags
+	fs.BoolVar(&config.ShortNames, "short-names", true, "Use short names for operationIds and schema names (strip module path)")
+
 	// Profiling flags
 	fs.BoolVar(&config.CPUProfile, "cpu-profile", false, "Enable CPU profiling")
 	fs.BoolVar(&config.MemProfile, "mem-profile", false, "Enable memory profiling")
@@ -339,10 +352,13 @@ func parseFlags(args []string) (*CLIConfig, error) {
 		config.InputDir = fs.Args()[0]
 	}
 
-	// Check if output flag was explicitly set
+	// Check if output and short-names flags were explicitly set
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "output" || f.Name == "o" {
 			config.OutputFlagSet = true
+		}
+		if f.Name == "short-names" {
+			config.ShortNamesSet = true
 		}
 	})
 
@@ -351,6 +367,19 @@ func parseFlags(args []string) (*CLIConfig, error) {
 		config.DiagramPageSize = 50
 	} else if config.DiagramPageSize > 500 {
 		config.DiagramPageSize = 500
+	}
+
+	// Resolve user-facing output paths to absolute (relative to CWD) at the CLI boundary.
+	// This prevents path doubling when the engine later joins with moduleRoot,
+	// because filepath.Join with an absolute second argument returns it unchanged.
+	if config.OutputFlagSet && !filepath.IsAbs(config.OutputFile) {
+		config.OutputFile, _ = filepath.Abs(config.OutputFile)
+	}
+	if config.DiagramPath != "" && !filepath.IsAbs(config.DiagramPath) {
+		config.DiagramPath, _ = filepath.Abs(config.DiagramPath)
+	}
+	if config.OutputConfig != "" && !filepath.IsAbs(config.OutputConfig) {
+		config.OutputConfig, _ = filepath.Abs(config.OutputConfig)
 	}
 
 	return config, nil
@@ -398,6 +427,8 @@ func runGeneration(config *CLIConfig) (*spec.OpenAPISpec, *engine.Engine, error)
 		AutoExcludeTests:             config.AutoExcludeTests,
 		AutoExcludeMocks:             config.AutoExcludeMocks,
 		Verbose:                      config.Verbose,
+		ShortNames:                   config.ShortNames,
+		ShortNamesSet:                config.ShortNamesSet,
 	}
 
 	// Create engine and generate OpenAPI spec
@@ -467,22 +498,79 @@ func generatePerformanceAnalysis(prof *profiler.Profiler, config *CLIConfig) err
 	return nil
 }
 
+// toSortedYAML converts a value to a yaml.Node tree with all map keys sorted.
+func toSortedYAML(v interface{}) (*yaml.Node, error) {
+	// Marshal to yaml.Node first, then sort all mapping keys.
+	var doc yaml.Node
+	raw, err := yaml.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	sortYAMLNode(&doc)
+	return &doc, nil
+}
+
+// sortYAMLNode recursively sorts all mapping keys in a yaml.Node tree.
+func sortYAMLNode(node *yaml.Node) {
+	if node == nil {
+		return
+	}
+	switch node.Kind {
+	case yaml.DocumentNode:
+		for _, child := range node.Content {
+			sortYAMLNode(child)
+		}
+	case yaml.MappingNode:
+		// Content is [key, value, key, value, ...]
+		n := len(node.Content) / 2
+		if n > 1 {
+			pairs := make([][2]*yaml.Node, n)
+			for i := 0; i < n; i++ {
+				pairs[i] = [2]*yaml.Node{node.Content[i*2], node.Content[i*2+1]}
+			}
+			sort.Slice(pairs, func(i, j int) bool {
+				return pairs[i][0].Value < pairs[j][0].Value
+			})
+			for i := 0; i < n; i++ {
+				node.Content[i*2] = pairs[i][0]
+				node.Content[i*2+1] = pairs[i][1]
+			}
+		}
+		// Recurse into values
+		for i := 1; i < len(node.Content); i += 2 {
+			sortYAMLNode(node.Content[i])
+		}
+	case yaml.SequenceNode:
+		for _, child := range node.Content {
+			sortYAMLNode(child)
+		}
+	}
+}
+
 // writeOutput writes OpenAPI spec directly to file using streaming encoder (like metadata)
 func writeOutput(openAPISpec interface{}, config *CLIConfig, genEngine *engine.Engine) error {
+	// Helper to write YAML with sorted map keys
+	writeYAML := func(w *yaml.Encoder) error {
+		node, err := toSortedYAML(openAPISpec)
+		if err != nil {
+			return fmt.Errorf("failed to build sorted YAML: %w", err)
+		}
+		if err := w.Encode(node); err != nil {
+			return fmt.Errorf("failed to encode sorted YAML: %w", err)
+		}
+		return w.Close()
+	}
+
 	// If output is the default (openapi.json) and no explicit output flag was set, output to stdout
 	if config.OutputFile == engine.DefaultOutputFile && !config.OutputFlagSet {
 		ext := strings.ToLower(filepath.Ext("openapi.json"))
 		if ext == ".yaml" || ext == ".yml" {
 			encoder := yaml.NewEncoder(os.Stdout)
 			encoder.SetIndent(2)
-			if err := encoder.Encode(openAPISpec); err != nil {
-				err = encoder.Close()
-				if err != nil {
-					return fmt.Errorf("failed to close YAML encoder: %w", err)
-				}
-				return fmt.Errorf("failed to encode OpenAPI spec to YAML: %w", err)
-			}
-			return encoder.Close()
+			return writeYAML(encoder)
 		} else {
 			data, err := json.MarshalIndent(openAPISpec, "", "  ")
 			if err != nil {
@@ -492,10 +580,13 @@ func writeOutput(openAPISpec interface{}, config *CLIConfig, genEngine *engine.E
 			return nil
 		}
 	} else {
-		outputPath := filepath.Join(genEngine.ModuleRoot(), config.OutputFile)
+		outputPath := config.OutputFile
+		if !filepath.IsAbs(outputPath) {
+			outputPath = filepath.Join(genEngine.ModuleRoot(), outputPath)
+		}
 
 		// Create file
-		file, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+		file, err := os.OpenFile(outputPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644) //nolint:gosec // outputPath is derived from user-provided CLI flag
 		if err != nil {
 			return fmt.Errorf("failed to create output file: %w", err)
 		}
@@ -508,20 +599,10 @@ func writeOutput(openAPISpec interface{}, config *CLIConfig, genEngine *engine.E
 
 		ext := strings.ToLower(filepath.Ext(config.OutputFile))
 		if ext == ".yaml" || ext == ".yml" {
-			// Use direct file writing like metadata (no memory buffering)
 			encoder := yaml.NewEncoder(file)
 			encoder.SetIndent(2)
-
-			if err := encoder.Encode(openAPISpec); err != nil {
-				err = encoder.Close()
-				if err != nil {
-					return fmt.Errorf("failed to close YAML encoder: %w", err)
-				}
-				return fmt.Errorf("failed to encode OpenAPI spec to YAML: %w", err)
-			}
-
-			if err := encoder.Close(); err != nil {
-				return fmt.Errorf("failed to close YAML encoder: %w", err)
+			if err := writeYAML(encoder); err != nil {
+				return err
 			}
 		} else {
 			data, err := json.MarshalIndent(openAPISpec, "", "  ")
@@ -538,26 +619,9 @@ func writeOutput(openAPISpec interface{}, config *CLIConfig, genEngine *engine.E
 	return nil
 }
 
-func main() {
-	start := time.Now()
-	// Print copyright and license info at the very start
-	fmt.Println(engine.CopyrightNotice)
-
-	// Parse command line arguments
-	config, err := parseFlags(os.Args[1:])
-	if err != nil {
-		if err == flag.ErrHelp {
-			return
-		}
-		log.Fatalf("Failed to parse flags: %v", err)
-	}
-
-	// Handle version flag early
-	if config.ShowVersion {
-		printVersion()
-		os.Exit(0)
-	}
-
+// run executes the main logic and returns an error if something fails.
+// This is separated from main so that defers run properly before exit.
+func run(config *CLIConfig) error {
 	// Initialize profiling if enabled
 	var prof *profiler.Profiler
 	if config.CPUProfile || config.MemProfile || config.BlockProfile ||
@@ -580,7 +644,7 @@ func main() {
 
 		prof = profiler.NewProfiler(profConfig)
 		if err := prof.Start(); err != nil {
-			log.Fatalf("Failed to start profiling: %v", err)
+			return fmt.Errorf("failed to start profiling: %w", err)
 		}
 		defer func() {
 			if err := prof.Stop(); err != nil {
@@ -592,12 +656,12 @@ func main() {
 	// Generate OpenAPI specification with profiling
 	openAPISpec, genEngine, err := runGenerationWithProfiling(config, prof)
 	if err != nil {
-		log.Fatalf("%v", err)
+		return err
 	}
 
 	// Write output directly (like metadata) to avoid memory buffering
 	if err := writeOutput(openAPISpec, config, genEngine); err != nil {
-		log.Fatalf("%v", err)
+		return err
 	}
 
 	// Generate performance analysis if custom metrics are enabled
@@ -605,6 +669,33 @@ func main() {
 		if err := generatePerformanceAnalysis(prof, config); err != nil {
 			log.Printf("Failed to generate performance analysis: %v", err)
 		}
+	}
+
+	return nil
+}
+
+func main() {
+	start := time.Now()
+	// Print copyright and license info at the very start
+	fmt.Println(engine.CopyrightNotice)
+
+	// Parse command line arguments
+	config, err := parseFlags(os.Args[1:])
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		log.Fatalf("Failed to parse flags: %v", err)
+	}
+
+	// Handle version flag early
+	if config.ShowVersion {
+		printVersion()
+		return
+	}
+
+	if err := run(config); err != nil {
+		log.Fatalf("%v", err)
 	}
 
 	fmt.Printf("Time elapsed: %s\n", time.Since(start))

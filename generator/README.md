@@ -9,8 +9,8 @@ package main
 
 import (
     "fmt"
-    "github.com/ehabterra/apispec/generator"
-    "github.com/ehabterra/apispec/spec"
+    "github.com/antst/go-apispec/generator"
+    "github.com/antst/go-apispec/spec"
 )
 
 func main() {
@@ -36,9 +36,9 @@ package main
 
 import (
     "fmt"
-    "github.com/ehabterra/apispec/generator"
-    "github.com/ehabterra/apispec/spec"
-    intspec "github.com/ehabterra/apispec/internal/spec"
+    "github.com/antst/go-apispec/generator"
+    "github.com/antst/go-apispec/spec"
+    intspec "github.com/antst/go-apispec/internal/spec"
 )
 
 func main() {

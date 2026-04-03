@@ -18,10 +18,10 @@ The APISpec CLI tool is the main command-line interface for generating OpenAPI s
 
 ```bash
 # Install via Go
-go install github.com/ehabterra/apispec/cmd/apispec@latest
+go install github.com/antst/go-apispec/cmd/apispec@latest
 
 # Or build from source
-git clone https://github.com/ehabterra/apispec.git
+git clone https://github.com/antst/go-apispec.git
 cd apispec
 make build
 ```

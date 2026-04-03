@@ -1,275 +1,100 @@
-# Spec Package - OpenAPI Specification Generation
+# Spec Package — OpenAPI Specification Generation
 
-This package provides a clean, organized system for generating OpenAPI specifications from Go code metadata. It's designed to be framework-agnostic and easily extensible.
+This package generates OpenAPI 3.1 specifications from Go code metadata. It is framework-agnostic and pattern-driven.
 
 ## Architecture
 
-The spec package is organized into several focused components:
+```
+config.go          Pattern types + framework defaults
+  ↓
+extractor.go       Unified visitor + pattern matching → RouteInfo
+  ↓
+mapper.go          RouteInfo → OpenAPI schemas + paths
+  ↓
+openapi.go         OpenAPI 3.1 type definitions
+```
 
-### 1. Configuration (`config.go`)
+### Key Files
 
-The configuration system is framework-agnostic and uses pattern-based extraction:
+| File | Purpose |
+|------|---------|
+| `config.go` | `BasePattern`, 6 pattern types, `APISpecConfig`, 6 framework defaults |
+| `extractor.go` | `Extractor`, `visitChildren` visitor, response/request/param/content-type extraction, interface resolution, conditional method detection |
+| `pattern_matchers.go` | `baseMatchNode`, `basePriority`, Route/Mount/Request matchers |
+| `mapper.go` | `MapMetadataToOpenAPI`, schema generation, generic struct instantiation, shortening, disambiguation |
+| `type_utils.go` | `sharedResolveTypeOrigin` — single type resolution function for all matchers |
+| `tracker.go` | `TrackerTree` — transforms flat call graph into traversable tree |
+| `openapi.go` | OpenAPI 3.1 struct types (`OpenAPISpec`, `PathItem`, `Operation`, `Schema`, etc.) |
+| `schema_mapper.go` | Low-level Go type → OpenAPI type mapping |
+| `visualization.go` | Cytoscape.js call graph diagram generation |
+| `export.go` | HTML/JSON export for diagrams |
+
+### Pattern System
+
+All pattern types embed `BasePattern` with shared matching fields:
 
 ```go
-type APISpecConfig struct {
-    Framework FrameworkConfig `yaml:"framework"`  // Framework-specific patterns
-    TypeMapping []TypeMapping `yaml:"typeMapping"` // Go to OpenAPI type mappings
-    Overrides []Override `yaml:"overrides"`        // Manual overrides
-    Include IncludeExclude `yaml:"include"`        // Include/exclude filters
-    Exclude IncludeExclude `yaml:"exclude"`
-    Defaults Defaults `yaml:"defaults"`            // Default values
-    // OpenAPI metadata
-    Info Info `yaml:"info"`
-    Servers []Server `yaml:"servers"`
-    // ... other OpenAPI fields
+type BasePattern struct {
+    CallRegex, FunctionNameRegex, RecvType, RecvTypeRegex string
+    CallerPkgPatterns, CallerRecvTypePatterns             []string
+    CalleePkgPatterns, CalleeRecvTypePatterns             []string
 }
 ```
 
-#### Framework Configuration
+6 pattern types: `RoutePattern`, `RequestBodyPattern`, `ResponsePattern`, `ParamPattern`, `MountPattern`, `ContentTypePattern`.
 
-Each framework has its own extraction patterns:
+All 5 matcher implementations delegate to `baseMatchNode()` and `basePriority()` — zero duplicated matching logic.
+
+### Extraction Pipeline
+
+The `Extractor` uses a unified visitor (`visitChildren`) with registered callbacks:
 
 ```go
-type FrameworkConfig struct {
-    RoutePatterns       []RoutePattern       `yaml:"routePatterns"`
-    RequestBodyPatterns []RequestBodyPattern `yaml:"requestBodyPatterns"`
-    ResponsePatterns    []ResponsePattern    `yaml:"responsePatterns"`
-    ParamPatterns       []ParamPattern       `yaml:"paramPatterns"`
-    MountPatterns       []MountPattern       `yaml:"mountPatterns"`
+callbacks := []ExtractionCallback{
+    routeDetection,
+    requestExtraction,
+    responseExtraction,
+    paramExtraction,
+    contentTypeDetection,
+    mapIndexParamExtraction,
 }
+e.visitChildren(node, route, callbacks)
 ```
 
-#### Pattern-Based Extraction
+Adding a new extraction type requires only registering a callback — no traversal code.
 
-Patterns define how to extract information from function calls:
+### CFG Integration
+
+Call graph edges and assignments carry `BranchContext` from `golang.org/x/tools/go/cfg`:
 
 ```go
-type RoutePattern struct {
-    CallRegex         string   `yaml:"callRegex,omitempty"`         // e.g., '^BindJSON$'
-    FunctionNameRegex string   `yaml:"functionNameRegex,omitempty"` // e.g., '.*Handler$'
-    MethodFromCall    bool     `yaml:"methodFromCall,omitempty"`    // Extract method from function name
-    PathFromArg       bool     `yaml:"pathFromArg,omitempty"`       // Extract path from argument
-    HandlerFromArg    bool     `yaml:"handlerFromArg,omitempty"`    // Extract handler from argument
-    PathArgIndex      int      `yaml:"pathArgIndex,omitempty"`      // Which arg contains path
-    HandlerArgIndex   int      `yaml:"handlerArgIndex,omitempty"`   // Which arg contains handler
+type BranchContext struct {
+    BlockIndex    int32
+    BlockKind     string   // "if-then", "if-else", "switch-case"
+    CaseValues    []string // e.g., ["GET", "POST"] for switch cases
 }
 ```
 
-### 2. Extraction (`extractors.go`)
+This enables conditional HTTP method detection (`switch r.Method`) and branch-aware analysis.
 
-The extractor system uses the configuration patterns to extract information from metadata:
+### Type Resolution
 
-```go
-type Extractor struct {
-    meta *metadata.Metadata
-    cfg  *APISpecConfig
-}
+`sharedResolveTypeOrigin()` in `type_utils.go` is the single function for resolving argument types across all matchers. It checks:
+1. `arg.GetResolvedType()` — direct resolution
+2. Generic type parameter maps
+3. Assignment maps for variable tracing
+4. Constant return values for cross-function resolution
 
-func (e *Extractor) ExtractRoutes() []RouteInfo
-```
+### Interface Resolution
 
-#### Route Information
+When a route handler is an interface method:
+1. `isInterfaceHandler()` checks metadata for interface types
+2. `resolveInterfaceHandler()` searches the call graph for concrete implementations
+3. Response patterns are matched against concrete method's edges
 
-```go
-type RouteInfo struct {
-    Path     string
-    Method   string
-    Handler  string
-    Package  string
-    File     string
-    Function string
-    Summary  string
-    Tags     []string
-    Request  *RequestInfo
-    Response *ResponseInfo
-    Params   []Parameter
-}
-```
+### Templates
 
-### 3. Mapping (`mapper.go`)
-
-The mapper converts extracted route information into OpenAPI specifications:
-
-```go
-func MapMetadataToOpenAPI(meta *metadata.Metadata, cfg *APISpecConfig, genCfg GeneratorConfig) (*OpenAPISpec, error)
-```
-
-### 4. OpenAPI Types (`openapi.go`)
-
-Complete OpenAPI 3.0 specification types for building the final output.
-
-## Usage
-
-### Basic Usage
-
-```go
-// Load configuration
-cfg, err := LoadAPISpecConfig("apispec.yaml")
-if err != nil {
-    log.Fatal(err)
-}
-
-// Use framework-specific defaults
-cfg = DefaultChiConfig()
-
-// Generate OpenAPI spec
-genCfg := GeneratorConfig{
-    OpenAPIVersion: "3.0.3",
-    Title:          "My API",
-    APIVersion:     "1.0.0",
-}
-
-spec, err := MapMetadataToOpenAPI(metadata, cfg, genCfg)
-if err != nil {
-    log.Fatal(err)
-}
-```
-
-### Configuration Examples
-
-#### Chi Router Configuration
-
-```yaml
-framework:
-  routePatterns:
-    - callRegex: "(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$"
-      methodFromCall: true
-      pathFromArg: true
-      handlerFromArg: true
-      pathArgIndex: 0
-      handlerArgIndex: 1
-  
-  requestBodyPatterns:
-    - callRegex: "(?i)(POST|PUT|PATCH)$"
-      bodyArgIndex: 1
-      typeFromArg: true
-  
-  responsePatterns:
-    - callRegex: "(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$"
-      statusArgIndex: 0
-      responseArgIndex: 1
-      statusFromArg: true
-      defaultContentType: "application/json"
-      defaultStatus: 404 # Optional fallback status code when not inferred
-
-defaults:
-  requestContentType: "application/json"
-  responseContentType: "application/json"
-  responseStatus: 200
-
-info:
-  title: "My API"
-  version: "1.0.0"
-```
-
-#### Gin Framework Configuration
-
-```yaml
-framework:
-  routePatterns:
-    - callRegex: "(?i)(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD)$"
-      methodFromCall: true
-      pathFromArg: true
-      handlerFromArg: true
-      pathArgIndex: 0
-      handlerArgIndex: 1
-  
-  requestBodyPatterns:
-    - callRegex: "(?i)(BindJSON|BindXML|BindYAML|BindForm|BindQuery)$"
-      bodyArgIndex: 0
-      typeFromArg: true
-  
-  responsePatterns:
-    - callRegex: "(?i)(JSON|String|XML|YAML|ProtoBuf|Data|File|Redirect)$"
-      statusArgIndex: 0
-      responseArgIndex: 1
-      statusFromArg: true
-```
-
-### Type Mappings
-
-Map Go types to OpenAPI schemas:
-
-```yaml
-typeMapping:
-  - goType: "time.Time"
-    openapiType:
-      type: "string"
-      format: "date-time"
-  
-  - goType: "uuid.UUID"
-    openapiType:
-      type: "string"
-      format: "uuid"
-```
-
-### Overrides
-
-Provide manual overrides for specific functions:
-
-```yaml
-overrides:
-  - functionName: "CreateUser"
-    summary: "Create a new user"
-    description: "Creates a new user with the provided information"
-    responseStatus: 201
-    tags: ["users"]
-```
-
-## Best Practices
-
-### 1. Framework-Agnostic Design
-
-- Use pattern-based extraction instead of framework-specific code
-- Define clear interfaces for different extraction types
-- Make configuration the primary driver of behavior
-
-### 2. Clean Separation of Concerns
-
-- **Configuration**: Defines what to extract and how
-- **Extraction**: Uses patterns to extract information from metadata
-- **Mapping**: Converts extracted information to OpenAPI format
-- **Types**: Provides complete OpenAPI specification structures
-
-### 3. Extensibility
-
-- Add new patterns by extending the pattern structs
-- Support new frameworks by creating new default configurations
-- Extend type mappings for custom Go types
-
-### 4. Error Handling
-
-- Graceful degradation when patterns don't match
-- Clear error messages for configuration issues
-- Fallback to defaults when extraction fails
-
-### 5. Performance
-
-- Efficient string pool usage for metadata
-- Minimal memory allocations during extraction
-- Lazy evaluation of complex patterns
-
-## Migration from Old System
-
-The new system replaces the complex `mapper.go` with:
-
-1. **Clean extractors** that focus on pattern matching
-2. **Framework-agnostic configuration** that's easy to understand
-3. **Organized OpenAPI types** for complete specification support
-4. **Simple mapping logic** that builds specs from extracted data
-
-### Key Improvements
-
-- **Framework Independence**: No hardcoded framework logic
-- **Pattern-Based**: Uses regex and call chain patterns
-- **Configuration-Driven**: Easy to customize for different frameworks
-- **Clean Architecture**: Clear separation between extraction and mapping
-- **Extensible**: Easy to add new patterns and frameworks
-
-## Future Enhancements
-
-1. **Plugin System**: Allow custom extractors and mappers
-2. **Validation**: Validate configuration and extracted data
-3. **Caching**: Cache extracted information for performance
-4. **Testing**: Comprehensive test suite for all patterns
-5. **Documentation**: Auto-generated documentation from patterns
+HTML templates for call graph visualization (in `templates/` subdirectory):
+- `templates/cytoscape_template.html` — main interactive diagram
+- `templates/paginated_template.html` — paginated version for large graphs
+- `templates/server_template.html` — `apidiag` server template
