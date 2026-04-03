@@ -768,9 +768,9 @@ var DefaultFormat = "uppercase"`,
 			// sanitizeMetadataForTest removes temporary directory paths from metadata to ensure consistent test output
 			sanitizedMeta := sanitizeMetadataForTest(meta)
 
-			// Only write metadata files during development/testing, not during CI/CD
-			// This prevents temporary directory paths from being committed to git
-			if err := metadata.WriteMetadata(sanitizedMeta, fmt.Sprintf("../spec/tests/%s.yaml", tc.src[0].Name)); err != nil {
+			// Write to temp file for validation — never overwrite checked-in fixtures
+			tmpFile := filepath.Join(t.TempDir(), fmt.Sprintf("%s.yaml", tc.src[0].Name))
+			if err := metadata.WriteMetadata(sanitizedMeta, tmpFile); err != nil {
 				t.Errorf("Failed to write metadata.yaml: %v", err)
 			}
 
