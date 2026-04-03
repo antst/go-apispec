@@ -30,13 +30,18 @@ func NewFrameworkDetector() *FrameworkDetector {
 	return &FrameworkDetector{}
 }
 
-// Detect determines which web framework is being used in the given directory
-func (d *FrameworkDetector) Detect(dir string) (string, error) {
+// Detect determines which web frameworks are used in the given directory.
+// Returns all detected frameworks. Falls back to ["net/http"] if none found.
+func (d *FrameworkDetector) Detect(dir string) ([]string, error) {
 	// Collect Go files
 	goFiles, err := CollectGoFiles(dir)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+
+	// Track which frameworks we've seen (preserves detection order)
+	seen := make(map[string]bool)
+	var frameworks []string
 
 	// Parse files to check for framework imports
 	fset := token.NewFileSet()
@@ -46,25 +51,32 @@ func (d *FrameworkDetector) Detect(dir string) (string, error) {
 			continue // Skip files that can't be parsed
 		}
 
-		// Check imports for framework indicators
 		for _, imp := range f.Imports {
 			importPath := strings.Trim(imp.Path.Value, "\"")
+			var fw string
 			switch {
 			case strings.Contains(importPath, "gin-gonic/gin"):
-				return "gin", nil
+				fw = "gin"
 			case strings.Contains(importPath, "go-chi/chi"):
-				return "chi", nil
+				fw = "chi"
 			case strings.Contains(importPath, "labstack/echo"):
-				return "echo", nil
+				fw = "echo"
 			case strings.Contains(importPath, "gofiber/fiber"):
-				return "fiber", nil
+				fw = "fiber"
 			case strings.Contains(importPath, "gorilla/mux"):
-				return "mux", nil
+				fw = "mux"
+			}
+			if fw != "" && !seen[fw] {
+				seen[fw] = true
+				frameworks = append(frameworks, fw)
 			}
 		}
 	}
 
-	return "net/http", nil
+	if len(frameworks) == 0 {
+		return []string{"net/http"}, nil
+	}
+	return frameworks, nil
 }
 
 // CollectGoFiles recursively collects all .go files from a directory
