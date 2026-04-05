@@ -1265,6 +1265,19 @@ func DefaultHTTPConfig() *APISpecConfig {
 					HandlerArgIndex: 1,
 				},
 			},
+			MountPatterns: []MountPattern{
+				// net/http ServeMux nesting: mux.Handle("/prefix/", childMux)
+				{BasePattern: BasePattern{
+					CallRegex:     `^Handle$`,
+					RecvTypeRegex: `^net/http(\.\*ServeMux)?$`,
+				},
+					PathFromArg:    true,
+					RouterFromArg:  true,
+					PathArgIndex:   0,
+					RouterArgIndex: 1,
+					IsMount:        true,
+				},
+			},
 			RequestBodyPatterns: []RequestBodyPattern{
 				{BasePattern: BasePattern{CallRegex: `^Decode$`}, TypeArgIndex: 0,
 					TypeFromArg: true,
