@@ -391,10 +391,27 @@ func (e *Extractor) handleMountNode(node TrackerNodeInterface, mountInfo MountIn
 	// Handle router assignment if present
 	if mountInfo.Assignment != nil {
 		e.handleRouterAssignment(mountInfo, mountPath, mountTags, routes, visited)
+	} else if mountInfo.RouterArg != nil {
+		// Variable-based mount: the router arg is a variable (e.g., apiMux in
+		// rootMux.Handle("/api/", apiMux)). Search the call graph for edges
+		// where this variable is the receiver, and traverse them with the mount path.
+		e.handleVariableMount(mountInfo.RouterArg, mountPath, mountTags, routes)
 	}
 
-	// Continue traversing children
+	// Continue traversing children.
+	// Special handling for StripPrefix: when a mount wraps the child mux in
+	// http.StripPrefix(prefix, childMux), the StripPrefix node's children
+	// include the actual mux variable. Extract it and resolve via handleVariableMount.
 	for _, child := range node.GetChildren() {
+		childKey := child.GetKey()
+		if strings.Contains(childKey, "net/http.StripPrefix") {
+			for _, spChild := range child.GetChildren() {
+				if arg := spChild.GetArgument(); arg != nil && arg.GetName() != "" {
+					e.handleVariableMount(arg, mountPath, mountTags, routes)
+				}
+			}
+			continue
+		}
 		var newTags []string
 		if mountPath != "" {
 			newTags = []string{mountPath}
@@ -490,6 +507,48 @@ func (e *Extractor) handleRouterAssignment(mountInfo MountInfo, mountPath string
 			e.traverseForRoutesWithVisited(child, mountPath, newTags, routes, visited)
 		}
 	}
+}
+
+// handleVariableMount handles the case where a mount's router argument is a variable
+// (e.g., rootMux.Handle("/api/", apiMux)). It searches the call graph for edges
+// where this variable is the receiver, finds the corresponding tracker tree nodes,
+// and traverses them with the accumulated mount path.
+func (e *Extractor) handleVariableMount(routerArg *metadata.CallArgument, mountPath string, mountTags []string, routes *[]*RouteInfo) {
+	if routerArg == nil {
+		return
+	}
+	varName := routerArg.GetName()
+	if varName == "" {
+		return
+	}
+
+	// Find the NewServeMux creation node for this variable in the tree.
+	// The creation node (e.g., net/http.NewServeMux@main.go:38:12) has the
+	// route registrations (HandleFunc, Handle) as its children in the tracker tree.
+	// Use a fresh visited map so nodes already visited without mount context
+	// can be re-traversed with the mount path prefix.
+	freshVisited := make(map[string]bool)
+	e.tree.TraverseTree(func(treeNode TrackerNodeInterface) bool {
+		edge := treeNode.GetEdge()
+		if edge == nil {
+			return true
+		}
+		if edge.CalleeRecvVarName == varName {
+			// Found the creation node for this variable — traverse its children
+			// with the mount path
+			for _, child := range treeNode.GetChildren() {
+				var newTags []string
+				if mountPath != "" {
+					newTags = []string{mountPath}
+				} else {
+					newTags = mountTags
+				}
+				e.traverseForRoutesWithVisited(child, mountPath, newTags, routes, freshVisited)
+			}
+			return false // found it, stop searching
+		}
+		return true
+	})
 }
 
 // findTargetNode finds the target node for an assignment

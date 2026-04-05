@@ -46,6 +46,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "fiber", inputDir: "../../testdata/fiber", configFn: spec.DefaultFiberConfig},
 		{name: "mux", inputDir: "../../testdata/mux", configFn: spec.DefaultMuxConfig},
 		{name: "response_patterns", inputDir: "../../testdata/response_patterns", configFn: spec.DefaultChiConfig},
+		{name: "nested_http", inputDir: "../../testdata/nested_http", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {

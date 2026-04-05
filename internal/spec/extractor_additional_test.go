@@ -2263,3 +2263,97 @@ func TestJoinPaths_EdgeCases(t *testing.T) {
 	assert.Equal(t, "/a/b", joinPaths("/a/", "/b"))
 	assert.Equal(t, "/a/", joinPaths("/a", ""))
 }
+
+// --- handleVariableMount tests ---
+
+func TestHandleVariableMount_NilRouterArg(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{StringPool: sp}
+	tree := NewMockTrackerTree(meta, metadata.TrackerLimits{})
+	cfg := DefaultHTTPConfig()
+	ext := NewExtractor(tree, cfg)
+
+	routes := make([]*RouteInfo, 0)
+	// Should not panic with nil routerArg, and produce no routes
+	ext.handleVariableMount(nil, "/api/", nil, &routes)
+	assert.Empty(t, routes, "expected no routes when routerArg is nil")
+}
+
+func TestHandleVariableMount_EmptyVarName(_ *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{StringPool: sp}
+	tree := NewMockTrackerTree(meta, metadata.TrackerLimits{})
+	cfg := DefaultHTTPConfig()
+	ext := NewExtractor(tree, cfg)
+
+	// Empty name should return early
+	arg := metadata.NewCallArgument(meta)
+	ext.handleVariableMount(arg, "/api/", nil, &[]*RouteInfo{})
+}
+
+func TestHandleVariableMount_FindsMatchingRecvVar(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{StringPool: sp}
+
+	// Create a creation edge with CalleeRecvVarName = "apiMux"
+	creationEdge := metadata.CallGraphEdge{
+		CalleeRecvVarName: "apiMux",
+		Caller: metadata.Call{
+			Meta:     meta,
+			Name:     sp.Get("main"),
+			Pkg:      sp.Get("myapp"),
+			RecvType: -1,
+		},
+		Callee: metadata.Call{
+			Meta:     meta,
+			Name:     sp.Get("NewServeMux"),
+			Pkg:      sp.Get("net/http"),
+			RecvType: -1,
+		},
+	}
+
+	meta.CallGraph = []metadata.CallGraphEdge{creationEdge}
+
+	// Build a mock tree with a creation node that has a child
+	childEdge := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta:     meta,
+			Name:     sp.Get("HandleFunc"),
+			Pkg:      sp.Get("net/http"),
+			RecvType: sp.Get("*ServeMux"),
+		},
+	}
+	childNode := &TrackerNode{CallGraphEdge: childEdge}
+	childNode.key = "net/http.*ServeMux.HandleFunc@test.go:10:2"
+	creationNode := &TrackerNode{CallGraphEdge: &creationEdge}
+	creationNode.key = "net/http.NewServeMux@test.go:5:2"
+	creationNode.Children = append(creationNode.Children, childNode)
+
+	tree := NewMockTrackerTree(meta, metadata.TrackerLimits{})
+	tree.AddRoot(creationNode)
+
+	cfg := DefaultHTTPConfig()
+	ext := NewExtractor(tree, cfg)
+
+	routerArg := metadata.NewCallArgument(meta)
+	routerArg.SetName("apiMux")
+
+	routes := make([]*RouteInfo, 0)
+	ext.handleVariableMount(routerArg, "/api/", nil, &routes)
+
+	// The function should not panic and should traverse the creation node's children
+	assert.NotNil(t, routes)
+}
+
+func TestHandleVariableMount_NilMetadata(_ *testing.T) {
+	tree := NewMockTrackerTree(nil, metadata.TrackerLimits{})
+	cfg := DefaultHTTPConfig()
+	ext := NewExtractor(tree, cfg)
+
+	meta := &metadata.Metadata{StringPool: metadata.NewStringPool()}
+	arg := metadata.NewCallArgument(meta)
+	arg.SetName("apiMux")
+
+	// Should not panic when tree metadata is nil
+	ext.handleVariableMount(arg, "/api/", nil, &[]*RouteInfo{})
+}

@@ -32,7 +32,7 @@ That's it. The tool detects your framework, finds all routes, resolves handler t
 | **Echo** | Full | `c.Param`, `c.QueryParam` | `c.Bind` | `c.JSON`, `c.String`, `c.Blob` | `Group` |
 | **Fiber** | Full | `c.Params`, `c.Query` | `c.BodyParser` | `c.JSON`, `c.Status().JSON` | `Mount`, `Group` |
 | **Gorilla Mux** | Full | Path template `{id}` | `json.Decode` | `json.Encode`, `w.Write` | `PathPrefix`, `Subrouter` |
-| **net/http** | Basic | Path template | `json.Decode` | `json.Encode`, `w.Write`, `http.Error` | — |
+| **net/http** | Basic | Path template | `json.Decode` | `json.Encode`, `w.Write`, `http.Error` | Nested `ServeMux` |
 
 Projects using **multiple frameworks** simultaneously are fully supported — all routes from all detected frameworks appear in the spec.
 
