@@ -92,7 +92,7 @@ func TestHandleIndex_WithCORS(t *testing.T) {
 
 	body := w.Body.String()
 	if !strings.Contains(body, "http://localhost:9091") {
-		t.Log("server URL replacement may vary based on template format")
+		t.Error("expected server URL http://localhost:9091 in response body")
 	}
 }
 

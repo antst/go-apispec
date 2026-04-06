@@ -914,7 +914,10 @@ func TestWriteOutput_StdoutJSONContent(t *testing.T) {
 
 	// Capture stdout
 	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatalf("failed to create pipe: %v", pipeErr)
+	}
 	os.Stdout = w
 
 	err := writeOutput(spec, config, nil)
