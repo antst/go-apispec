@@ -774,3 +774,154 @@ func newTestServerWithData2() *DiagramServer {
 	server.lastLoad = time.Now()
 	return server
 }
+
+// --- parseFlags tests (now testable with FlagSet) ---
+
+func TestParseFlags_Defaults(t *testing.T) {
+	config, err := parseFlags([]string{})
+	if err != nil {
+		t.Fatalf("parseFlags failed: %v", err)
+	}
+	if config.Port != 8080 {
+		t.Errorf("expected port 8080, got %d", config.Port)
+	}
+	if config.Host != "localhost" {
+		t.Errorf("expected host localhost, got %s", config.Host)
+	}
+	if config.PageSize != 100 {
+		t.Errorf("expected page-size 100, got %d", config.PageSize)
+	}
+	if config.MaxDepth != 3 {
+		t.Errorf("expected max-depth 3, got %d", config.MaxDepth)
+	}
+	if config.DiagramType != "call-graph" {
+		t.Errorf("expected diagram-type call-graph, got %s", config.DiagramType)
+	}
+}
+
+func TestParseFlags_AllFlags(t *testing.T) {
+	config, err := parseFlags([]string{
+		"--port", "9090",
+		"--host", "0.0.0.0",
+		"--dir", "/tmp/test",
+		"--page-size", "50",
+		"--max-depth", "5",
+		"--cors=false",
+		"--verbose",
+		"--diagram-type", "tracker-tree",
+		"--static", "/public",
+		"--afd",
+		"--aifp",
+		"--aet",
+		"--aem",
+	})
+	if err != nil {
+		t.Fatalf("parseFlags failed: %v", err)
+	}
+	if config.Port != 9090 {
+		t.Errorf("expected port 9090, got %d", config.Port)
+	}
+	if config.Host != "0.0.0.0" {
+		t.Errorf("expected host 0.0.0.0, got %s", config.Host)
+	}
+	if config.InputDir != "/tmp/test" {
+		t.Errorf("expected dir /tmp/test, got %s", config.InputDir)
+	}
+	if config.PageSize != 50 {
+		t.Errorf("expected page-size 50, got %d", config.PageSize)
+	}
+	if config.MaxDepth != 5 {
+		t.Errorf("expected max-depth 5, got %d", config.MaxDepth)
+	}
+	if config.EnableCORS {
+		t.Error("expected cors false")
+	}
+	if !config.Verbose {
+		t.Error("expected verbose true")
+	}
+	if config.DiagramType != "tracker-tree" {
+		t.Errorf("expected diagram-type tracker-tree, got %s", config.DiagramType)
+	}
+	if config.StaticDir != "/public" {
+		t.Errorf("expected static /public, got %s", config.StaticDir)
+	}
+	if !config.AnalyzeFrameworkDependencies {
+		t.Error("expected afd true")
+	}
+	if !config.AutoIncludeFrameworkPackages {
+		t.Error("expected aifp true")
+	}
+	if !config.AutoExcludeTests {
+		t.Error("expected aet true")
+	}
+	if !config.AutoExcludeMocks {
+		t.Error("expected aem true")
+	}
+}
+
+func TestParseFlags_PageSizeClamping(t *testing.T) {
+	config, _ := parseFlags([]string{"--page-size", "5"})
+	if config.PageSize != 10 {
+		t.Errorf("expected page-size clamped to 10, got %d", config.PageSize)
+	}
+
+	config, _ = parseFlags([]string{"--page-size", "5000"})
+	if config.PageSize != 1000 {
+		t.Errorf("expected page-size clamped to 1000, got %d", config.PageSize)
+	}
+}
+
+func TestParseFlags_MaxDepthClamping(t *testing.T) {
+	config, _ := parseFlags([]string{"--max-depth", "0"})
+	if config.MaxDepth != 1 {
+		t.Errorf("expected max-depth clamped to 1, got %d", config.MaxDepth)
+	}
+
+	config, _ = parseFlags([]string{"--max-depth", "99"})
+	if config.MaxDepth != 10 {
+		t.Errorf("expected max-depth clamped to 10, got %d", config.MaxDepth)
+	}
+}
+
+func TestParseFlags_InvalidDiagramType(t *testing.T) {
+	config, _ := parseFlags([]string{"--diagram-type", "invalid"})
+	if config.DiagramType != "call-graph" {
+		t.Errorf("expected fallback to call-graph, got %s", config.DiagramType)
+	}
+}
+
+func TestParseFlags_VersionFlag(t *testing.T) {
+	config, err := parseFlags([]string{"--version"})
+	if err != nil {
+		t.Fatalf("parseFlags failed: %v", err)
+	}
+	if !config.ShowVersion {
+		t.Error("expected ShowVersion true")
+	}
+}
+
+func TestParseFlags_HelpFlag(t *testing.T) {
+	_, err := parseFlags([]string{"--help"})
+	if err == nil {
+		t.Error("expected error for --help")
+	}
+}
+
+func TestParseFlags_InvalidFlag(t *testing.T) {
+	_, err := parseFlags([]string{"--nonexistent-flag"})
+	if err == nil {
+		t.Error("expected error for invalid flag")
+	}
+}
+
+func TestRun_InvalidDir(t *testing.T) {
+	config := &ServerConfig{
+		InputDir: "/nonexistent/dir/for/test",
+		Port:     0,
+		Host:     "localhost",
+	}
+	err := run(config)
+	if err == nil {
+		t.Error("expected error for invalid directory")
+	}
+}

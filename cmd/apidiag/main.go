@@ -17,6 +17,7 @@ package main
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -166,84 +167,96 @@ type ErrorResponse struct {
 }
 
 func main() {
-	config := parseFlags()
+	config, err := parseFlags(os.Args[1:])
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		log.Fatalf("Failed to parse flags: %v", err)
+	}
 
-	// Handle version flag early
 	if config.ShowVersion {
 		printVersion()
-		os.Exit(0)
+		return
 	}
 
-	// Create server
+	if err := run(config); err != nil {
+		log.Fatalf("%v", err)
+	}
+}
+
+// run executes the main server logic and returns an error if something fails.
+func run(config *ServerConfig) error {
 	server := NewDiagramServer(config)
 
-	// Load metadata
 	if err := server.LoadMetadata(); err != nil {
-		log.Fatalf("Failed to load metadata: %v", err)
+		return fmt.Errorf("failed to load metadata: %w", err)
 	}
 
-	// Setup routes
 	server.SetupRoutes()
 
-	// Start server
-	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
-	log.Printf("🚀 API Diagram server starting on http://%s", addr)
+	addr := config.Host + ":" + strconv.Itoa(config.Port)
+	log.Println("API Diagram server starting on http://" + addr) //nolint:gosec // addr from CLI flags
 	if config.Verbose {
-		log.Printf("📊 Serving %s diagrams for: %s", config.DiagramType, config.InputDir)
-		log.Printf("⚙️  Page size: %d, Max depth: %d", config.PageSize, config.MaxDepth)
+		log.Println("Serving " + config.DiagramType + " diagrams for: " + config.InputDir) //nolint:gosec // CLI flags
+		log.Printf("Page size: %d, Max depth: %d", config.PageSize, config.MaxDepth)       //nolint:gosec // CLI flags are not untrusted input
 	}
 
 	httpServer := &http.Server{Addr: addr, ReadHeaderTimeout: 10 * time.Second}
 	if err := httpServer.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed to start: %v", err)
+		return fmt.Errorf("server failed to start: %w", err)
 	}
+	return nil
 }
 
-func parseFlags() *ServerConfig {
+// parseFlags parses command line arguments and returns a ServerConfig.
+func parseFlags(args []string) (*ServerConfig, error) {
+	fs := flag.NewFlagSet("apidiag", flag.ContinueOnError)
 	config := &ServerConfig{}
 
-	// Version flag
-	flag.BoolVar(&config.ShowVersion, "version", false, "Show version information")
-	flag.BoolVar(&config.ShowVersion, "V", false, "Shorthand for --version")
+	fs.BoolVar(&config.ShowVersion, "version", false, "Show version information")
+	fs.BoolVar(&config.ShowVersion, "V", false, "Shorthand for --version")
 
-	flag.IntVar(&config.Port, "port", 8080, "Server port")
-	flag.StringVar(&config.Host, "host", "localhost", "Server host")
-	flag.StringVar(&config.InputDir, "dir", ".", "Input directory containing Go source files")
-	flag.IntVar(&config.PageSize, "page-size", 100, "Default page size for pagination")
-	flag.IntVar(&config.MaxDepth, "max-depth", 3, "Maximum call graph depth")
-	flag.BoolVar(&config.EnableCORS, "cors", true, "Enable CORS headers")
-	flag.DurationVar(&config.CacheTimeout, "cache-timeout", 5*time.Minute, "Cache timeout for metadata")
-	flag.StringVar(&config.StaticDir, "static", "", "Directory to serve static files from")
-	flag.BoolVar(&config.Verbose, "verbose", false, "Enable verbose logging")
-	flag.BoolVar(&config.Verbose, "v", false, "Shorthand for --verbose")
+	fs.IntVar(&config.Port, "port", 8080, "Server port")
+	fs.StringVar(&config.Host, "host", "localhost", "Server host")
+	fs.StringVar(&config.InputDir, "dir", ".", "Input directory containing Go source files")
+	fs.IntVar(&config.PageSize, "page-size", 100, "Default page size for pagination")
+	fs.IntVar(&config.MaxDepth, "max-depth", 3, "Maximum call graph depth")
+	fs.BoolVar(&config.EnableCORS, "cors", true, "Enable CORS headers")
+	fs.DurationVar(&config.CacheTimeout, "cache-timeout", 5*time.Minute, "Cache timeout for metadata")
+	fs.StringVar(&config.StaticDir, "static", "", "Directory to serve static files from")
+	fs.BoolVar(&config.Verbose, "verbose", false, "Enable verbose logging")
+	fs.BoolVar(&config.Verbose, "v", false, "Shorthand for --verbose")
 
-	flag.BoolVar(&config.AnalyzeFrameworkDependencies, "analyze-framework-dependencies", false, "Analyze framework dependencies")
-	flag.BoolVar(&config.AnalyzeFrameworkDependencies, "afd", false, "Shorthand for --analyze-framework-dependencies")
+	fs.BoolVar(&config.AnalyzeFrameworkDependencies, "analyze-framework-dependencies", false, "Analyze framework dependencies")
+	fs.BoolVar(&config.AnalyzeFrameworkDependencies, "afd", false, "Shorthand for --analyze-framework-dependencies")
 
-	flag.BoolVar(&config.AutoIncludeFrameworkPackages, "auto-include-framework-packages", false, "Auto-include framework packages")
-	flag.BoolVar(&config.AutoIncludeFrameworkPackages, "aifp", false, "Shorthand for --auto-include-framework-packages")
+	fs.BoolVar(&config.AutoIncludeFrameworkPackages, "auto-include-framework-packages", false, "Auto-include framework packages")
+	fs.BoolVar(&config.AutoIncludeFrameworkPackages, "aifp", false, "Shorthand for --auto-include-framework-packages")
 
-	flag.BoolVar(&config.AutoExcludeTests, "auto-exclude-tests", false, "Auto-exclude test files")
-	flag.BoolVar(&config.AutoExcludeTests, "aet", false, "Shorthand for --auto-exclude-tests")
+	fs.BoolVar(&config.AutoExcludeTests, "auto-exclude-tests", false, "Auto-exclude test files")
+	fs.BoolVar(&config.AutoExcludeTests, "aet", false, "Shorthand for --auto-exclude-tests")
 
-	flag.BoolVar(&config.AutoExcludeMocks, "auto-exclude-mocks", false, "Auto-exclude mock files")
-	flag.BoolVar(&config.AutoExcludeMocks, "aem", false, "Shorthand for --auto-exclude-mocks")
+	fs.BoolVar(&config.AutoExcludeMocks, "auto-exclude-mocks", false, "Auto-exclude mock files")
+	fs.BoolVar(&config.AutoExcludeMocks, "aem", false, "Shorthand for --auto-exclude-mocks")
 
-	flag.StringVar(&config.DiagramType, "diagram-type", "call-graph", "Diagram type: 'call-graph' or 'tracker-tree'")
-	flag.StringVar(&config.DiagramType, "dt", "call-graph", "Shorthand for --diagram-type")
+	fs.StringVar(&config.DiagramType, "diagram-type", "call-graph", "Diagram type: 'call-graph' or 'tracker-tree'")
+	fs.StringVar(&config.DiagramType, "dt", "call-graph", "Shorthand for --diagram-type")
 
-	flag.Usage = func() {
+	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "APISpec API Diagram Server - Serves paginated call graph diagrams\n\n")
-		fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n\nFlags:\n", os.Args[0])
-		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "Usage: apidiag [flags]\n\nFlags:\n")
+		fs.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
-		fmt.Fprintf(os.Stderr, "  %s --dir ./myproject --port 8080\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s --dir ./myproject --page-size 50 --max-depth 2\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s --dir ./myproject --diagram-type tracker-tree\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "  %s --dir ./myproject --static ./public --cors\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  apidiag --dir ./myproject --port 8080\n")
+		fmt.Fprintf(os.Stderr, "  apidiag --dir ./myproject --page-size 50 --max-depth 2\n")
+		fmt.Fprintf(os.Stderr, "  apidiag --dir ./myproject --diagram-type tracker-tree\n")
+		fmt.Fprintf(os.Stderr, "  apidiag --dir ./myproject --static ./public --cors\n")
 	}
 
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return nil, err
+	}
 
 	// Validate page size
 	if config.PageSize < 10 {
@@ -261,10 +274,10 @@ func parseFlags() *ServerConfig {
 
 	// Validate diagram type
 	if config.DiagramType != "call-graph" && config.DiagramType != "tracker-tree" {
-		config.DiagramType = "call-graph" // Default to call-graph if invalid
+		config.DiagramType = "call-graph"
 	}
 
-	return config
+	return config, nil
 }
 
 // NewDiagramServer creates a new diagram server
@@ -278,7 +291,7 @@ func NewDiagramServer(config *ServerConfig) *DiagramServer {
 
 // LoadMetadata loads and analyzes the Go project
 func (s *DiagramServer) LoadMetadata() error {
-	log.Printf("📁 Analyzing project: %s", s.config.InputDir)
+	log.Println("Analyzing project: " + s.config.InputDir) //nolint:gosec // CLI-provided value
 
 	// Create engine configuration
 	engineConfig := &engine.EngineConfig{
@@ -308,10 +321,10 @@ func (s *DiagramServer) LoadMetadata() error {
 
 	s.lastLoad = time.Now()
 
-	log.Printf("✅ Metadata loaded successfully")
+	log.Println("Metadata loaded successfully")
 	if s.config.Verbose {
-		log.Printf("📊 Total packages: %d", len(s.metadata.Packages))
-		log.Printf("📊 Total call graph edges: %d", len(s.metadata.CallGraph))
+		log.Println("Total packages: " + strconv.Itoa(len(s.metadata.Packages)))
+		log.Println("Total call graph edges: " + strconv.Itoa(len(s.metadata.CallGraph)))
 	}
 
 	return nil
