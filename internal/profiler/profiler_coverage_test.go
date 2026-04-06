@@ -363,9 +363,8 @@ func TestStart_CPUProfileError(t *testing.T) {
 
 	err := p.Start()
 	if err == nil {
-		// It may or may not fail depending on OS behavior.
-		// At minimum, if it succeeds, clean up.
 		_ = p.Stop()
+		t.Fatal("expected error when CPUProfilePath is a directory, but Start() succeeded")
 	}
 }
 
@@ -386,6 +385,7 @@ func TestStart_TraceProfileError(t *testing.T) {
 	err := p.Start()
 	if err == nil {
 		_ = p.Stop()
+		t.Fatal("expected error when TraceProfilePath is a directory, but Start() succeeded")
 	}
 }
 
@@ -502,8 +502,7 @@ func TestStartCPUProfile_DoubleStart(t *testing.T) {
 
 	err = p2.startCPUProfile()
 	if err == nil {
-		// pprof.StartCPUProfile should return an error when already profiling
-		t.Log("second startCPUProfile did not error (unexpected, but OS may allow it)")
+		// pprof.StartCPUProfile may succeed with a different file — clean up
 		_ = p2.Stop()
 	}
 
@@ -540,8 +539,8 @@ func TestStartTraceProfile_DoubleStart(t *testing.T) {
 
 	err = p2.startTraceProfile()
 	if err == nil {
-		t.Log("second startTraceProfile did not error (unexpected, but may work on some OSes)")
 		_ = p2.Stop()
+		t.Fatal("expected error from second startTraceProfile while already tracing")
 	}
 
 	// Clean up first profiler

@@ -187,7 +187,7 @@ func TestWriteOutput_FileJSONWriteError(t *testing.T) {
 
 	err = writeOutput(spec, config, eng)
 	if err == nil {
-		t.Log("no error writing to read-only file (OS may allow it)")
+		t.Fatal("expected error writing to read-only file, but got nil")
 	}
 }
 
@@ -1002,7 +1002,7 @@ func TestRun_WithCustomMetricsInvalidMetricsPath(t *testing.T) {
 	// is only logged, not returned
 	err := run(config)
 	if err != nil {
-		t.Logf("run returned error: %v", err)
+		t.Fatalf("run returned error: %v", err)
 	}
 }
 
@@ -1030,7 +1030,7 @@ func TestRun_ProfilerStopError(t *testing.T) {
 	// This should succeed overall because profiler stop error is logged
 	err := run(config)
 	if err != nil {
-		t.Logf("run returned error (profiler stop error may have propagated): %v", err)
+		t.Fatalf("run returned error (profiler stop error may have propagated): %v", err)
 	}
 }
 

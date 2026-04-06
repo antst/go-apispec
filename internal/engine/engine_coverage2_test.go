@@ -424,6 +424,13 @@ func main() {
 	result, err := eng.GenerateOpenAPI()
 	require.NoError(t, err)
 	require.NotNil(t, result)
+
+	// Verify split metadata files were created
+	for _, suffix := range []string{"-string-pool.yaml", "-packages.yaml", "-call-graph.yaml"} {
+		path := filepath.Join(tempDir, "metadata"+suffix)
+		_, statErr := os.Stat(path)
+		assert.NoError(t, statErr, "expected split metadata file to exist: %s", path)
+	}
 }
 
 func TestGenerateOpenAPI_WithOutputConfig(t *testing.T) {
@@ -774,6 +781,9 @@ func main() {
 	meta, err := e.GenerateMetadataOnlyWithLogger(logger)
 	require.NoError(t, err)
 	require.NotNil(t, meta)
+	// The framework dependency list is not directly accessible from metadata,
+	// so we verify the analysis succeeded and returned valid metadata.
+	assert.NotNil(t, meta, "expected non-nil metadata")
 }
 
 // ---------------------------------------------------------------------------

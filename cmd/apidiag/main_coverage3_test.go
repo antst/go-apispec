@@ -160,9 +160,9 @@ func TestHandleExport_SVGFormat(t *testing.T) {
 
 	server.handleExport(w, req)
 
-	// SVG format should succeed or return valid response
-	if w.Code != http.StatusOK && w.Code != http.StatusBadRequest {
-		t.Errorf("expected 200 or 400, got %d", w.Code)
+	// SVG is a valid format but handled client-side, so the handler returns 400
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for client-side SVG export, got %d", w.Code)
 	}
 }
 
@@ -174,8 +174,9 @@ func TestHandleExport_DOTFormat(t *testing.T) {
 
 	server.handleExport(w, req)
 
-	if w.Code != http.StatusOK && w.Code != http.StatusBadRequest {
-		t.Errorf("expected 200 or 400, got %d", w.Code)
+	// DOT is not a supported export format, so the handler returns 400
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for unsupported DOT format, got %d", w.Code)
 	}
 }
 

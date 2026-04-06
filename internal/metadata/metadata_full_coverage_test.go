@@ -1519,7 +1519,8 @@ func helper() {}
 		"testpkg": {"test.go": file},
 	}
 	fileToInfo := map[*ast.File]*types.Info{file: info}
-	importPaths := map[string]string{"testpkg": "testpkg"}
+	// Key by filename to match how the engine builds importPaths (engine.go:349)
+	importPaths := map[string]string{"test.go": "testpkg"}
 
 	logger := &testLogger{}
 	meta := GenerateMetadataWithLogger(pkgs, fileToInfo, importPaths, fset, logger)

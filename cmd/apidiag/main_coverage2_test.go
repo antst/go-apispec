@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -198,16 +200,29 @@ func TestWriteError_VariousStatusCodes(t *testing.T) {
 // LoadMetadata — additional coverage
 // ---------------------------------------------------------------------------
 
-func TestLoadMetadata_VerboseMode(_ *testing.T) {
+func TestLoadMetadata_VerboseMode(t *testing.T) {
+	tempDir := t.TempDir()
+
+	goMod := filepath.Join(tempDir, "go.mod")
+	if err := os.WriteFile(goMod, []byte("module testapp\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatalf("failed to write go.mod: %v", err)
+	}
+	goFile := filepath.Join(tempDir, "main.go")
+	src := "package main\n\nimport \"net/http\"\n\nfunc main() {\n\thttp.HandleFunc(\"/ping\", func(w http.ResponseWriter, r *http.Request) {\n\t\tw.Write([]byte(\"pong\"))\n\t})\n\thttp.ListenAndServe(\":8080\", nil)\n}\n"
+	if err := os.WriteFile(goFile, []byte(src), 0644); err != nil {
+		t.Fatalf("failed to write main.go: %v", err)
+	}
+
 	config := &ServerConfig{
-		InputDir: ".",
+		InputDir: tempDir,
 		Verbose:  true,
 	}
 	server := NewDiagramServer(config)
 
-	// This may succeed or fail depending on the current directory
-	// We just check it doesn't panic in verbose mode
-	_ = server.LoadMetadata()
+	err := server.LoadMetadata()
+	if err != nil {
+		t.Fatalf("LoadMetadata failed for valid project in verbose mode: %v", err)
+	}
 }
 
 func TestLoadMetadata_InvalidDir(t *testing.T) {

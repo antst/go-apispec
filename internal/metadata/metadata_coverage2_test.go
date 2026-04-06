@@ -1841,9 +1841,7 @@ func TestWriteYAML_Success(t *testing.T) {
 
 	tmpFile := t.TempDir() + "/test_meta.yaml"
 	err := WriteYAML(meta, tmpFile)
-	if err != nil {
-		t.Logf("WriteYAML failed: %v (may need specific YAML serialization setup)", err)
-	}
+	require.NoError(t, err, "WriteYAML should succeed for valid metadata")
 }
 
 // ---------------------------------------------------------------------------

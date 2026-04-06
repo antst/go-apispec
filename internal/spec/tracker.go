@@ -665,8 +665,8 @@ func traverseTree(nodes []*TrackerNode, mapObject interface{ Assign(func(*Tracke
 
 func filterChildren(children []*TrackerNode, nodeTypeParams map[string]string) []*TrackerNode {
 	filteredChildren := []*TrackerNode{}
-	hasMatch := true
 	for _, child := range children {
+		hasMatch := true
 		childTypeParams := child.TypeParams()
 		for key, value := range nodeTypeParams {
 			if childValue, ok := childTypeParams[key]; !ok || value != childValue {

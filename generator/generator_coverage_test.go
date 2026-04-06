@@ -18,7 +18,7 @@ func TestGenerateFromDirectory_EmptyString(t *testing.T) {
 	assert.Contains(t, err.Error(), "directory path is required")
 }
 
-func TestGenerateFromDirectory_NilConfig(t *testing.T) {
+func TestGenerateFromDirectory_Success(t *testing.T) {
 	tempDir := t.TempDir()
 
 	require.NoError(t, os.WriteFile(
@@ -54,6 +54,7 @@ func TestGenerateFromDirectory_NonExistentDir(t *testing.T) {
 	gen := NewGenerator(spec.DefaultHTTPConfig())
 	_, err := gen.GenerateFromDirectory("/totally/bogus/dir/that/does/not/exist")
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "input directory")
 }
 
 func TestGenerateFromDirectory_DirWithoutGoMod(t *testing.T) {
@@ -62,6 +63,7 @@ func TestGenerateFromDirectory_DirWithoutGoMod(t *testing.T) {
 	gen := NewGenerator(spec.DefaultHTTPConfig())
 	_, err := gen.GenerateFromDirectory(tempDir)
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "go.mod")
 }
 
 func TestNewGenerator_NilConfig(t *testing.T) {
