@@ -828,33 +828,33 @@ func TestNewTrackerNode_ParentFunctionsPath(t *testing.T) {
 		CallGraph:  []metadata.CallGraphEdge{},
 	}
 
-	// funcA is called by main, but not as a direct caller — it appears in ParentFunctions
-	meta.CallGraph = append(meta.CallGraph,
-		metadata.CallGraphEdge{
-			Caller: makeCallWithDefaults(meta, "wrapperFunc", "app"),
-			Callee: makeCallWithDefaults(meta, "innerFunc", "app"),
-		},
-	)
+	// Create an edge where wrapperFunc calls innerFunc.
+	// We'll set up ParentFunctions for a functionID that is NOT in Callers,
+	// which forces NewTrackerNode to take the ParentFunctions fallback path
+	// (line 1292: meta.Callers[callerID] == nil && exists).
+	wrapperEdge := metadata.CallGraphEdge{
+		Caller: makeCallWithDefaults(meta, "wrapperFunc", "app"),
+		Callee: makeCallWithDefaults(meta, "innerFunc", "app"),
+	}
+	meta.CallGraph = append(meta.CallGraph, wrapperEdge)
 	meta.BuildCallGraphMaps()
 
-	// Set up ParentFunctions to have funcA as a parent of wrapperFunc
+	// Set up ParentFunctions for a function ID that won't match any Callers key.
+	// "app.orphanFunc" is not in the call graph as a caller, so Callers["app.orphanFunc"] == nil.
 	parentEdge := &meta.CallGraph[0]
 	meta.ParentFunctions = map[string][]*metadata.CallGraphEdge{
-		"app.wrapperFunc": {parentEdge},
+		"app.orphanFunc": {parentEdge},
 	}
 
 	tree := newTrackerTree(meta)
 	visited := map[string]int{}
 	assignmentIndex := assigmentIndexMap{}
 
-	node := NewTrackerNode(tree, meta, "", "app.wrapperFunc", nil, nil, visited, &assignmentIndex, realisticLimits())
+	// Call NewTrackerNode with callerID that is NOT in Callers but IS in ParentFunctions
+	node := NewTrackerNode(tree, meta, "", "app.orphanFunc", nil, nil, visited, &assignmentIndex, realisticLimits())
 	require.NotNil(t, node)
-	// The node should have children from the ParentFunctions path.
-	// NOTE: This exercises the normal ParentFunctions lookup (direct hit in the map),
-	// not the fallback path that iterates all edges when the key is missing.
-	// The fallback requires a more complex setup with mismatched keys and is
-	// covered by the broader integration tests.
-	assert.GreaterOrEqual(t, len(node.Children), 1)
+	// The node should have children from the ParentFunctions fallback path
+	assert.GreaterOrEqual(t, len(node.Children), 1, "expected children from ParentFunctions fallback")
 }
 
 // ---------------------------------------------------------------------------
