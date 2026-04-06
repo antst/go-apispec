@@ -928,9 +928,9 @@ func resolveFuncCallSelectorEdges(tree *TrackerTree, meta *metadata.Metadata, ar
 		FuncType = selectorArg.X.X.GetType()
 		FuncType = strings.ReplaceAll(FuncType, selectorArg.X.X.GetPkg()+".", "")
 		FuncType = strings.TrimPrefix(FuncType, "*")
-	} else if selectorArg.X.GetKind() == metadata.KindCall && selectorArg.X.Fun.Type != -1 {
+	} else if selectorArg.X.GetKind() == metadata.KindCall && selectorArg.X.Fun != nil && selectorArg.X.Fun.Type != -1 {
 		FuncType = selectorArg.X.Fun.GetType()
-		FuncType = strings.ReplaceAll(FuncType, selectorArg.X.X.GetPkg()+".", "")
+		FuncType = strings.ReplaceAll(FuncType, selectorArg.X.Fun.GetPkg()+".", "")
 		FuncType = strings.TrimPrefix(FuncType, "*")
 	}
 

@@ -781,9 +781,12 @@ func main() {
 	meta, err := e.GenerateMetadataOnlyWithLogger(logger)
 	require.NoError(t, err)
 	require.NotNil(t, meta)
-	// The framework dependency list is not directly accessible from metadata,
-	// so we verify the analysis succeeded and returned valid metadata.
-	assert.NotNil(t, meta, "expected non-nil metadata")
+	// Verify the framework dependency list was populated and does not contain net/http
+	if meta.FrameworkDependencyList != nil {
+		for _, pkg := range meta.FrameworkDependencyList.AllPackages {
+			assert.NotEqual(t, "net/http", pkg.PackagePath, "net/http should be excluded by SkipHTTPFramework")
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

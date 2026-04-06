@@ -271,13 +271,13 @@ func TestDetectVersionInfo_RuntimePath(t *testing.T) {
 	if GoVersion == "unknown" {
 		t.Error("expected GoVersion to be set after detectVersionInfo(), got 'unknown'")
 	}
-	// Version should be updated to something other than the initial "0.0.1"
+	// Version may stay "0.0.1" in CI builds without VCS data — skip rather than fail
 	if Version == "0.0.1" {
-		t.Log("Version still 0.0.1 - build info may lack VCS data")
+		t.Skip("Version still 0.0.1 — build info lacks VCS data (expected in some CI environments)")
 	}
 }
 
-func TestDetectVersionInfo_DevelVersion(_ *testing.T) {
+func TestDetectVersionInfo_DevelVersion(t *testing.T) {
 	origVersion := Version
 	origCommit := Commit
 	origBuildDate := BuildDate
@@ -289,19 +289,24 @@ func TestDetectVersionInfo_DevelVersion(_ *testing.T) {
 		GoVersion = origGoVersion
 	}()
 
-	// Simulate a case where version is "(devel)" after build info parsing
-	// We can't easily mock debug.ReadBuildInfo, but we can test the
-	// final fallback by checking it doesn't panic
-	Version = "(devel)"
+	// Set Version to "0.0.1" so detectVersionInfo() doesn't early-return.
+	// This exercises the full path including ReadBuildInfo and fallbacks.
+	Version = "0.0.1"
 	Commit = "unknown"
 	BuildDate = "unknown"
 	GoVersion = "unknown"
 
 	detectVersionInfo()
 
-	// The function should handle "(devel)" and set something meaningful
-	// It won't be "(devel)" after the function runs because the final
-	// fallback handles that case
+	// After detectVersionInfo, Version should be updated from "0.0.1"
+	// (either to "dev", "latest (go install)", or "unknown (go install)")
+	if Version == "0.0.1" {
+		t.Error("expected Version to be updated from '0.0.1' after detectVersionInfo()")
+	}
+	// GoVersion should be populated from runtime
+	if GoVersion == "unknown" {
+		t.Skip("GoVersion still 'unknown' — debug.ReadBuildInfo may not provide it in this environment")
+	}
 }
 
 // ---------------------------------------------------------------------------
