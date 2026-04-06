@@ -15,11 +15,8 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// parseFlags — cannot be tested directly because it uses the global flag
-// package (flag.Parse) which causes "flag redefined" panics when called
-// more than once in a process. The existing comment in main_test.go
-// acknowledges this limitation. We can only verify the validation logic
-// indirectly through the ServerConfig fields.
+// parseFlags — now accepts []string and uses a local flag.FlagSet, so it
+// can be tested directly. See TestParseFlags_* below.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -111,7 +108,9 @@ func TestHandleIndex_ContentType(t *testing.T) {
 
 	body := w.Body.String()
 	// Verify the server URL placeholder was replaced
-	_ = strings.Contains(body, "http://localhost:9090")
+	if !strings.Contains(body, "http://localhost:9090") {
+		t.Error("expected server URL in body")
+	}
 	// Should contain HTML
 	if !strings.Contains(body, "html") {
 		t.Error("expected HTML in response body")
@@ -393,7 +392,7 @@ func TestCalculateCallGraphDepth_PureCycleNoRoots(t *testing.T) {
 	// The fallback "all nodes with zero in-degree" also finds nothing (all have in-degree 1)
 	// So depths map may be empty
 	if len(depths) != 0 {
-		t.Logf("depths map has %d entries (cycle nodes got assigned depths from fallback)", len(depths))
+		t.Fatalf("expected empty depths map for pure cycle with no roots, got %d entries", len(depths))
 	}
 }
 
@@ -637,8 +636,6 @@ func TestHandlePackageBasedDiagram_EmptyDepth(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleExport_MultipleFilterCombinations(t *testing.T) {
-	server := newTestServerWithData2()
-
 	tests := []struct {
 		name  string
 		query string
@@ -651,6 +648,8 @@ func TestHandleExport_MultipleFilterCombinations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			server := newTestServerWithData2()
+
 			req := httptest.NewRequest(http.MethodGet, "/api/diagram/export"+tt.query, nil)
 			w := httptest.NewRecorder()
 

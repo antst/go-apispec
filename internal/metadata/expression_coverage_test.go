@@ -337,7 +337,7 @@ func TestHandleStructType_EmbeddedField(t *testing.T) {
 	st := &ast.StructType{
 		Fields: &ast.FieldList{
 			List: []*ast.Field{
-				{Type: &ast.Ident{Name: "io.Reader"}}, // embedded
+				{Type: &ast.SelectorExpr{X: &ast.Ident{Name: "io"}, Sel: &ast.Ident{Name: "Reader"}}}, // embedded
 			},
 		},
 	}
@@ -1600,7 +1600,7 @@ func TestHandleInterfaceType_EmbeddedOnly(t *testing.T) {
 	iface := &ast.InterfaceType{
 		Methods: &ast.FieldList{
 			List: []*ast.Field{
-				{Type: &ast.Ident{Name: "io.Reader"}}, // embedded, no Names
+				{Type: &ast.SelectorExpr{X: &ast.Ident{Name: "io"}, Sel: &ast.Ident{Name: "Reader"}}}, // embedded, no Names
 			},
 		},
 	}

@@ -256,9 +256,9 @@ func TestHandleRefresh_GetMethod(t *testing.T) {
 
 	server.handleRefresh(w, req)
 
-	// Even GET should return something (depends on impl)
-	if w.Code < 200 || w.Code >= 500 {
-		t.Errorf("unexpected status %d", w.Code)
+	// handleRefresh only accepts POST; GET returns 405 Method Not Allowed
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405 for GET on refresh, got %d", w.Code)
 	}
 }
 

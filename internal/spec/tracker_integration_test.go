@@ -849,7 +849,11 @@ func TestNewTrackerNode_ParentFunctionsPath(t *testing.T) {
 
 	node := NewTrackerNode(tree, meta, "", "app.wrapperFunc", nil, nil, visited, &assignmentIndex, realisticLimits())
 	require.NotNil(t, node)
-	// The node should have children from the ParentFunctions path
+	// The node should have children from the ParentFunctions path.
+	// NOTE: This exercises the normal ParentFunctions lookup (direct hit in the map),
+	// not the fallback path that iterates all edges when the key is missing.
+	// The fallback requires a more complex setup with mismatched keys and is
+	// covered by the broader integration tests.
 	assert.GreaterOrEqual(t, len(node.Children), 1)
 }
 
@@ -1199,17 +1203,19 @@ func TestTraceArgumentOrigin_VariableWithMatchingOrigin(t *testing.T) {
 	originNode := &TrackerNode{key: "origin-db"}
 
 	tree := newTrackerTree(meta)
+	// TraceArgumentOrigin calls TraceVariableOrigin with pkg="" (empty).
+	// The fallback returns originVar="db", originPkg="", funName="handler",
+	// so the paramKey lookup must match that.
 	tree.variableNodes[paramKey{
 		Name:      "db",
-		Pkg:       "app",
+		Pkg:       "",
 		Container: "handler",
 	}] = []*TrackerNode{originNode}
 
 	result := tree.TraceArgumentOrigin(argNode)
-	// Should find the origin node
-	if result != nil {
-		assert.Equal(t, originNode, result)
-	}
+	// Should find the origin node via the variable lookup
+	require.NotNil(t, result, "expected TraceArgumentOrigin to find the origin node")
+	assert.Equal(t, originNode, result)
 }
 
 func TestTraceArgumentOrigin_VariableWithNoCallArgument(t *testing.T) {
@@ -1376,6 +1382,13 @@ func TestResolveFuncCallSelectorEdges_CallX(t *testing.T) {
 	argNode := &TrackerNode{key: "arg", Children: []*TrackerNode{}}
 	visited := map[string]int{}
 	assignmentIndex := assigmentIndexMap{}
+
+	// Guard: production code at line 933 dereferences selectorArg.X.X without
+	// a nil check in the KindCall branch. Verify X.X is set before calling to
+	// avoid a nil-pointer panic if the test setup is ever accidentally changed.
+	require.NotNil(t, selectorArg.X, "selectorArg.X must not be nil")
+	require.NotNil(t, selectorArg.X.X, "selectorArg.X.X must not be nil (production code dereferences it at tracker.go:933)")
+	require.NotNil(t, selectorArg.X.Fun, "selectorArg.X.Fun must not be nil (production code dereferences it at tracker.go:931)")
 
 	resolveFuncCallSelectorEdges(tree, meta, argNode, selectorArg, "getService()", "getService()", visited, &assignmentIndex, realisticLimits())
 	// Primary goal: exercise the KindCall branch (line 931-934) for selectorArg.X without panic
@@ -1780,6 +1793,7 @@ func TestNewTrackerTree_FullIntegration_ChainCalls(t *testing.T) {
 	tree := NewTrackerTree(meta, realisticLimits())
 	require.NotNil(t, tree)
 	assert.NotNil(t, tree.chainParentMap)
+	assert.Greater(t, len(tree.chainParentMap), 0, "expected chainParentMap to have entries from chain registration")
 }
 
 func TestNewTrackerTree_FullIntegration_WithParamArgMap(t *testing.T) {

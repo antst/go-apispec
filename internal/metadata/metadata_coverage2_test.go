@@ -2482,9 +2482,7 @@ func TestWriteYAML_RemoveExisting(t *testing.T) {
 	// Write a file first, then overwrite it
 	tmpFile := t.TempDir() + "/existing.yaml"
 	err := WriteYAML("first", tmpFile)
-	if err != nil {
-		t.Skipf("WriteYAML failed: %v", err)
-	}
+	require.NoError(t, err, "first WriteYAML should succeed")
 	err = WriteYAML("second", tmpFile)
 	assert.NoError(t, err)
 }

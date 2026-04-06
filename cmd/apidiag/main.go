@@ -231,6 +231,9 @@ func parseFlags(args []string) (*ServerConfig, error) {
 	fs.BoolVar(&config.AnalyzeFrameworkDependencies, "analyze-framework-dependencies", false, "Analyze framework dependencies")
 	fs.BoolVar(&config.AnalyzeFrameworkDependencies, "afd", false, "Shorthand for --analyze-framework-dependencies")
 
+	// NOTE: --aifp (auto-include-framework-packages) has no effect unless
+	// --afd (analyze-framework-dependencies) is also enabled. This is a
+	// pre-existing dependency; enforcing it here is deferred to a future change.
 	fs.BoolVar(&config.AutoIncludeFrameworkPackages, "auto-include-framework-packages", false, "Auto-include framework packages")
 	fs.BoolVar(&config.AutoIncludeFrameworkPackages, "aifp", false, "Shorthand for --auto-include-framework-packages")
 

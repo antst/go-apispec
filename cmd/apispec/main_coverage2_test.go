@@ -69,6 +69,30 @@ func TestToSortedYAML_NestedMaps(t *testing.T) {
 	if mapping.Content[4].Value != "z" {
 		t.Errorf("expected third key 'z', got %q", mapping.Content[4].Value)
 	}
+
+	// Verify nested map "m" has sorted keys: a, b
+	mValue := mapping.Content[3] // value node for key "m"
+	if mValue.Kind != yaml.MappingNode {
+		t.Fatal("expected 'm' value to be a mapping node")
+	}
+	if mValue.Content[0].Value != "a" {
+		t.Errorf("expected nested key 'a' first in 'm', got %q", mValue.Content[0].Value)
+	}
+	if mValue.Content[2].Value != "b" {
+		t.Errorf("expected nested key 'b' second in 'm', got %q", mValue.Content[2].Value)
+	}
+
+	// Verify nested map "z" has sorted keys: a_inner, z_inner
+	zValue := mapping.Content[5] // value node for key "z"
+	if zValue.Kind != yaml.MappingNode {
+		t.Fatal("expected 'z' value to be a mapping node")
+	}
+	if zValue.Content[0].Value != "a_inner" {
+		t.Errorf("expected nested key 'a_inner' first in 'z', got %q", zValue.Content[0].Value)
+	}
+	if zValue.Content[2].Value != "z_inner" {
+		t.Errorf("expected nested key 'z_inner' second in 'z', got %q", zValue.Content[2].Value)
+	}
 }
 
 func TestToSortedYAML_EmptyMap(t *testing.T) {
@@ -97,37 +121,39 @@ func TestToSortedYAML_SimpleScalar(t *testing.T) {
 // writeOutput — error paths and additional output modes
 // ---------------------------------------------------------------------------
 
-func TestWriteOutput_StdoutYAML(t *testing.T) {
-	// Test the stdout YAML path by setting OutputFile to a .yaml extension
-	// but not setting OutputFlagSet. Note: this triggers the default JSON path
-	// because DefaultOutputFile is "openapi.json" and ext check uses that.
-	// We need to test the actual YAML stdout path differently.
+func TestWriteOutput_FileYAML(t *testing.T) {
+	// Test the YAML file output path by setting OutputFile to a .yaml extension
+	// with OutputFlagSet=true to trigger the file-write branch.
+	tempDir := t.TempDir()
+	outputPath := filepath.Join(tempDir, "openapi.yaml")
 
 	spec := map[string]interface{}{"openapi": "3.1.1"}
 	config := &CLIConfig{
-		OutputFile:    "openapi.json", // matches DefaultOutputFile
-		OutputFlagSet: false,
+		OutputFile:    outputPath,
+		OutputFlagSet: true,
 	}
-
-	// Capture stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
 
 	err := writeOutput(spec, config, nil)
-
-	_ = w.Close()
-	os.Stdout = oldStdout
-
 	if err != nil {
-		t.Fatalf("writeOutput stdout default JSON failed: %v", err)
+		t.Fatalf("writeOutput file YAML failed: %v", err)
 	}
 
-	buf := make([]byte, 64*1024)
-	n, _ := r.Read(buf)
-	output := string(buf[:n])
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("failed to read YAML output: %v", err)
+	}
+	output := string(data)
 	if !strings.Contains(output, "openapi") {
 		t.Error("expected output to contain 'openapi'")
+	}
+
+	// Verify output is valid YAML, not JSON
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("output is not valid YAML: %v", err)
+	}
+	if parsed["openapi"] != "3.1.1" {
+		t.Errorf("expected openapi 3.1.1, got %v", parsed["openapi"])
 	}
 }
 
@@ -241,11 +267,11 @@ func TestDetectVersionInfo_RuntimePath(t *testing.T) {
 
 	detectVersionInfo()
 
-	// GoVersion should be set from runtime
+	// GoVersion should be set from runtime (debug.ReadBuildInfo succeeds in tests)
 	if GoVersion == "unknown" {
-		t.Log("GoVersion still unknown - unusual build environment")
+		t.Error("expected GoVersion to be set after detectVersionInfo(), got 'unknown'")
 	}
-	// Version should be updated
+	// Version should be updated to something other than the initial "0.0.1"
 	if Version == "0.0.1" {
 		t.Log("Version still 0.0.1 - build info may lack VCS data")
 	}
@@ -358,6 +384,12 @@ func TestRun_WithBlockProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run with block profile failed: %v", err)
 	}
+
+	// Verify block profile was created
+	blockPath := filepath.Join(profileDir, "block.prof")
+	if _, err := os.Stat(blockPath); os.IsNotExist(err) {
+		t.Error("expected block.prof to be created")
+	}
 }
 
 func TestRun_WithMutexProfile(t *testing.T) {
@@ -381,6 +413,12 @@ func TestRun_WithMutexProfile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run with mutex profile failed: %v", err)
 	}
+
+	// Verify mutex profile was created
+	mutexPath := filepath.Join(profileDir, "mutex.prof")
+	if _, err := os.Stat(mutexPath); os.IsNotExist(err) {
+		t.Error("expected mutex.prof to be created")
+	}
 }
 
 func TestRun_WithTraceProfile(t *testing.T) {
@@ -403,6 +441,12 @@ func TestRun_WithTraceProfile(t *testing.T) {
 	err := run(config)
 	if err != nil {
 		t.Fatalf("run with trace profile failed: %v", err)
+	}
+
+	// Verify trace profile was created
+	tracePath := filepath.Join(profileDir, "trace.out")
+	if _, err := os.Stat(tracePath); os.IsNotExist(err) {
+		t.Error("expected trace.out to be created")
 	}
 }
 
@@ -922,6 +966,12 @@ func TestWriteOutput_RelativePathJoinedWithModuleRoot(t *testing.T) {
 	err = writeOutput(spec, config, eng)
 	if err != nil {
 		t.Fatalf("writeOutput with relative path failed: %v", err)
+	}
+
+	// Verify the output file was created at the expected location
+	expectedPath := filepath.Join(eng.ModuleRoot(), "relative_output.json")
+	if _, statErr := os.Stat(expectedPath); os.IsNotExist(statErr) {
+		t.Errorf("expected output file at %s, but it does not exist", expectedPath)
 	}
 }
 

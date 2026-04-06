@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -35,11 +36,13 @@ func parseWithInfo(t *testing.T, src string) (*token.FileSet, *ast.File, *types.
 	require.NoError(t, err)
 
 	info := &types.Info{
-		Types: make(map[ast.Expr]types.TypeAndValue),
-		Defs:  make(map[*ast.Ident]types.Object),
-		Uses:  make(map[*ast.Ident]types.Object),
+		Types:      make(map[ast.Expr]types.TypeAndValue),
+		Defs:       make(map[*ast.Ident]types.Object),
+		Uses:       make(map[*ast.Ident]types.Object),
+		Instances:  make(map[*ast.Ident]types.Instance),
+		Selections: make(map[*ast.SelectorExpr]*types.Selection),
 	}
-	conf := types.Config{Importer: nil, Error: func(_ error) {}}
+	conf := types.Config{Importer: importer.Default(), Error: func(_ error) {}}
 	_, _ = conf.Check("testpkg", fset, []*ast.File{file}, info)
 	return fset, file, info
 }
