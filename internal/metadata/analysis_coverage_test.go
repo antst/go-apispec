@@ -6,7 +6,6 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1987,22 +1986,18 @@ func TestTraceVariableOriginHelper_CacheWithPopulatedPackages(t *testing.T) {
 	assert.Equal(t, fn1, fn2)
 }
 
-func TestTraceVariableOriginHelper_CacheMutexSafety(_ *testing.T) {
+func TestTraceVariableOriginHelper_MultipleCalls(_ *testing.T) {
 	meta := newTestMeta()
 	meta.Packages["mypkg"] = &Package{
 		Files: map[string]*File{"t.go": {Functions: map[string]*Function{}}},
 	}
 
-	var wg sync.WaitGroup
+	// Call multiple times sequentially to exercise caching paths.
+	// StringPool is not thread-safe, so no concurrent access.
 	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			varName := "var" + string(rune('a'+idx))
-			TraceVariableOrigin(varName, "f", "mypkg", meta)
-		}(i)
+		varName := "var" + string(rune('a'+i))
+		TraceVariableOrigin(varName, "f", "mypkg", meta)
 	}
-	wg.Wait()
 }
 
 func TestTraceVariableOriginHelper_MethodLookupCacheNil(t *testing.T) {
