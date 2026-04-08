@@ -185,7 +185,8 @@ type Extractor struct {
 }
 
 // isLikelyMediaType checks if a string looks like a valid MIME type (type/subtype).
-// Returns false for Go variable/field paths like "model.Document.MimeType".
+// Returns false for Go variable/field paths like "model.Document.MimeType" or
+// fully-qualified Go paths like "github.com/org/pkg/model.Document.MimeType".
 func isLikelyMediaType(v string) bool {
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -195,8 +196,22 @@ func isLikelyMediaType(v string) bool {
 	if idx := strings.IndexByte(v, ';'); idx >= 0 {
 		v = strings.TrimSpace(v[:idx])
 	}
+	// A valid MIME type has exactly one "/" separating type and subtype.
+	// Go import paths have multiple slashes (github.com/org/pkg/...).
+	if strings.Count(v, "/") != 1 {
+		return false
+	}
 	parts := strings.SplitN(v, "/", 2)
-	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
+	if parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	// MIME type parts don't contain dots (e.g., "application" not "model.Document").
+	// Go field paths always have dots. Exception: vendor MIME subtypes like
+	// "vnd.api+json" are valid, so only check the type (left of /).
+	if strings.Contains(parts[0], ".") {
+		return false
+	}
+	return true
 }
 
 // checkContentTypePattern checks if a node matches a Content-Type header set pattern
