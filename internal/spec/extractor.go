@@ -187,6 +187,10 @@ type Extractor struct {
 // isLikelyMediaType checks if a string looks like a valid MIME type (type/subtype).
 // Returns false for Go variable/field paths like "model.Document.MimeType".
 func isLikelyMediaType(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return false
+	}
 	// Strip parameters (e.g., "text/plain; charset=utf-8" → "text/plain")
 	if idx := strings.IndexByte(v, ';'); idx >= 0 {
 		v = strings.TrimSpace(v[:idx])
