@@ -222,6 +222,12 @@ func (e *Extractor) checkContentTypePattern(node TrackerNodeInterface, route *Ro
 			if strings.EqualFold(headerName, "Content-Type") && len(edge.Args) > pattern.HeaderValueArgIndex {
 				val := e.contextProvider.GetArgumentInfo(edge.Args[pattern.HeaderValueArgIndex])
 				val = strings.Trim(val, "\"")
+				// If the value doesn't look like a valid MIME type (must contain "/"),
+				// it's a variable or field path (e.g., doc.MimeType). Fall back to
+				// application/octet-stream for dynamic content types.
+				if val != "" && !strings.Contains(val, "/") {
+					val = "application/octet-stream"
+				}
 				if val != "" {
 					// Override content type on existing responses that use the
 					// default. Don't override responses with pattern-specific
