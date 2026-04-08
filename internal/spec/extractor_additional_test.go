@@ -2357,3 +2357,65 @@ func TestHandleVariableMount_NilMetadata(_ *testing.T) {
 	// Should not panic when tree metadata is nil
 	ext.handleVariableMount(arg, "/api/", nil, &[]*RouteInfo{})
 }
+
+func TestCheckContentTypePattern_DynamicVariable_FallsBackToOctetStream(t *testing.T) {
+	meta := newTestMeta()
+
+	// Build edge: Header().Set("Content-Type", doc.MimeType)
+	// doc.MimeType resolves to a Go field path, not a MIME type
+	headerNameArg := makeLiteralArg(meta, `"Content-Type"`)
+	headerValueArg := metadata.NewCallArgument(meta)
+	headerValueArg.SetKind(metadata.KindSelector)
+	headerValueArg.SetName("MimeType")
+	headerValueArg.SetPkg("model")
+	headerValueArg.SetType("string")
+	headerValueArg.Sel = metadata.NewCallArgument(meta)
+	headerValueArg.Sel.SetName("MimeType")
+
+	edge := metadata.CallGraphEdge{
+		Caller: metadata.Call{
+			Meta: meta,
+			Name: meta.StringPool.Get("handler"),
+			Pkg:  meta.StringPool.Get("main"),
+		},
+		Callee: metadata.Call{
+			Meta:     meta,
+			Name:     meta.StringPool.Get("Set"),
+			Pkg:      meta.StringPool.Get("net/http"),
+			RecvType: meta.StringPool.Get("Header"),
+		},
+		Args: []*metadata.CallArgument{headerNameArg, headerValueArg},
+	}
+	edge.Caller.Edge = &edge
+	edge.Callee.Edge = &edge
+	node := makeTrackerNode(&edge)
+
+	tree := NewMockTrackerTree(meta, metadata.TrackerLimits{
+		MaxNodesPerTree: 100, MaxChildrenPerNode: 10, MaxArgsPerFunction: 5, MaxNestedArgsDepth: 3,
+	})
+	cfg := &APISpecConfig{
+		Defaults: Defaults{ResponseContentType: "application/json"},
+		Framework: FrameworkConfig{
+			ContentTypePatterns: []ContentTypePattern{
+				{
+					BasePattern:         BasePattern{CallRegex: "^Set$", RecvTypeRegex: "Header"},
+					HeaderNameArgIndex:  0,
+					HeaderValueArgIndex: 1,
+				},
+			},
+		},
+	}
+	ext := NewExtractor(tree, cfg)
+
+	route := NewRouteInfo()
+	route.Response["200"] = &ResponseInfo{
+		StatusCode:  200,
+		ContentType: "application/json",
+	}
+
+	ext.checkContentTypePattern(node, route)
+
+	// Dynamic content type (Go field path without "/") should fall back to application/octet-stream
+	assert.Equal(t, "application/octet-stream", route.Response["200"].ContentType)
+	assert.Equal(t, "application/octet-stream", route.detectedContentType)
+}
