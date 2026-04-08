@@ -601,6 +601,61 @@ func (r *ResponsePatternMatcherImpl) resolveCallReturnValue(arg *metadata.CallAr
 	return ""
 }
 
+// resolveParamArgStatus walks up the tracker tree parent chain to find a
+// ParamArgMap that maps a function parameter name to the actual argument
+// passed by the caller. This handles error helper patterns like:
+//
+//	writeJSONError(w, http.StatusBadRequest, "msg")
+//	func writeJSONError(w http.ResponseWriter, code int, msg string) {
+//	    w.WriteHeader(code)  // ← code is a parameter, not a local variable
+//	}
+func (r *ResponsePatternMatcherImpl) resolveParamArgStatus(node TrackerNodeInterface, paramName string) (int, bool) {
+	// Walk up parent chain to find the call edge that invoked this function
+	for parent := node.GetParent(); parent != nil; parent = parent.GetParent() {
+		parentEdge := parent.GetEdge()
+		if parentEdge == nil {
+			continue
+		}
+		if arg, exists := parentEdge.ParamArgMap[paramName]; exists {
+			// Found the parameter mapping — resolve the argument value
+			argStr := r.contextProvider.GetArgumentInfo(&arg)
+			if status, ok := r.schemaMapper.MapStatusCode(argStr); ok {
+				return status, true
+			}
+		}
+	}
+	return 0, false
+}
+
+// resolveParamArgType walks up the tracker tree parent chain to find a
+// ParamArgMap entry for a function parameter and returns the concrete type
+// of the argument passed by the caller. This handles patterns like:
+//
+//	respondJSON(w, 201, user)
+//	func respondJSON(w http.ResponseWriter, code int, data interface{}) {
+//	    json.Encode(data)  // ← data is interface{}, but user is User
+//	}
+func (r *ResponsePatternMatcherImpl) resolveParamArgType(node TrackerNodeInterface, paramName string) string {
+	for parent := node.GetParent(); parent != nil; parent = parent.GetParent() {
+		parentEdge := parent.GetEdge()
+		if parentEdge == nil {
+			continue
+		}
+		if arg, exists := parentEdge.ParamArgMap[paramName]; exists {
+			// Use GetArgumentInfo first — it produces the fully-qualified type
+			// (e.g., "error_helpers.User" instead of just "User")
+			if info := r.contextProvider.GetArgumentInfo(&arg); info != "" && info != "interface{}" && info != "any" {
+				return info
+			}
+			// Fallback to raw type
+			if argType := arg.GetType(); argType != "" && argType != "interface{}" && argType != "any" {
+				return argType
+			}
+		}
+	}
+	return ""
+}
+
 // isInterfaceHandler checks if the route handler's receiver type is an interface.
 func (e *Extractor) isInterfaceHandler(route *RouteInfo) bool {
 	meta := e.tree.GetMetadata()
@@ -777,6 +832,187 @@ func (e *Extractor) visitChildren(node TrackerNodeInterface, route *RouteInfo, c
 	}
 }
 
+// addResponse adds a response to the route, merging schemas for duplicate status codes.
+func (e *Extractor) addResponse(route *RouteInfo, resp *ResponseInfo) {
+	key := fmt.Sprintf("%d", resp.StatusCode)
+	if existing, ok := route.Response[key]; ok && resp.Schema != nil {
+		if existing.Schema == nil {
+			existing.BodyType = resp.BodyType
+			existing.Schema = resp.Schema
+		} else {
+			isDuplicate := schemasEqual(existing.Schema, resp.Schema)
+			if !isDuplicate {
+				for _, alt := range existing.AlternativeSchemas {
+					if schemasEqual(alt, resp.Schema) {
+						isDuplicate = true
+						break
+					}
+				}
+			}
+			if !isDuplicate {
+				existing.AlternativeSchemas = append(existing.AlternativeSchemas, resp.Schema)
+			}
+		}
+	} else {
+		route.Response[key] = resp
+	}
+}
+
+// helperCall represents a call to a helper function with its ParamArgMap.
+type helperCall struct {
+	node TrackerNodeInterface
+	edge *metadata.CallGraphEdge
+}
+
+// resolveArgToStatusCode attempts to map a CallArgument to an HTTP status code.
+func (e *Extractor) resolveArgToStatusCode(arg *metadata.CallArgument) (int, bool) {
+	argStr := e.contextProvider.GetArgumentInfo(arg)
+	for _, matcher := range e.responseMatchers {
+		if rm, ok := matcher.(*ResponsePatternMatcherImpl); ok {
+			return rm.schemaMapper.MapStatusCode(argStr)
+		}
+	}
+	return 0, false
+}
+
+// expandHelperFunctionResponses scans the route node's descendants for helper
+// functions called multiple times with different status codes. For each group,
+// it creates additional responses for status codes not captured by the primary
+// response extraction (which deduplicates by Callee.ID).
+func (e *Extractor) expandHelperFunctionResponses(routeNode TrackerNodeInterface, route *RouteInfo) {
+	groups := e.collectHelperCallGroups(routeNode)
+
+	for _, calls := range groups {
+		if len(calls) < 2 {
+			continue
+		}
+
+		// Only expand helpers that actually contain response-writing calls
+		// (WriteHeader, Encode, etc.) to avoid fabricating responses for
+		// unrelated helpers that happen to be called multiple times.
+		if !e.helperContainsResponsePattern(calls[0].node) {
+			continue
+		}
+
+		statusParam, baseSchema, contentType := e.findStatusParamAndSchema(calls, route)
+		if statusParam == "" || baseSchema == nil {
+			continue
+		}
+
+		// Find the "body" parameter name — the one whose argument resolved to the
+		// base schema's type. This is used to resolve per-call body types below.
+		bodyParam := e.findBodyParamName(calls, route, statusParam, baseSchema)
+
+		for _, call := range calls {
+			arg, exists := call.edge.ParamArgMap[statusParam]
+			if !exists {
+				continue
+			}
+			if status, ok := e.resolveArgToStatusCode(&arg); ok {
+				key := fmt.Sprintf("%d", status)
+				if _, exists := route.Response[key]; !exists {
+					// Resolve this call's body type from its own ParamArgMap.
+					// If the body parameter carries a different type per call
+					// (e.g., respondJSON(w, 200, user) vs respondJSON(w, 400, err)),
+					// each sibling gets its own schema.
+					schema := baseSchema
+					if bodyParam != "" {
+						if bodyArg, ok := call.edge.ParamArgMap[bodyParam]; ok {
+							bodyType := e.contextProvider.GetArgumentInfo(&bodyArg)
+							if bodyType != "" && bodyType != "interface{}" && bodyType != "any" {
+								if s, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, e.cfg, nil); s != nil {
+									schema = s
+								}
+							}
+						}
+					}
+					e.addResponse(route, &ResponseInfo{
+						StatusCode:  status,
+						ContentType: contentType,
+						Schema:      schema,
+					})
+				}
+			}
+		}
+	}
+}
+
+// collectHelperCallGroups recursively collects calls with ParamArgMap, grouped
+// by callee BaseID.
+func (e *Extractor) collectHelperCallGroups(routeNode TrackerNodeInterface) map[string][]helperCall {
+	groups := make(map[string][]helperCall)
+	var collect func(node TrackerNodeInterface)
+	collect = func(node TrackerNodeInterface) {
+		for _, child := range node.GetChildren() {
+			edge := child.GetEdge()
+			if edge != nil && len(edge.ParamArgMap) > 0 {
+				baseID := edge.Callee.BaseID()
+				groups[baseID] = append(groups[baseID], helperCall{node: child, edge: edge})
+			}
+			collect(child)
+		}
+	}
+	collect(routeNode)
+	return groups
+}
+
+// findStatusParamAndSchema finds which parameter in a group of helper calls
+// maps to a status code that already has a response with a schema.
+func (e *Extractor) findStatusParamAndSchema(calls []helperCall, route *RouteInfo) (paramName string, schema *Schema, contentType string) {
+	for _, call := range calls {
+		for pName, arg := range call.edge.ParamArgMap {
+			if status, ok := e.resolveArgToStatusCode(&arg); ok {
+				key := fmt.Sprintf("%d", status)
+				if resp, exists := route.Response[key]; exists && resp.Schema != nil {
+					return pName, resp.Schema, resp.ContentType
+				}
+			}
+		}
+	}
+	return "", nil, ""
+}
+
+// findBodyParamName finds which ParamArgMap parameter carries the response body.
+// It identifies the parameter by exclusion: not the status code param, not a
+// ResponseWriter, and not a string (message). The remaining param is the body.
+func (e *Extractor) findBodyParamName(calls []helperCall, _ *RouteInfo, statusParam string, _ *Schema) string {
+	if len(calls) == 0 {
+		return ""
+	}
+
+	// Use the first call to identify parameter roles
+	for pName, arg := range calls[0].edge.ParamArgMap {
+		if pName == statusParam || pName == "w" || pName == "writer" || pName == "rw" || pName == "response" {
+			continue
+		}
+		// Skip if this resolves to a status code
+		if _, ok := e.resolveArgToStatusCode(&arg); ok {
+			continue
+		}
+		// Skip string literal parameters (message strings)
+		if arg.GetKind() == metadata.KindLiteral {
+			continue
+		}
+		// This is likely the body parameter
+		return pName
+	}
+	return ""
+}
+
+// helperContainsResponsePattern checks if a helper function node has any children
+// that match a response pattern (e.g., WriteHeader, Encode). This prevents
+// expandHelperFunctionResponses from fabricating responses for non-response helpers.
+func (e *Extractor) helperContainsResponsePattern(helperNode TrackerNodeInterface) bool {
+	for _, child := range helperNode.GetChildren() {
+		for _, matcher := range e.responseMatchers {
+			if matcher.MatchNode(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // extractRouteChildren extracts request, response, and params from children nodes
 // using the unified visitor with registered callbacks.
 func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *RouteInfo, mountTags []string, routes *[]*RouteInfo, visitedEdges map[string]bool) {
@@ -799,28 +1035,7 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 			if resp == nil || (resp.BodyType == "" && resp.StatusCode == 0) {
 				return
 			}
-			key := fmt.Sprintf("%d", resp.StatusCode)
-			if existing, ok := route.Response[key]; ok && resp.Schema != nil {
-				if existing.Schema == nil {
-					existing.BodyType = resp.BodyType
-					existing.Schema = resp.Schema
-				} else {
-					isDuplicate := schemasEqual(existing.Schema, resp.Schema)
-					if !isDuplicate {
-						for _, alt := range existing.AlternativeSchemas {
-							if schemasEqual(alt, resp.Schema) {
-								isDuplicate = true
-								break
-							}
-						}
-					}
-					if !isDuplicate {
-						existing.AlternativeSchemas = append(existing.AlternativeSchemas, resp.Schema)
-					}
-				}
-			} else {
-				route.Response[key] = resp
-			}
+			e.addResponse(route, resp)
 		},
 		// Parameter extraction
 		func(node TrackerNodeInterface, route *RouteInfo) {
@@ -835,6 +1050,14 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 	}
 
 	e.visitChildren(routeNode, route, callbacks)
+
+	// After all children are visited and responses have schemas, expand
+	// helper function responses. When the same error helper is called multiple
+	// times with different status codes (e.g., writeJSONError(w, 400, ...) and
+	// writeJSONError(w, 404, ...)), the dedup in extractResponseFromNode only
+	// processes one call's WriteHeader/Encode. This post-pass creates responses
+	// for the other calls using the schema from the processed one.
+	e.expandHelperFunctionResponses(routeNode, route)
 
 	// Extract parameters from the route node itself
 	if param := e.extractParamFromNode(routeNode, route); param != nil {
@@ -1068,6 +1291,16 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 					respInfo.StatusCode = status
 				}
 			}
+			// If not found in AssignmentMap, check if this is a function parameter
+			// passed from a caller (e.g., writeJSONError(w, http.StatusBadRequest, "msg")
+			// where statusCode is a parameter, not a local variable).
+			// Walk up the parent chain to find a ParamArgMap that maps this parameter name.
+			if !statusResolved {
+				if status, ok := r.resolveParamArgStatus(node, arg.GetName()); ok {
+					statusResolved = true
+					respInfo.StatusCode = status
+				}
+			}
 		} else if arg.GetKind() == metadata.KindCall {
 			// Status code from function call — check if the callee has a
 			// constant return value (e.g., func getStatus() int { return 200 })
@@ -1137,6 +1370,15 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 			// Apply dereferencing if needed
 			if r.pattern.Deref && strings.HasPrefix(bodyType, "*") {
 				bodyType = strings.TrimPrefix(bodyType, "*")
+			}
+		}
+
+		// If the body type is interface{} or unresolved and the argument is a
+		// function parameter, resolve the concrete type from the caller's argument
+		// via ParamArgMap (e.g., respondJSON(w, 201, user) where data is interface{}).
+		if (bodyType == "interface{}" || bodyType == "" || bodyType == "any") && arg.GetKind() == metadata.KindIdent {
+			if concreteType := r.resolveParamArgType(node, arg.GetName()); concreteType != "" {
+				bodyType = concreteType
 			}
 		}
 

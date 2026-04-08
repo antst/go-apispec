@@ -47,6 +47,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "mux", inputDir: "../../testdata/mux", configFn: spec.DefaultMuxConfig},
 		{name: "response_patterns", inputDir: "../../testdata/response_patterns", configFn: spec.DefaultChiConfig},
 		{name: "nested_http", inputDir: "../../testdata/nested_http", configFn: spec.DefaultHTTPConfig},
+		{name: "error_helpers", inputDir: "../../testdata/error_helpers", configFn: spec.DefaultChiConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {

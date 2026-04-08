@@ -56,3 +56,4 @@ playground*.go
 CLAUDE.md
 specs/
 .specify/
+testdata/error_helpers/error_helpers
