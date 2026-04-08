@@ -184,6 +184,21 @@ type Extractor struct {
 	paramMatchers    []ParamPatternMatcher
 }
 
+// isLikelyMediaType checks if a string looks like a valid MIME type (type/subtype).
+// Returns false for Go variable/field paths like "model.Document.MimeType".
+func isLikelyMediaType(v string) bool {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return false
+	}
+	// Strip parameters (e.g., "text/plain; charset=utf-8" → "text/plain")
+	if idx := strings.IndexByte(v, ';'); idx >= 0 {
+		v = strings.TrimSpace(v[:idx])
+	}
+	parts := strings.SplitN(v, "/", 2)
+	return len(parts) == 2 && parts[0] != "" && parts[1] != ""
+}
+
 // checkContentTypePattern checks if a node matches a Content-Type header set pattern
 // (e.g., w.Header().Set("Content-Type", "image/png")) and stores the detected
 // content type on all route responses.
@@ -222,6 +237,12 @@ func (e *Extractor) checkContentTypePattern(node TrackerNodeInterface, route *Ro
 			if strings.EqualFold(headerName, "Content-Type") && len(edge.Args) > pattern.HeaderValueArgIndex {
 				val := e.contextProvider.GetArgumentInfo(edge.Args[pattern.HeaderValueArgIndex])
 				val = strings.Trim(val, "\"")
+				// Validate the value looks like a MIME type (type/subtype).
+				// Variable or field paths (e.g., doc.MimeType) don't contain "/"
+				// and should fall back to application/octet-stream.
+				if val != "" && !isLikelyMediaType(val) {
+					val = "application/octet-stream"
+				}
 				if val != "" {
 					// Override content type on existing responses that use the
 					// default. Don't override responses with pattern-specific
