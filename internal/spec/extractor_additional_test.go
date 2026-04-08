@@ -2419,3 +2419,35 @@ func TestCheckContentTypePattern_DynamicVariable_FallsBackToOctetStream(t *testi
 	assert.Equal(t, "application/octet-stream", route.Response["200"].ContentType)
 	assert.Equal(t, "application/octet-stream", route.detectedContentType)
 }
+
+func TestIsLikelyMediaType(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected bool
+	}{
+		{"application/json", true},
+		{"image/png", true},
+		{"text/plain; charset=utf-8", true},
+		{"application/octet-stream", true},
+		{"application/vnd.api+json", true},
+		{"multipart/form-data", true},
+		{"*/*", true},
+		// Go field paths — NOT media types
+		{"model.Document.MimeType", false},
+		{"MimeType", false},
+		{"github.com/org/pkg/model.Document.MimeType", false}, // multiple slashes
+		// Note: "net/http.ResponseWriter" would pass (1 slash, no dot in type part)
+		// but this value never appears as a content-type in practice.
+		// Edge cases
+		{"", false},
+		{"  ", false},
+		{"/", false},
+		{"text/", false},
+		{"/plain", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isLikelyMediaType(tt.input), "isLikelyMediaType(%q)", tt.input)
+		})
+	}
+}
