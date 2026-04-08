@@ -887,6 +887,13 @@ func (e *Extractor) expandHelperFunctionResponses(routeNode TrackerNodeInterface
 			continue
 		}
 
+		// Only expand helpers that actually contain response-writing calls
+		// (WriteHeader, Encode, etc.) to avoid fabricating responses for
+		// unrelated helpers that happen to be called multiple times.
+		if !e.helperContainsResponsePattern(calls[0].node) {
+			continue
+		}
+
 		statusParam, baseSchema, contentType := e.findStatusParamAndSchema(calls, route)
 		if statusParam == "" || baseSchema == nil {
 			continue
@@ -975,7 +982,7 @@ func (e *Extractor) findBodyParamName(calls []helperCall, _ *RouteInfo, statusPa
 
 	// Use the first call to identify parameter roles
 	for pName, arg := range calls[0].edge.ParamArgMap {
-		if pName == statusParam || pName == "w" || pName == "writer" {
+		if pName == statusParam || pName == "w" || pName == "writer" || pName == "rw" || pName == "response" {
 			continue
 		}
 		// Skip if this resolves to a status code
@@ -990,6 +997,20 @@ func (e *Extractor) findBodyParamName(calls []helperCall, _ *RouteInfo, statusPa
 		return pName
 	}
 	return ""
+}
+
+// helperContainsResponsePattern checks if a helper function node has any children
+// that match a response pattern (e.g., WriteHeader, Encode). This prevents
+// expandHelperFunctionResponses from fabricating responses for non-response helpers.
+func (e *Extractor) helperContainsResponsePattern(helperNode TrackerNodeInterface) bool {
+	for _, child := range helperNode.GetChildren() {
+		for _, matcher := range e.responseMatchers {
+			if matcher.MatchNode(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // extractRouteChildren extracts request, response, and params from children nodes

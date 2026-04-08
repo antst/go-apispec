@@ -68,7 +68,7 @@ func GetUser(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(User{ID: 1, Name: "Alice"})
 }
 
-// CreateUser creates a new user, or returns 400/413 errors via helper.
+// CreateUser creates a new user, or returns 400/422 errors via helper.
 func CreateUser(w http.ResponseWriter, r *http.Request) {
 	var user User
 	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
@@ -83,6 +83,8 @@ func CreateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListItems returns all items, or 500 error via helper.
+// Note: items is non-empty here; the error branch exercises 500 status detection
+// in the static analysis (the tool traces both branches regardless of runtime values).
 func ListItems(w http.ResponseWriter, r *http.Request) {
 	items := []Item{{ID: 1, Title: "Widget"}}
 	if len(items) == 0 {

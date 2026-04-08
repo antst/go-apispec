@@ -862,11 +862,23 @@ func TestExpandHelperFunctionResponses_AddsNewResponses(t *testing.T) {
 		"data": *dataArg2,
 	})
 
+	// Helper nodes need a child that matches a response pattern (WriteHeader)
+	// so helperContainsResponsePattern returns true.
+	writeHeaderEdge := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta:     meta,
+			Name:     meta.StringPool.Get("WriteHeader"),
+			Pkg:      meta.StringPool.Get("net/http"),
+			RecvType: meta.StringPool.Get("ResponseWriter"),
+		},
+	}
+	whChild := &TrackerNode{key: "net/http.ResponseWriter.WriteHeader", CallGraphEdge: writeHeaderEdge}
+
 	routeNode := &TrackerNode{
 		key: "route",
 		Children: []*TrackerNode{
-			{key: "call1", CallGraphEdge: &edge1},
-			{key: "call2", CallGraphEdge: &edge2},
+			{key: "call1", CallGraphEdge: &edge1, Children: []*TrackerNode{whChild}},
+			{key: "call2", CallGraphEdge: &edge2, Children: []*TrackerNode{whChild}},
 		},
 	}
 
