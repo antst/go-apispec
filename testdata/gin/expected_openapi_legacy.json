@@ -18,6 +18,7 @@
         "tags": [
           "/users"
         ],
+        "summary": "Get all users",
         "operationId": "github.com/antst/go-apispec/testdata/gin.ListUsers",
         "responses": {
           "200": {
@@ -39,6 +40,7 @@
         "tags": [
           "/users"
         ],
+        "summary": "Create a new user",
         "operationId": "github.com/antst/go-apispec/testdata/gin.CreateUser",
         "requestBody": {
           "content": {
@@ -78,6 +80,7 @@
         "tags": [
           "/users"
         ],
+        "summary": "Get a user by ID",
         "operationId": "github.com/antst/go-apispec/testdata/gin.GetUser",
         "parameters": [
           {
@@ -126,6 +129,7 @@
         "tags": [
           "/users"
         ],
+        "summary": "Update an existing user",
         "operationId": "github.com/antst/go-apispec/testdata/gin.UpdateUser",
         "parameters": [
           {
@@ -183,6 +187,7 @@
         "tags": [
           "/users"
         ],
+        "summary": "Delete a user",
         "operationId": "github.com/antst/go-apispec/testdata/gin.DeleteUser",
         "parameters": [
           {

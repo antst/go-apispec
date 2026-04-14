@@ -381,9 +381,16 @@ func buildPathsFromRoutes(routes []*RouteInfo, cfg *APISpecConfig) map[string]Pa
 			operationID = shortenOperationID(operationID)
 		}
 
+		// Extract summary and description from handler function's doc comment.
+		summary, description := extractDocComment(route)
+		if route.Summary != "" {
+			summary = route.Summary // Override/config takes precedence
+		}
+
 		operation := &Operation{
 			OperationID: operationID,
-			Summary:     route.Summary,
+			Summary:     summary,
+			Description: description,
 			Tags:        route.Tags,
 		}
 
@@ -2145,4 +2152,68 @@ func parseArraySize(sizeStr string) *int {
 
 	// If it's not a number, return nil (no size constraint)
 	return nil
+}
+
+// extractDocComment looks up the handler function's doc comment from metadata
+// and splits it into summary (first sentence) and description (full text).
+// Returns empty strings if no comment is found.
+func extractDocComment(route *RouteInfo) (summary, description string) {
+	if route.Metadata == nil || route.Metadata.StringPool == nil {
+		return "", ""
+	}
+
+	// Extract the bare function name from the route function path
+	funcName := route.Function
+	if idx := strings.LastIndex(funcName, "."); idx >= 0 {
+		funcName = funcName[idx+1:]
+	}
+	// Strip position suffix if present (e.g., "FuncLit:file.go:10")
+	if idx := strings.Index(funcName, ":"); idx >= 0 {
+		funcName = funcName[:idx]
+	}
+
+	// Search for the function in metadata packages
+	for _, pkg := range route.Metadata.Packages {
+		for _, file := range pkg.Files {
+			if fn, exists := file.Functions[funcName]; exists {
+				comment := route.Metadata.StringPool.GetString(fn.Comments)
+				if comment == "" {
+					continue
+				}
+				return splitDocComment(comment)
+			}
+		}
+	}
+	return "", ""
+}
+
+// splitDocComment splits a Go doc comment into summary and description.
+// Summary is the first sentence (up to the first ". " or ".\n" or the whole
+// text if no sentence boundary). Description is the full comment text.
+// If the comment is a single sentence, description is left empty to avoid
+// duplication in the OpenAPI output.
+func splitDocComment(comment string) (summary, description string) {
+	comment = strings.TrimSpace(comment)
+	if comment == "" {
+		return "", ""
+	}
+
+	// Find the first sentence boundary
+	summary = comment
+	for i, r := range comment {
+		if r == '.' && i+1 < len(comment) {
+			next := comment[i+1]
+			if next == ' ' || next == '\n' || next == '\r' {
+				summary = comment[:i+1]
+				break
+			}
+		}
+	}
+
+	// If the summary IS the full comment (single sentence), don't duplicate
+	if strings.TrimSpace(strings.TrimSuffix(summary, ".")) == strings.TrimSpace(strings.TrimSuffix(comment, ".")) {
+		return summary, ""
+	}
+
+	return summary, comment
 }
