@@ -18,6 +18,7 @@
         "tags": [
           "/api/"
         ],
+        "summary": "APIHealth returns API health status.",
         "operationId": "nested_http.APIHealth",
         "responses": {
           "200": {
@@ -38,6 +39,7 @@
         "tags": [
           "/api/v1/"
         ],
+        "summary": "V1Health returns v1-specific health status.",
         "operationId": "nested_http.V1Health",
         "responses": {
           "200": {
@@ -58,6 +60,7 @@
         "tags": [
           "/api/v1/"
         ],
+        "summary": "ListItems returns a list of items.",
         "operationId": "nested_http.ListItems",
         "responses": {
           "200": {
@@ -81,6 +84,7 @@
         "tags": [
           "/api/v1/"
         ],
+        "summary": "ListUsers returns a list of users.",
         "operationId": "nested_http.ListUsers",
         "responses": {
           "200": {
@@ -101,6 +105,7 @@
     },
     "/global": {
       "post": {
+        "summary": "GlobalHandler returns global info (registered on DefaultServeMux).",
         "operationId": "nested_http.GlobalHandler",
         "responses": {
           "200": {
@@ -118,6 +123,7 @@
     },
     "/ping": {
       "post": {
+        "summary": "Ping returns a simple text response.",
         "operationId": "nested_http.Ping",
         "responses": {
           "200": {

@@ -381,9 +381,19 @@ func buildPathsFromRoutes(routes []*RouteInfo, cfg *APISpecConfig) map[string]Pa
 			operationID = shortenOperationID(operationID)
 		}
 
+		// Extract summary and description from handler function's doc comment.
+		summary, description := extractDocComment(route)
+		if route.Summary != "" {
+			summary = route.Summary // Override/config takes precedence
+		}
+		if route.Description != "" {
+			description = route.Description // Override/config takes precedence
+		}
+
 		operation := &Operation{
 			OperationID: operationID,
-			Summary:     route.Summary,
+			Summary:     summary,
+			Description: description,
 			Tags:        route.Tags,
 		}
 
@@ -2145,4 +2155,104 @@ func parseArraySize(sizeStr string) *int {
 
 	// If it's not a number, return nil (no size constraint)
 	return nil
+}
+
+// extractDocComment looks up the handler function's doc comment from metadata
+// and splits it into summary (first sentence) and description (full text).
+// Returns empty strings if no comment is found.
+// lookupFuncComment searches a package for a function's doc comment.
+func lookupFuncComment(pkg *metadata.Package, funcName string, sp *metadata.StringPool) (string, string) {
+	for _, file := range pkg.Files {
+		if fn, exists := file.Functions[funcName]; exists {
+			if comment := sp.GetString(fn.Comments); comment != "" {
+				return splitDocComment(comment)
+			}
+		}
+	}
+	return "", ""
+}
+
+// parseFuncNameAndPackage extracts the bare function name and package prefix
+// from a route function path like "myapp.UserHandler.GetUser".
+func parseFuncNameAndPackage(function string) (funcName, pkgPrefix string) {
+	funcName = function
+	if idx := strings.LastIndex(funcName, "."); idx >= 0 {
+		pkgPrefix = funcName[:idx]
+		funcName = funcName[idx+1:]
+	}
+	// Strip position suffix if present (e.g., "FuncLit:file.go:10")
+	if idx := strings.Index(funcName, ":"); idx >= 0 {
+		funcName = funcName[:idx]
+	}
+	return funcName, pkgPrefix
+}
+
+func extractDocComment(route *RouteInfo) (summary, description string) {
+	if route == nil || route.Metadata == nil || route.Metadata.StringPool == nil {
+		return "", ""
+	}
+
+	funcName, pkgPrefix := parseFuncNameAndPackage(route.Function)
+	sp := route.Metadata.StringPool
+
+	// First pass: use route.Package if available (most precise).
+	if route.Package != "" {
+		if pkg, ok := route.Metadata.Packages[route.Package]; ok {
+			if s, d := lookupFuncComment(pkg, funcName, sp); s != "" || d != "" {
+				return s, d
+			}
+		}
+	}
+
+	// Second pass: match by pkgPrefix suffix against metadata package keys.
+	// Handles cases like pkgPrefix="users.UserHandler" matching package "users".
+	if pkgPrefix != "" {
+		for pkgName, pkg := range route.Metadata.Packages {
+			if !strings.HasSuffix(pkgPrefix, pkgName) && !strings.HasSuffix(pkgName, pkgPrefix) {
+				continue
+			}
+			if s, d := lookupFuncComment(pkg, funcName, sp); s != "" || d != "" {
+				return s, d
+			}
+		}
+	}
+
+	// Fallback: search all packages (for cases where package prefix doesn't match)
+	for _, pkg := range route.Metadata.Packages {
+		if s, d := lookupFuncComment(pkg, funcName, sp); s != "" || d != "" {
+			return s, d
+		}
+	}
+	return "", ""
+}
+
+// splitDocComment splits a Go doc comment into summary and description.
+// Summary is the first sentence (up to the first ". " or ".\n" or the whole
+// text if no sentence boundary). Description is the full comment text.
+// If the comment is a single sentence, description is left empty to avoid
+// duplication in the OpenAPI output.
+func splitDocComment(comment string) (summary, description string) {
+	comment = strings.TrimSpace(comment)
+	if comment == "" {
+		return "", ""
+	}
+
+	// Find the first sentence boundary
+	summary = comment
+	for i, r := range comment {
+		if r == '.' && i+1 < len(comment) {
+			next := comment[i+1]
+			if next == ' ' || next == '\n' || next == '\r' {
+				summary = comment[:i+1]
+				break
+			}
+		}
+	}
+
+	// If the summary IS the full comment (single sentence), don't duplicate
+	if strings.TrimSpace(strings.TrimSuffix(summary, ".")) == strings.TrimSpace(strings.TrimSuffix(comment, ".")) {
+		return summary, ""
+	}
+
+	return summary, comment
 }
