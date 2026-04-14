@@ -386,6 +386,9 @@ func buildPathsFromRoutes(routes []*RouteInfo, cfg *APISpecConfig) map[string]Pa
 		if route.Summary != "" {
 			summary = route.Summary // Override/config takes precedence
 		}
+		if route.Description != "" {
+			description = route.Description // Override/config takes precedence
+		}
 
 		operation := &Operation{
 			OperationID: operationID,
@@ -2158,13 +2161,16 @@ func parseArraySize(sizeStr string) *int {
 // and splits it into summary (first sentence) and description (full text).
 // Returns empty strings if no comment is found.
 func extractDocComment(route *RouteInfo) (summary, description string) {
-	if route.Metadata == nil || route.Metadata.StringPool == nil {
+	if route == nil || route.Metadata == nil || route.Metadata.StringPool == nil {
 		return "", ""
 	}
 
-	// Extract the bare function name from the route function path
+	// Extract the bare function name and package from the route function path.
+	// route.Function is e.g. "myapp.UserHandler.GetUser" or "myapp.GetUser"
 	funcName := route.Function
+	pkgPrefix := ""
 	if idx := strings.LastIndex(funcName, "."); idx >= 0 {
+		pkgPrefix = funcName[:idx]
 		funcName = funcName[idx+1:]
 	}
 	// Strip position suffix if present (e.g., "FuncLit:file.go:10")
@@ -2172,7 +2178,24 @@ func extractDocComment(route *RouteInfo) (summary, description string) {
 		funcName = funcName[:idx]
 	}
 
-	// Search for the function in metadata packages
+	// First pass: try to match by package to avoid cross-package collisions
+	if pkgPrefix != "" {
+		for pkgName, pkg := range route.Metadata.Packages {
+			if !strings.HasSuffix(pkgPrefix, pkgName) && !strings.HasSuffix(pkgName, pkgPrefix) {
+				continue
+			}
+			for _, file := range pkg.Files {
+				if fn, exists := file.Functions[funcName]; exists {
+					comment := route.Metadata.StringPool.GetString(fn.Comments)
+					if comment != "" {
+						return splitDocComment(comment)
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback: search all packages (for cases where package prefix doesn't match)
 	for _, pkg := range route.Metadata.Packages {
 		for _, file := range pkg.Files {
 			if fn, exists := file.Functions[funcName]; exists {

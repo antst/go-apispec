@@ -175,3 +175,150 @@ func TestExtractDocComment_ReceiverMethod(t *testing.T) {
 	summary, _ := extractDocComment(route)
 	assert.Equal(t, "GetUser fetches a user.", summary)
 }
+
+func TestExtractDocComment_NilRoute(_ *testing.T) {
+	// Should not panic
+	extractDocComment(nil)
+}
+
+func TestExtractDocComment_PackageScopedLookup(t *testing.T) {
+	// Two packages with same function name but different comments
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{
+		StringPool: sp,
+		Packages: map[string]*metadata.Package{
+			"users": {
+				Files: map[string]*metadata.File{
+					"handler.go": {
+						Functions: map[string]*metadata.Function{
+							"Create": {
+								Name:     sp.Get("Create"),
+								Comments: sp.Get("Create registers a new user."),
+							},
+						},
+					},
+				},
+			},
+			"items": {
+				Files: map[string]*metadata.File{
+					"handler.go": {
+						Functions: map[string]*metadata.Function{
+							"Create": {
+								Name:     sp.Get("Create"),
+								Comments: sp.Get("Create adds a new item."),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Should match the correct package
+	route := &RouteInfo{Function: "users.Create", Metadata: meta}
+	summary, _ := extractDocComment(route)
+	assert.Equal(t, "Create registers a new user.", summary)
+
+	route2 := &RouteInfo{Function: "items.Create", Metadata: meta}
+	summary2, _ := extractDocComment(route2)
+	assert.Equal(t, "Create adds a new item.", summary2)
+}
+
+func TestExtractDocComment_FallbackWhenPackageDoesntMatch(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{
+		StringPool: sp,
+		Packages: map[string]*metadata.Package{
+			"myapp": {
+				Files: map[string]*metadata.File{
+					"main.go": {
+						Functions: map[string]*metadata.Function{
+							"Serve": {
+								Name:     sp.Get("Serve"),
+								Comments: sp.Get("Serve starts the server."),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Package prefix doesn't match any metadata package — falls back to global search
+	route := &RouteInfo{Function: "unknown.Serve", Metadata: meta}
+	summary, _ := extractDocComment(route)
+	assert.Equal(t, "Serve starts the server.", summary)
+}
+
+func TestExtractDocComment_DescriptionOverrideTakesPrecedence(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{
+		StringPool: sp,
+		Packages: map[string]*metadata.Package{
+			"myapp": {
+				Files: map[string]*metadata.File{
+					"main.go": {
+						Functions: map[string]*metadata.Function{
+							"GetUser": {
+								Name:     sp.Get("GetUser"),
+								Comments: sp.Get("GetUser returns a user. It checks permissions."),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	route := &RouteInfo{
+		Function:    "myapp.GetUser",
+		Description: "Custom description from config override.",
+		Metadata:    meta,
+	}
+
+	// Simulate what the mapper does
+	summary, description := extractDocComment(route)
+	if route.Summary != "" {
+		summary = route.Summary
+	}
+	if route.Description != "" {
+		description = route.Description
+	}
+
+	assert.Equal(t, "GetUser returns a user.", summary)
+	assert.Equal(t, "Custom description from config override.", description)
+}
+
+func TestExtractDocComment_SummaryOverrideTakesPrecedence(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{
+		StringPool: sp,
+		Packages: map[string]*metadata.Package{
+			"myapp": {
+				Files: map[string]*metadata.File{
+					"main.go": {
+						Functions: map[string]*metadata.Function{
+							"GetUser": {
+								Name:     sp.Get("GetUser"),
+								Comments: sp.Get("GetUser returns a user."),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	route := &RouteInfo{
+		Function: "myapp.GetUser",
+		Summary:  "Custom summary from config.",
+		Metadata: meta,
+	}
+
+	summary, _ := extractDocComment(route)
+	if route.Summary != "" {
+		summary = route.Summary
+	}
+
+	assert.Equal(t, "Custom summary from config.", summary)
+}
