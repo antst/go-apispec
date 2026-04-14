@@ -2160,15 +2160,22 @@ func parseArraySize(sizeStr string) *int {
 // extractDocComment looks up the handler function's doc comment from metadata
 // and splits it into summary (first sentence) and description (full text).
 // Returns empty strings if no comment is found.
-func extractDocComment(route *RouteInfo) (summary, description string) {
-	if route == nil || route.Metadata == nil || route.Metadata.StringPool == nil {
-		return "", ""
+// lookupFuncComment searches a package for a function's doc comment.
+func lookupFuncComment(pkg *metadata.Package, funcName string, sp *metadata.StringPool) (string, string) {
+	for _, file := range pkg.Files {
+		if fn, exists := file.Functions[funcName]; exists {
+			if comment := sp.GetString(fn.Comments); comment != "" {
+				return splitDocComment(comment)
+			}
+		}
 	}
+	return "", ""
+}
 
-	// Extract the bare function name and package from the route function path.
-	// route.Function is e.g. "myapp.UserHandler.GetUser" or "myapp.GetUser"
-	funcName := route.Function
-	pkgPrefix := ""
+// parseFuncNameAndPackage extracts the bare function name and package prefix
+// from a route function path like "myapp.UserHandler.GetUser".
+func parseFuncNameAndPackage(function string) (funcName, pkgPrefix string) {
+	funcName = function
 	if idx := strings.LastIndex(funcName, "."); idx >= 0 {
 		pkgPrefix = funcName[:idx]
 		funcName = funcName[idx+1:]
@@ -2177,34 +2184,43 @@ func extractDocComment(route *RouteInfo) (summary, description string) {
 	if idx := strings.Index(funcName, ":"); idx >= 0 {
 		funcName = funcName[:idx]
 	}
+	return funcName, pkgPrefix
+}
 
-	// First pass: try to match by package to avoid cross-package collisions
+func extractDocComment(route *RouteInfo) (summary, description string) {
+	if route == nil || route.Metadata == nil || route.Metadata.StringPool == nil {
+		return "", ""
+	}
+
+	funcName, pkgPrefix := parseFuncNameAndPackage(route.Function)
+	sp := route.Metadata.StringPool
+
+	// First pass: use route.Package if available (most precise).
+	if route.Package != "" {
+		if pkg, ok := route.Metadata.Packages[route.Package]; ok {
+			if s, d := lookupFuncComment(pkg, funcName, sp); s != "" || d != "" {
+				return s, d
+			}
+		}
+	}
+
+	// Second pass: match by pkgPrefix suffix against metadata package keys.
+	// Handles cases like pkgPrefix="users.UserHandler" matching package "users".
 	if pkgPrefix != "" {
 		for pkgName, pkg := range route.Metadata.Packages {
 			if !strings.HasSuffix(pkgPrefix, pkgName) && !strings.HasSuffix(pkgName, pkgPrefix) {
 				continue
 			}
-			for _, file := range pkg.Files {
-				if fn, exists := file.Functions[funcName]; exists {
-					comment := route.Metadata.StringPool.GetString(fn.Comments)
-					if comment != "" {
-						return splitDocComment(comment)
-					}
-				}
+			if s, d := lookupFuncComment(pkg, funcName, sp); s != "" || d != "" {
+				return s, d
 			}
 		}
 	}
 
 	// Fallback: search all packages (for cases where package prefix doesn't match)
 	for _, pkg := range route.Metadata.Packages {
-		for _, file := range pkg.Files {
-			if fn, exists := file.Functions[funcName]; exists {
-				comment := route.Metadata.StringPool.GetString(fn.Comments)
-				if comment == "" {
-					continue
-				}
-				return splitDocComment(comment)
-			}
+		if s, d := lookupFuncComment(pkg, funcName, sp); s != "" || d != "" {
+			return s, d
 		}
 	}
 	return "", ""
