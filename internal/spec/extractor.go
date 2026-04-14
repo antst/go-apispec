@@ -111,18 +111,19 @@ func schemasEqual(a, b *Schema) bool {
 
 // RouteInfo represents extracted route information
 type RouteInfo struct {
-	Path      string
-	MountPath string
-	Method    string
-	Handler   string
-	Package   string
-	File      string
-	Function  string
-	Summary   string
-	Tags      []string
-	Request   *RequestInfo
-	Response  map[string]*ResponseInfo
-	Params    []Parameter
+	Path        string
+	MountPath   string
+	Method      string
+	Handler     string
+	Package     string
+	File        string
+	Function    string
+	Summary     string
+	Description string
+	Tags        []string
+	Request     *RequestInfo
+	Response    map[string]*ResponseInfo
+	Params      []Parameter
 
 	UsedTypes map[string]*Schema
 	Metadata  *metadata.Metadata
@@ -832,6 +833,7 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 			File:                route.File,
 			Function:            route.Function,
 			Summary:             route.Summary,
+			Description:         route.Description,
 			Tags:                route.Tags,
 			Request:             route.Request,
 			Response:            responses,

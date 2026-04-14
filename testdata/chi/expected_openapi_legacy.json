@@ -18,6 +18,7 @@
         "tags": [
           "/payment"
         ],
+        "summary": "ProcessPayment processes a payment request.",
         "operationId": "github.com/antst/go-apispec/testdata/chi/payment.ProcessPayment",
         "responses": {
           "200": {
@@ -41,6 +42,7 @@
         "tags": [
           "/payment"
         ],
+        "summary": "GetStripePublicKey returns the Stripe public key for the payment system.",
         "operationId": "github.com/antst/go-apispec/testdata/chi/payment.GetStripePublicKey",
         "responses": {
           "200": {

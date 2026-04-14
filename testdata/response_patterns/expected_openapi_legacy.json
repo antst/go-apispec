@@ -15,6 +15,7 @@
   "paths": {
     "/cache/{key}": {
       "get": {
+        "summary": "GetWithCache demonstrates 200 vs 304 responses.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.GetWithCache",
         "parameters": [
           {
@@ -42,6 +43,8 @@
     },
     "/config": {
       "get": {
+        "summary": "LoadConfig reads config from a file (not from r.Body).",
+        "description": "LoadConfig reads config from a file (not from r.Body).\nThe json.NewDecoder(file).Decode should NOT produce a request body schema.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.LoadConfig",
         "responses": {
           "200": {
@@ -69,6 +72,7 @@
     },
     "/debug": {
       "get": {
+        "summary": "DebugEndpoint uses fmt.Fprintf to write the response.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.DebugEndpoint",
         "responses": {
           "200": {
@@ -86,6 +90,8 @@
     },
     "/dispatch": {
       "post": {
+        "summary": "DispatchHandler handles both GET and POST with different responses\nbased on r.Method.",
+        "description": "DispatchHandler handles both GET and POST with different responses\nbased on r.Method. This tests conditional HTTP method detection.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.DispatchHandler",
         "requestBody": {
           "content": {
@@ -142,6 +148,7 @@
     },
     "/files/{id}/download": {
       "get": {
+        "summary": "DownloadFile serves raw binary data via w.Write with []byte.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.DownloadFile",
         "parameters": [
           {
@@ -180,6 +187,7 @@
     },
     "/files/{id}/thumbnail": {
       "get": {
+        "summary": "ServeThumbnail serves an image thumbnail.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ServeThumbnail",
         "parameters": [
           {
@@ -208,6 +216,7 @@
     },
     "/health": {
       "get": {
+        "summary": "HealthCheck writes raw bytes with w.Write.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.HealthCheck",
         "responses": {
           "200": {
@@ -225,6 +234,7 @@
     },
     "/image": {
       "get": {
+        "summary": "ServeImage sets Content-Type to image/png and writes binary data.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ServeImage",
         "responses": {
           "200": {
@@ -243,6 +253,7 @@
     },
     "/items": {
       "post": {
+        "summary": "CreateItem uses a status code variable before WriteHeader.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.CreateItem",
         "requestBody": {
           "content": {
@@ -279,6 +290,7 @@
     },
     "/items-func": {
       "post": {
+        "summary": "CreateItemViaFunc uses a function call to get the status code.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.CreateItemViaFunc",
         "requestBody": {
           "content": {
@@ -305,6 +317,7 @@
     },
     "/newsletter": {
       "post": {
+        "summary": "SubscribeNewsletter accepts a subscription with validated email list.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.SubscribeNewsletter",
         "requestBody": {
           "content": {
@@ -341,6 +354,7 @@
     },
     "/paged-users": {
       "get": {
+        "summary": "GetPagedUsers returns a nested generic: PagedList[User].",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.GetPagedUsers",
         "responses": {
           "200": {
@@ -358,6 +372,7 @@
     },
     "/ping": {
       "get": {
+        "summary": "Ping writes a simple string.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.Ping",
         "responses": {
           "200": {
@@ -375,6 +390,7 @@
     },
     "/protected": {
       "get": {
+        "summary": "ProtectedEndpoint returns 401 or 403.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ProtectedEndpoint",
         "responses": {
           "200": {
@@ -412,6 +428,7 @@
     },
     "/stream": {
       "get": {
+        "summary": "StreamData uses io.Copy to stream response data.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.StreamData",
         "responses": {
           "200": {
@@ -429,6 +446,7 @@
     },
     "/text": {
       "get": {
+        "summary": "ServeText sets Content-Type to text/plain and writes text.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ServeText",
         "responses": {
           "200": {
@@ -446,6 +464,7 @@
     },
     "/user-wrapped": {
       "get": {
+        "summary": "GetUserWrapped returns a user wrapped in APIResponse.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.GetUserWrapped",
         "responses": {
           "200": {
@@ -463,6 +482,7 @@
     },
     "/users": {
       "get": {
+        "summary": "ListUsersEncoder uses json.NewEncoder to write a slice of Users.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ListUsersEncoder",
         "responses": {
           "200": {
@@ -481,6 +501,7 @@
         }
       },
       "post": {
+        "summary": "CreateUserEncoder uses json.NewEncoder with 201 Created.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.CreateUserEncoder",
         "requestBody": {
           "content": {
@@ -517,6 +538,7 @@
     },
     "/users/search": {
       "get": {
+        "summary": "SearchUsers returns a paginated response.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.SearchUsers",
         "responses": {
           "200": {
@@ -534,6 +556,7 @@
     },
     "/users/{id}": {
       "get": {
+        "summary": "GetUserEncoder uses json.NewEncoder with 404 fallback.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.GetUserEncoder",
         "parameters": [
           {
@@ -569,6 +592,7 @@
         }
       },
       "delete": {
+        "summary": "DeleteUser returns 204 No Content.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.DeleteUser",
         "parameters": [
           {
@@ -592,6 +616,7 @@
     },
     "/v2/users": {
       "get": {
+        "summary": "ListUsersV2 serves users at a variable-defined path.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.ListUsersV2",
         "responses": {
           "200": {
@@ -612,6 +637,7 @@
     },
     "/version": {
       "get": {
+        "summary": "GetVersion returns a plain text version string.",
         "operationId": "github.com/antst/go-apispec/testdata/response_patterns.GetVersion",
         "responses": {
           "200": {

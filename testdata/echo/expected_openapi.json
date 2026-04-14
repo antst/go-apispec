@@ -15,6 +15,7 @@
   "paths": {
     "/api/info": {
       "get": {
+        "summary": "getAPIInfo returns information about the API.",
         "operationId": "echo.getAPIInfo",
         "responses": {
           "200": {
@@ -35,6 +36,7 @@
     },
     "/health": {
       "get": {
+        "summary": "healthCheck returns the health status of the API.",
         "operationId": "echo.healthCheck",
         "responses": {
           "200": {
