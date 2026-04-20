@@ -42,7 +42,10 @@ All frameworks also detect `fmt.Fprintf`, `io.Copy`, and `io.WriteString` as res
 
 **Response Detection**
 - Content-Type inference from `w.Header().Set("Content-Type", "image/png")`
+- Dynamic content-type fallback: `w.Header().Set("Content-Type", doc.MimeType)` → `application/octet-stream` (variable MIME types don't leak Go field paths into the spec)
 - `WriteHeader(201)` + `json.Encode(user)` merged into a single 201 response with schema
+- Error helper functions: `writeJSONError(w, http.StatusBadRequest, "msg")` → 400 response with ErrorResponse schema, traced through function parameters via ParamArgMap
+- Multiple calls to same helper: `writeJSONError(w, 400, ...)` + `writeJSONError(w, 404, ...)` → both status codes captured with correct schemas
 - Status code variable resolution: `status := http.StatusCreated; w.WriteHeader(status)` → 201
 - Cross-function status codes: `w.WriteHeader(getStatus())` where `getStatus()` returns a constant
 - Multiple response types for the same status code → `oneOf` schema
@@ -53,10 +56,17 @@ All frameworks also detect `fmt.Fprintf`, `io.Copy`, and `io.WriteString` as res
 **Type Resolution**
 - Generic struct instantiation: `APIResponse[User]` → schema with `Data: $ref User`
 - Interface resolution: handlers registered via interface → concrete implementation schemas
+- `interface{}` parameter resolution: `respondJSON(w, 201, user)` where `data` is `interface{}` → resolves to concrete `User` type from the caller's argument
 - Conditional HTTP methods via CFG: `switch r.Method { case "GET": ... case "POST": ... }` → separate operations
 - Route path variables: `path := "/users"; r.GET(path, h)` → resolves variable to literal path
 - Decode receiver tracing: `json.NewDecoder(file).Decode(&cfg)` not misclassified as request body
 - io.Copy source tracing: `io.Copy(w, strings.NewReader(...))` → `type: string`; `io.Copy(w, file)` → `format: binary`
+
+**Documentation Extraction**
+- Go doc comments on handler functions → OpenAPI `summary` and `description`
+- First sentence → `summary`, full comment → `description` (single-sentence comments don't duplicate)
+- No annotations needed — existing Go doc comments just work
+- Config overrides take precedence over doc comments
 
 **Schema Inference**
 - Required fields from `json:",omitempty"` absence and `binding:"required"` tags
