@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/antst/go-apispec/actions/workflows/ci.yml/badge.svg)](https://github.com/antst/go-apispec/actions/workflows/ci.yml)
 [![Release](https://github.com/antst/go-apispec/actions/workflows/release.yml/badge.svg)](https://github.com/antst/go-apispec/actions/workflows/release.yml)
-![Coverage](https://img.shields.io/badge/coverage-95.7%25-brightgreen.svg)
+![Coverage](https://img.shields.io/badge/coverage-95.8%25-brightgreen.svg)
 [![Go Version](https://img.shields.io/badge/go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/antst/go-apispec/blob/main/LICENSE)
 [![Go Reference](https://pkg.go.dev/badge/github.com/antst/go-apispec.svg)](https://pkg.go.dev/github.com/antst/go-apispec)
