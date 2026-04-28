@@ -179,6 +179,8 @@ func TestE2E_FormValueVar_AllPatternsExtracted(t *testing.T) {
 		"displayName":       {Type: "string"},                   // no converter — string fallback
 		"file":              {Type: "string", Format: "binary"}, // FormFile
 	}
+	assert.Equal(t, len(expected), len(got), "unexpected form params: have %v, want %v",
+		paramNames(pi.Post.Parameters), keysOf(expected))
 	for name, want := range expected {
 		s, ok := got[name]
 		if !assert.True(t, ok, "missing form param %q (have %v)", name, paramNames(pi.Post.Parameters)) {
@@ -194,6 +196,14 @@ func paramNames(ps []intspec.Parameter) []string {
 	out := make([]string, 0, len(ps))
 	for _, p := range ps {
 		out = append(out, p.Name)
+	}
+	return out
+}
+
+func keysOf[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
 	}
 	return out
 }

@@ -113,8 +113,11 @@ func varBoundConverter(edge *metadata.CallGraphEdge, meta *metadata.Metadata) *p
 	}
 
 	parentLine := positionLine(stringFromPool(meta, edge.Position))
-	bestLine := -1
-	var best *paramConverter
+	var (
+		best        *paramConverter
+		bestLine    int             // 0 == no best yet
+		bestUnknown *paramConverter // fallback when every match has unknown position
+	)
 
 	for _, sib := range siblings {
 		if sib == edge {
@@ -134,12 +137,24 @@ func varBoundConverter(edge *metadata.CallGraphEdge, meta *metadata.Metadata) *p
 		if parentLine > 0 && sibLine > 0 && sibLine < parentLine {
 			continue
 		}
+		if sibLine <= 0 {
+			// No position info — keep as a last-resort fallback so a single
+			// unknown-line sibling doesn't block a later sibling with a valid
+			// line from being selected.
+			if bestUnknown == nil {
+				bestUnknown = c
+			}
+			continue
+		}
 		if best == nil || sibLine < bestLine {
 			best = c
 			bestLine = sibLine
 		}
 	}
-	return best
+	if best != nil {
+		return best
+	}
+	return bestUnknown
 }
 
 // edgeArgUsesVariable reports whether any direct argument of the edge is an

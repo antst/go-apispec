@@ -16,6 +16,8 @@ func TestLookupParamConverter_Known(t *testing.T) {
 		want      paramConverter
 	}{
 		{"strconv", "Atoi", paramConverter{Type: "integer"}},
+		{"strconv", "ParseInt", paramConverter{Type: "integer"}},
+		{"strconv", "ParseUint", paramConverter{Type: "integer"}},
 		{"strconv", "ParseBool", paramConverter{Type: "boolean"}},
 		{"strconv", "ParseFloat", paramConverter{Type: "number"}},
 		{"github.com/google/uuid", "Parse", paramConverter{Type: "string", Format: "uuid"}},
@@ -166,6 +168,56 @@ func TestVarBoundConverter_NoConsumerOrUnknown(t *testing.T) {
 	noisy.Position = meta.StringPool.Get("main.go:61:2")
 	meta.Callers[fv.Caller.BaseID()] = []*metadata.CallGraphEdge{&fv, &noisy}
 	assert.Nil(t, varBoundConverter(&fv, meta), "non-converter consumer → no inference")
+}
+
+func TestVarBoundConverter_PreferKnownPositionOverUnknown(t *testing.T) {
+	// When metadata lacks position info on one consumer (sibLine == 0), a
+	// later valid-position consumer must still win — otherwise the first
+	// unknown-position sibling would lock in and block real matches.
+	meta := newTestMeta()
+
+	fv := makeEdge(meta, "Upload", "main", "FormValue", "net/http", nil)
+	fv.CalleeRecvVarName = "v"
+	fv.Position = meta.StringPool.Get(formatLine(40))
+
+	// Iteration order is preserved in a slice, so put the unknown-position
+	// sibling first to exercise the fallback path explicitly.
+	unknown := makeEdge(meta, "Upload", "main", "ParseBool", "strconv",
+		[]*metadata.CallArgument{makeIdentArg(meta, "v", "string")})
+	// no Position set — positionLine returns 0
+
+	known := makeEdge(meta, "Upload", "main", "Atoi", "strconv",
+		[]*metadata.CallArgument{makeIdentArg(meta, "v", "string")})
+	known.Position = meta.StringPool.Get(formatLine(41))
+
+	meta.Callers = map[string][]*metadata.CallGraphEdge{
+		fv.Caller.BaseID(): {&fv, &unknown, &known},
+	}
+
+	c := varBoundConverter(&fv, meta)
+	require.NotNil(t, c)
+	assert.Equal(t, "integer", c.Type, "should prefer known-position Atoi over unknown-position ParseBool")
+}
+
+func TestVarBoundConverter_FallsBackToUnknownPosition(t *testing.T) {
+	// When EVERY converter sibling has unknown position, return one of them
+	// rather than nil — the alternative would be silently dropping the type.
+	meta := newTestMeta()
+
+	fv := makeEdge(meta, "Upload", "main", "FormValue", "net/http", nil)
+	fv.CalleeRecvVarName = "v"
+	fv.Position = meta.StringPool.Get(formatLine(40))
+
+	noPos := makeEdge(meta, "Upload", "main", "ParseBool", "strconv",
+		[]*metadata.CallArgument{makeIdentArg(meta, "v", "string")})
+
+	meta.Callers = map[string][]*metadata.CallGraphEdge{
+		fv.Caller.BaseID(): {&fv, &noPos},
+	}
+
+	c := varBoundConverter(&fv, meta)
+	require.NotNil(t, c)
+	assert.Equal(t, "boolean", c.Type)
 }
 
 func TestVarBoundConverter_SkipsCallsWithoutBoundVar(t *testing.T) {
