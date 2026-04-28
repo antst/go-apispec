@@ -231,6 +231,7 @@ func TestE2E_JSONDto_FormatAndRequiredInference(t *testing.T) {
 		},
 	}
 
+	require.NotNil(t, result.Components, "components missing")
 	for typeName, fields := range cases {
 		schema := result.Components.Schemas[typeName]
 		require.NotNil(t, schema, "schema %s missing", typeName)

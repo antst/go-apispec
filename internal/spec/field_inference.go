@@ -46,6 +46,16 @@ func applyJSONFieldConverterFormats(targetVar, bodyType string, callerBaseID str
 
 	siblings := route.Metadata.Callers[callerBaseID]
 	for _, sib := range siblings {
+		// The converter lookup depends only on the callee — resolve once per
+		// sibling rather than re-looking-up for each arg. Cuts pool reads
+		// when the same call has many args (rare for converters but free).
+		c := lookupParamConverter(
+			stringFromPool(route.Metadata, sib.Callee.Pkg),
+			stringFromPool(route.Metadata, sib.Callee.Name),
+		)
+		if c == nil {
+			continue
+		}
 		for _, arg := range sib.Args {
 			fieldGoName := selectorFieldOnTarget(arg, targetVar)
 			if fieldGoName == "" {
@@ -57,13 +67,6 @@ func applyJSONFieldConverterFormats(targetVar, bodyType string, callerBaseID str
 			}
 			prop, ok := structSchema.Properties[jsonName]
 			if !ok || prop == nil {
-				continue
-			}
-			c := lookupParamConverter(
-				stringFromPool(route.Metadata, sib.Callee.Pkg),
-				stringFromPool(route.Metadata, sib.Callee.Name),
-			)
-			if c == nil {
 				continue
 			}
 			// Don't clobber an explicit format — flow inference is best-effort

@@ -51,6 +51,19 @@ func TestSelectorFieldOnTarget_DereferencedPointer(t *testing.T) {
 	assert.Equal(t, "TagsetID", selectorFieldOnTarget(arg, "body"))
 }
 
+func TestSelectorFieldOnTarget_KindStar(t *testing.T) {
+	// metadata.KindStar is distinct from KindUnary — the recursion handles
+	// both, but only the unary path is covered above. This locks the star
+	// branch (e.g. when an AST node is built directly as *ast.StarExpr
+	// rather than *ast.UnaryExpr).
+	meta := newTestMeta()
+	inner := mkSelArgPtr(meta, "body", "TagsetID")
+	arg := makeCallArg(meta)
+	arg.SetKind(metadata.KindStar)
+	arg.X = inner
+	assert.Equal(t, "TagsetID", selectorFieldOnTarget(arg, "body"))
+}
+
 func TestSelectorFieldOnTarget_AddressOf(t *testing.T) {
 	// `&body.Field` — uncommon as a converter arg but still a valid selector
 	// shape. The unary unwrap should handle it.
