@@ -75,6 +75,9 @@ All frameworks also detect `fmt.Fprintf`, `io.Copy`, and `io.WriteString` as res
 - Type mappings for `time.Time`, `uuid.UUID`, and custom types
 - Converter-typed params: `idStr := c.Param("id"); strconv.Atoi(idStr)` → `integer`; `strconv.ParseBool` → `boolean`; `strconv.ParseFloat` → `number`; `uuid.Parse` → `string/uuid`. Works for both inline (`strconv.Atoi(r.FormValue("x"))`) and var-bound (`if v := r.FormValue("x"); v != "" { strconv.ParseBool(v) }`) idioms, including shadowed variables in separate `if`-init scopes
 - `r.FormFile("upload")` → form parameter with `string`/`binary` schema
+- JSON-DTO field flow inference: when a decoded body's field is later passed to a converter (`uuid.Parse(body.SourceID)`, including pointer-deref `uuid.Parse(*body.TagsetID)`), apispec back-propagates the converter's schema (e.g. `format: uuid`) onto the struct field
+- Explicit per-field overrides via the `apispec:"format=uuid,type=string"` struct tag — covers fields the flow analysis can't reach (e.g. UUIDs that are read but never parsed in the handler, or `format: date-time` / `format: email` hints)
+- `requestBody.required: true` is emitted automatically when a handler reads the body via `json.Decode`, `json.Unmarshal`, `c.Bind`, `c.BodyParser`, etc.
 
 **Output Quality**
 - Deterministic YAML/JSON — sorted map keys, identical output across runs, safe for CI diffing

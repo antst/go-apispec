@@ -49,6 +49,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "nested_http", inputDir: "../../testdata/nested_http", configFn: spec.DefaultHTTPConfig},
 		{name: "error_helpers", inputDir: "../../testdata/error_helpers", configFn: spec.DefaultChiConfig},
 		{name: "form_value_var", inputDir: "../../testdata/form_value_var", configFn: spec.DefaultChiConfig},
+		{name: "json_dto", inputDir: "../../testdata/json_dto", configFn: spec.DefaultChiConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
@@ -190,6 +191,55 @@ func TestE2E_FormValueVar_AllPatternsExtracted(t *testing.T) {
 		require.NotNil(t, s, "schema missing for %q", name)
 		assert.Equal(t, want.Type, s.Type, "wrong type for %q", name)
 		assert.Equal(t, want.Format, s.Format, "wrong format for %q", name)
+	}
+}
+
+// TestE2E_JSONDto_FormatAndRequiredInference asserts the json_dto fixture's
+// JSON request/response contract: requestBody.required is true, fields
+// consumed by uuid.Parse get format=uuid via flow analysis, fields tagged
+// with apispec:"format=..." get the tagged format, and pointer-derefed
+// converter calls (`uuid.Parse(*body.TagsetID)`) reach the field schema.
+func TestE2E_JSONDto_FormatAndRequiredInference(t *testing.T) {
+	cfg := newDefaultCfg("../../testdata/json_dto", spec.DefaultChiConfig())
+	eng := NewEngine(cfg)
+	result, err := eng.GenerateOpenAPI()
+	require.NoError(t, err)
+
+	pi, ok := result.Paths["/documents/copy"]
+	require.True(t, ok)
+	require.NotNil(t, pi.Post)
+	require.NotNil(t, pi.Post.RequestBody)
+	assert.True(t, pi.Post.RequestBody.Required, "requestBody must be marked required")
+
+	type want struct{ Type, Format string }
+	cases := map[string]map[string]want{
+		"json_dto.CopyDocumentRequest": {
+			// Flow-inferred via uuid.Parse(body.X) calls in the handler.
+			"sourceId":            {Type: "string", Format: "uuid"},
+			"destinationBucketId": {Type: "string", Format: "uuid"},
+			"authorizationId":     {Type: "string", Format: "uuid"},
+			// Pointer-derefed: uuid.Parse(*body.TagsetID).
+			"tagsetId": {Type: "string", Format: "uuid"},
+			// Struct-tag driven (no converter call).
+			"externalId": {Type: "string", Format: "uuid"},
+			"expiresAt":  {Type: "string", Format: "date-time"},
+		},
+		"json_dto.CopyDocumentResponse": {
+			"id":         {Type: "string", Format: "uuid"},
+			"createdAt":  {Type: "string", Format: "date-time"},
+			"ownerEmail": {Type: "string", Format: "email"},
+		},
+	}
+
+	for typeName, fields := range cases {
+		schema := result.Components.Schemas[typeName]
+		require.NotNil(t, schema, "schema %s missing", typeName)
+		for prop, w := range fields {
+			ps := schema.Properties[prop]
+			require.NotNil(t, ps, "property %s.%s missing", typeName, prop)
+			assert.Equal(t, w.Type, ps.Type, "%s.%s type", typeName, prop)
+			assert.Equal(t, w.Format, ps.Format, "%s.%s format", typeName, prop)
+		}
 	}
 }
 

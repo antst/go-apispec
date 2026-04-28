@@ -56,7 +56,8 @@
                 "$ref": "#/components/schemas/error_helpers.User"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -160,7 +161,8 @@
                 "$ref": "#/components/schemas/error_helpers.User"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {

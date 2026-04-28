@@ -121,7 +121,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_fiber_products.CreateProductRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -231,7 +232,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_fiber_users.CreateUserRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -328,7 +330,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_fiber_users.UpdateUserRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
