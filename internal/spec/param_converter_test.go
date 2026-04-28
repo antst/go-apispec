@@ -230,9 +230,101 @@ func TestVarBoundConverter_SkipsCallsWithoutBoundVar(t *testing.T) {
 func TestInferParamConverterSchema_NilGuards(t *testing.T) {
 	// Various nil guards keep the helper from panicking when called from the
 	// matcher with a partly-initialised route.
-	assert.Nil(t, inferParamConverterSchema(nil, &RouteInfo{}))
+	meta := newTestMeta()
+	assert.Nil(t, inferParamConverterSchema(nil, &RouteInfo{Metadata: meta}))
 	assert.Nil(t, inferParamConverterSchema(&TrackerNode{}, nil))
-	assert.Nil(t, inferParamConverterSchema(&TrackerNode{}, &RouteInfo{}))
+	assert.Nil(t, inferParamConverterSchema(&TrackerNode{}, &RouteInfo{}), "route.Metadata is nil")
+	// Node with no edge — short-circuit before we touch any metadata fields.
+	assert.Nil(t, inferParamConverterSchema(&TrackerNode{}, &RouteInfo{Metadata: meta}))
+}
+
+func TestInferParamConverterSchema_InlineMatch(t *testing.T) {
+	// Dispatcher: an inline parent that's a known converter wins over the
+	// var-bound branch and produces the converter's schema.
+	meta := newTestMeta()
+	parentEdge := makeEdge(meta, "Upload", "main", "Atoi", "strconv", nil)
+	childEdge := makeEdge(meta, "Upload", "main", "FormValue", "net/http", nil)
+	parent := makeTrackerNode(&parentEdge)
+	child := makeTrackerNode(&childEdge)
+	child.Parent = parent
+
+	got := inferParamConverterSchema(child, &RouteInfo{Metadata: meta})
+	require.NotNil(t, got)
+	assert.Equal(t, "integer", got.Type)
+}
+
+func TestInferParamConverterSchema_VarBoundMatch(t *testing.T) {
+	// Dispatcher: no inline match, but a var-bound consumer is a known
+	// converter — schema still gets inferred via the second branch.
+	meta := newTestMeta()
+	fv := makeEdge(meta, "Upload", "main", "FormValue", "net/http", nil)
+	fv.CalleeRecvVarName = "v"
+	fv.Position = meta.StringPool.Get(formatLine(10))
+
+	consumer := makeEdge(meta, "Upload", "main", "ParseBool", "strconv",
+		[]*metadata.CallArgument{makeIdentArg(meta, "v", "string")})
+	consumer.Position = meta.StringPool.Get(formatLine(11))
+
+	meta.Callers = map[string][]*metadata.CallGraphEdge{
+		fv.Caller.BaseID(): {&fv, &consumer},
+	}
+
+	got := inferParamConverterSchema(makeTrackerNode(&fv), &RouteInfo{Metadata: meta})
+	require.NotNil(t, got)
+	assert.Equal(t, "boolean", got.Type)
+}
+
+func TestInferParamConverterSchema_NoMatch(t *testing.T) {
+	// Dispatcher: neither inline nor var-bound matches a known converter —
+	// the helper returns nil so the caller falls back to the default schema.
+	meta := newTestMeta()
+	fv := makeEdge(meta, "Upload", "main", "FormValue", "net/http", nil)
+	assert.Nil(t, inferParamConverterSchema(makeTrackerNode(&fv), &RouteInfo{Metadata: meta}))
+}
+
+func TestInlineConverter_ParentWithoutEdge(t *testing.T) {
+	// A parent tracker node without a CallGraphEdge should yield nil rather
+	// than dereferencing the nil edge.
+	meta := newTestMeta()
+	childEdge := makeEdge(meta, "Upload", "main", "FormValue", "net/http", nil)
+	parent := &TrackerNode{} // no edge
+	child := makeTrackerNode(&childEdge)
+	child.Parent = parent
+	assert.Nil(t, inlineConverter(child, meta))
+}
+
+func TestVarBoundConverter_EmptySiblings(t *testing.T) {
+	// meta.Callers entry exists but is empty — early return without scanning.
+	meta := newTestMeta()
+	fv := makeEdge(meta, "Upload", "main", "FormValue", "net/http", nil)
+	fv.CalleeRecvVarName = "v"
+	meta.Callers = map[string][]*metadata.CallGraphEdge{
+		fv.Caller.BaseID(): {},
+	}
+	assert.Nil(t, varBoundConverter(&fv, meta))
+}
+
+func TestEdgeArgUsesVariable_NilArg(t *testing.T) {
+	// A nil entry in the slice is skipped instead of panicking.
+	meta := newTestMeta()
+	edge := makeEdge(meta, "Upload", "main", "ParseBool", "strconv",
+		[]*metadata.CallArgument{nil, makeIdentArg(meta, "v", "string")})
+	assert.True(t, edgeArgUsesVariable(&edge, "v"))
+
+	onlyNil := makeEdge(meta, "Upload", "main", "ParseBool", "strconv",
+		[]*metadata.CallArgument{nil, nil})
+	assert.False(t, edgeArgUsesVariable(&onlyNil, "v"))
+}
+
+func TestStringFromPool_NilGuards(t *testing.T) {
+	// nil meta and nil StringPool both yield "" rather than panicking.
+	assert.Equal(t, "", stringFromPool(nil, 0))
+	assert.Equal(t, "", stringFromPool(&metadata.Metadata{}, 0))
+
+	// Sanity: with a real pool, the index is resolved.
+	meta := newTestMeta()
+	idx := meta.StringPool.Get("hello")
+	assert.Equal(t, "hello", stringFromPool(meta, idx))
 }
 
 // formatLine builds a "file:line:col" string suitable for positionLine.
