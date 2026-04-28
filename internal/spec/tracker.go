@@ -1341,7 +1341,22 @@ func NewTrackerNode(tree *TrackerTree, meta *metadata.Metadata, parentID, id str
 				continue
 			}
 
-			_, existsInArgs := meta.Args[metadata.StripToBase(calleeID)]
+			// Skip a caller-side edge only when this exact call site already
+			// appears as an inline argument of another edge — otherwise distinct
+			// var-bound calls to the same function get dropped because they share
+			// the base ID with an unrelated inline call elsewhere in the body.
+			existsInArgs := false
+			for _, parentEdge := range meta.Args[metadata.StripToBase(calleeID)] {
+				for _, arg := range parentEdge.Args {
+					if arg.ID() == calleeID {
+						existsInArgs = true
+						break
+					}
+				}
+				if existsInArgs {
+					break
+				}
+			}
 
 			if edge.Callee.ID() == edge.Caller.ID() || getString(meta, edge.Callee.Name) == "nil" || existsInArgs {
 				// Skip this child as it's already present in arguments
