@@ -27,12 +27,12 @@ That's it. The tool detects your framework, finds all routes, resolves handler t
 
 | Framework | Routes | Params | Request Body | Responses | Mounting/Groups |
 |-----------|--------|--------|-------------|-----------|-----------------|
-| **Chi** | Full | `chi.URLParam`, render pkg | `json.Decode`, `render.DecodeJSON` | `json.Encode`, `render.JSON`, `w.Write` | `Mount`, `Group` |
+| **Chi** | Full | `chi.URLParam`, `r.FormValue`, `r.FormFile`, render pkg | `json.Decode`, `render.DecodeJSON` | `json.Encode`, `render.JSON`, `w.Write` | `Mount`, `Group` |
 | **Gin** | Full | `c.Param`, `c.Query` | `ShouldBindJSON`, `BindJSON` | `c.JSON`, `c.String`, `c.Data` | `Group` |
-| **Echo** | Full | `c.Param`, `c.QueryParam` | `c.Bind` | `c.JSON`, `c.String`, `c.Blob` | `Group` |
-| **Fiber** | Full | `c.Params`, `c.Query` | `c.BodyParser` | `c.JSON`, `c.Status().JSON` | `Mount`, `Group` |
+| **Echo** | Full | `c.Param`, `c.QueryParam`, `r.FormValue`, `r.FormFile` | `c.Bind` | `c.JSON`, `c.String`, `c.Blob` | `Group` |
+| **Fiber** | Full | `c.Params`, `c.Query`, `c.FormValue`, `c.FormFile` | `c.BodyParser` | `c.JSON`, `c.Status().JSON` | `Mount`, `Group` |
 | **Gorilla Mux** | Full | Path template `{id}` | `json.Decode` | `json.Encode`, `w.Write` | `PathPrefix`, `Subrouter` |
-| **net/http** | Basic | Path template | `json.Decode` | `json.Encode`, `w.Write`, `http.Error` | Nested `ServeMux` |
+| **net/http** | Basic | Path template, `r.FormValue`, `r.FormFile` | `json.Decode` | `json.Encode`, `w.Write`, `http.Error` | Nested `ServeMux` |
 
 Projects using **multiple frameworks** simultaneously are fully supported — all routes from all detected frameworks appear in the spec.
 
@@ -73,6 +73,8 @@ All frameworks also detect `fmt.Fprintf`, `io.Copy`, and `io.WriteString` as res
 - Validator `dive` tag: `validate:"dive,email"` on `[]string` → items schema has `format: email`
 - `Mux.Vars()` map index expressions → path parameter names
 - Type mappings for `time.Time`, `uuid.UUID`, and custom types
+- Converter-typed params: `idStr := c.Param("id"); strconv.Atoi(idStr)` → `integer`; `strconv.ParseBool` → `boolean`; `strconv.ParseFloat` → `number`; `uuid.Parse` → `string/uuid`. Works for both inline (`strconv.Atoi(r.FormValue("x"))`) and var-bound (`if v := r.FormValue("x"); v != "" { strconv.ParseBool(v) }`) idioms, including shadowed variables in separate `if`-init scopes
+- `r.FormFile("upload")` → form parameter with `string`/`binary` schema
 
 **Output Quality**
 - Deterministic YAML/JSON — sorted map keys, identical output across runs, safe for CI diffing

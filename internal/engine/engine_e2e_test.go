@@ -48,6 +48,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "response_patterns", inputDir: "../../testdata/response_patterns", configFn: spec.DefaultChiConfig},
 		{name: "nested_http", inputDir: "../../testdata/nested_http", configFn: spec.DefaultHTTPConfig},
 		{name: "error_helpers", inputDir: "../../testdata/error_helpers", configFn: spec.DefaultChiConfig},
+		{name: "form_value_var", inputDir: "../../testdata/form_value_var", configFn: spec.DefaultChiConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
@@ -146,6 +147,66 @@ func collectSchemaRefs(s *spec.Schema) []string {
 		refs = append(refs, collectSchemaRefs(child)...)
 	}
 	return refs
+}
+
+// TestE2E_FormValueVar_AllPatternsExtracted asserts that r.FormValue calls
+// reach the spec regardless of how the result is consumed (inline, var+guard,
+// direct string usage), and that r.FormFile produces a binary form parameter.
+//
+// Regression test for the bug where the tracker dedup at the caller-side edge
+// loop dropped every var-bound r.FormValue call once any inline r.FormValue
+// existed in the same handler.
+func TestE2E_FormValueVar_AllPatternsExtracted(t *testing.T) {
+	cfg := newDefaultCfg("../../testdata/form_value_var", spec.DefaultChiConfig())
+	eng := NewEngine(cfg)
+	result, err := eng.GenerateOpenAPI()
+	require.NoError(t, err)
+
+	pi, ok := result.Paths["/upload"]
+	require.True(t, ok, "expected /upload path; got: %v", pathKeys(result))
+	require.NotNil(t, pi.Post)
+
+	got := map[string]*spec.Schema{}
+	for _, p := range pi.Post.Parameters {
+		require.Equal(t, "form", p.In, "param %q should be in=form", p.Name)
+		got[p.Name] = p.Schema
+	}
+
+	expected := map[string]struct{ Type, Format string }{
+		"storageBucketId":   {Type: "integer"},                  // inline strconv.Atoi
+		"allowedMimeTypes":  {Type: "string"},                   // var-bound strings.Split — non-converter consumer must NOT cross into shadowed-v scopes
+		"temporaryLocation": {Type: "boolean"},                  // var-bound strconv.ParseBool
+		"maxFileSize":       {Type: "integer"},                  // var-bound strconv.Atoi (shadowed v)
+		"displayName":       {Type: "string"},                   // no converter — string fallback
+		"file":              {Type: "string", Format: "binary"}, // FormFile
+	}
+	assert.Equal(t, len(expected), len(got), "unexpected form params: have %v, want %v",
+		paramNames(pi.Post.Parameters), keysOf(expected))
+	for name, want := range expected {
+		s, ok := got[name]
+		if !assert.True(t, ok, "missing form param %q (have %v)", name, paramNames(pi.Post.Parameters)) {
+			continue
+		}
+		require.NotNil(t, s, "schema missing for %q", name)
+		assert.Equal(t, want.Type, s.Type, "wrong type for %q", name)
+		assert.Equal(t, want.Format, s.Format, "wrong format for %q", name)
+	}
+}
+
+func paramNames(ps []intspec.Parameter) []string {
+	out := make([]string, 0, len(ps))
+	for _, p := range ps {
+		out = append(out, p.Name)
+	}
+	return out
+}
+
+func keysOf[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
