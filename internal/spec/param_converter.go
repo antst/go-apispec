@@ -40,14 +40,18 @@ var paramConverters = map[string]paramConverter{
 
 // lookupParamConverter returns the converter schema for a callee identified
 // by its package path and name, or nil when no converter matches.
+//
+// A non-empty pkg is required: matching by short name alone would mean a
+// user-defined "Atoi" or "ParseBool" function (in any package) gets typed as
+// integer/boolean, which is wrong. The map keys deliberately include the
+// fully-qualified package path so only stdlib (and well-known third-party)
+// converters trigger inference.
 func lookupParamConverter(pkg, name string) *paramConverter {
-	if name == "" {
+	if name == "" || pkg == "" {
 		return nil
 	}
-	if pkg != "" {
-		if c, ok := paramConverters[pkg+"."+name]; ok {
-			return &c
-		}
+	if c, ok := paramConverters[pkg+"."+name]; ok {
+		return &c
 	}
 	return nil
 }

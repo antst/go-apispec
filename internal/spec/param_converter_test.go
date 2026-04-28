@@ -231,6 +231,32 @@ func TestVarBoundConverter_PreferKnownPositionOverUnknown(t *testing.T) {
 	assert.Equal(t, "integer", c.Type, "should prefer known-position Atoi over unknown-position ParseBool")
 }
 
+func TestVarBoundConverter_MultipleUnknownPositions_PicksFirst(t *testing.T) {
+	// When several consumers all lack position metadata, fall back to the
+	// first one in iteration order. meta.Callers slices are populated in
+	// AST-walk order (source order), so this gives a deterministic answer.
+	meta := newTestMeta()
+
+	fv := makeEdge(meta, "Upload", "main", "FormValue", "net/http", nil)
+	fv.CalleeRecvVarName = "v"
+	fv.Position = meta.StringPool.Get(formatLine(40))
+
+	// Two consumers, both with no Position set. The first one in slice
+	// order wins regardless of which is the "real" pairing.
+	first := makeEdge(meta, "Upload", "main", "ParseBool", "strconv",
+		[]*metadata.CallArgument{makeIdentArg(meta, "v", "string")})
+	second := makeEdge(meta, "Upload", "main", "Atoi", "strconv",
+		[]*metadata.CallArgument{makeIdentArg(meta, "v", "string")})
+
+	meta.Callers = map[string][]*metadata.CallGraphEdge{
+		fv.Caller.BaseID(): {&fv, &first, &second},
+	}
+
+	c := varBoundConverter(&fv, meta)
+	require.NotNil(t, c)
+	assert.Equal(t, "boolean", c.Type, "first unknown-position consumer wins (slice order)")
+}
+
 func TestVarBoundConverter_FallsBackToUnknownPosition(t *testing.T) {
 	// When EVERY converter sibling has unknown position, return one of them
 	// rather than nil — the alternative would be silently dropping the type.
