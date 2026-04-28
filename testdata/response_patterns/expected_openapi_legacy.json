@@ -100,7 +100,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -262,7 +263,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -299,7 +301,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -326,7 +329,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.NewsletterSubscription"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -510,7 +514,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {

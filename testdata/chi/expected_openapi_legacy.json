@@ -95,7 +95,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_chi_products.CreateProductRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -185,7 +186,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_chi_users.CreateUserRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {

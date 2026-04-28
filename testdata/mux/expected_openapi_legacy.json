@@ -61,7 +61,8 @@
                 "$ref": "#/components/schemas/testdata_mux.CreateUserRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -122,7 +123,8 @@
                 "$ref": "#/components/schemas/testdata_mux.CreateUserRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
