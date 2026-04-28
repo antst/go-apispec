@@ -27,6 +27,13 @@
             }
           },
           {
+            "name": "allowedMimeTypes",
+            "in": "form",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "temporaryLocation",
             "in": "form",
             "schema": {

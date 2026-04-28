@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -35,7 +36,22 @@ func Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = storageBucketID
 
-	// Pattern 2: var + guard + ParseBool — should be detected.
+	// Pattern 2: var + guard + non-converter consumer (strings.Split) —
+	// the wire-format value is a string. Even though `v` is reused as the
+	// receiver in *later* if-init scopes that DO use converters, downstream
+	// string-manipulation calls in this scope must not contaminate the
+	// inferred schema with a converter from another scope.
+	var allowedMimeTypes []string
+	if v := r.FormValue("allowedMimeTypes"); v != "" {
+		for _, p := range strings.Split(v, ",") {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				allowedMimeTypes = append(allowedMimeTypes, trimmed)
+			}
+		}
+	}
+	_ = allowedMimeTypes
+
+	// Pattern 3: var + guard + ParseBool — should be detected.
 	temporaryLocation := false
 	if v := r.FormValue("temporaryLocation"); v != "" {
 		parsed, perr := strconv.ParseBool(v)
@@ -47,7 +63,7 @@ func Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = temporaryLocation
 
-	// Pattern 3: var + guard + Atoi — should be detected.
+	// Pattern 4: var + guard + Atoi — should be detected.
 	maxFileSize := 0
 	if v := r.FormValue("maxFileSize"); v != "" {
 		parsed, perr := strconv.Atoi(v)
@@ -59,14 +75,14 @@ func Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = maxFileSize
 
-	// Pattern 4: direct string usage after non-empty check — should be detected.
+	// Pattern 5: direct string usage after non-empty check — should be detected.
 	displayName := r.FormValue("displayName")
 	if displayName == "" {
 		http.Error(w, "displayName is required", http.StatusBadRequest)
 		return
 	}
 
-	// Pattern 5: r.FormFile multipart part — should be detected as form file.
+	// Pattern 6: r.FormFile multipart part — should be detected as form file.
 	file, header, ferr := r.FormFile("file")
 	if ferr != nil {
 		http.Error(w, "missing file", http.StatusBadRequest)

@@ -101,8 +101,13 @@ func inlineConverter(node TrackerNodeInterface, meta *metadata.Metadata) *paramC
 }
 
 // varBoundConverter detects the "v := call(...); converter(v)" idiom by
-// scanning sibling caller-side edges for the first consumer of the bound
-// variable that matches a known converter.
+// finding the closest forward consumer of the bound variable. Inference
+// fires only when *that* consumer is a known converter — otherwise we
+// fall through to the default schema, even if some later sibling edge
+// happens to be a converter. Skipping past the first consumer is unsafe
+// because the bound variable's scope often ends before the next sibling
+// (e.g. if-init scoping with shadowed `v` reused in unrelated converter
+// blocks elsewhere in the same function).
 func varBoundConverter(edge *metadata.CallGraphEdge, meta *metadata.Metadata) *paramConverter {
 	if edge.CalleeRecvVarName == "" {
 		return nil
@@ -114,9 +119,9 @@ func varBoundConverter(edge *metadata.CallGraphEdge, meta *metadata.Metadata) *p
 
 	parentLine := positionLine(stringFromPool(meta, edge.Position))
 	var (
-		best        *paramConverter
-		bestLine    int             // 0 == no best yet
-		bestUnknown *paramConverter // fallback when every match has unknown position
+		closestKnown   *metadata.CallGraphEdge // closest forward consumer with a known line
+		closestLine    int                     // 0 == no known-line consumer found yet
+		closestUnknown *metadata.CallGraphEdge // fallback if every consumer has an unknown line
 	)
 
 	for _, sib := range siblings {
@@ -126,35 +131,33 @@ func varBoundConverter(edge *metadata.CallGraphEdge, meta *metadata.Metadata) *p
 		if !edgeArgUsesVariable(sib, edge.CalleeRecvVarName) {
 			continue
 		}
-		c := lookupParamConverter(stringFromPool(meta, sib.Callee.Pkg), stringFromPool(meta, sib.Callee.Name))
-		if c == nil {
-			continue
-		}
 		sibLine := positionLine(stringFromPool(meta, sib.Position))
-		// Prefer the closest consumer at or after the parameter call to keep
-		// shadowed variables (`v` reused in different if-init scopes) bound to
-		// the right converter.
 		if parentLine > 0 && sibLine > 0 && sibLine < parentLine {
 			continue
 		}
 		if sibLine <= 0 {
-			// No position info — keep as a last-resort fallback so a single
-			// unknown-line sibling doesn't block a later sibling with a valid
-			// line from being selected.
-			if bestUnknown == nil {
-				bestUnknown = c
+			if closestUnknown == nil {
+				closestUnknown = sib
 			}
 			continue
 		}
-		if best == nil || sibLine < bestLine {
-			best = c
-			bestLine = sibLine
+		if closestKnown == nil || sibLine < closestLine {
+			closestKnown = sib
+			closestLine = sibLine
 		}
 	}
-	if best != nil {
-		return best
+
+	closest := closestKnown
+	if closest == nil {
+		closest = closestUnknown
 	}
-	return bestUnknown
+	if closest == nil {
+		return nil
+	}
+	return lookupParamConverter(
+		stringFromPool(meta, closest.Callee.Pkg),
+		stringFromPool(meta, closest.Callee.Name),
+	)
 }
 
 // edgeArgUsesVariable reports whether any direct argument of the edge is an

@@ -174,6 +174,7 @@ func TestE2E_FormValueVar_AllPatternsExtracted(t *testing.T) {
 
 	expected := map[string]struct{ Type, Format string }{
 		"storageBucketId":   {Type: "integer"},                  // inline strconv.Atoi
+		"allowedMimeTypes":  {Type: "string"},                   // var-bound strings.Split — non-converter consumer must NOT cross into shadowed-v scopes
 		"temporaryLocation": {Type: "boolean"},                  // var-bound strconv.ParseBool
 		"maxFileSize":       {Type: "integer"},                  // var-bound strconv.Atoi (shadowed v)
 		"displayName":       {Type: "string"},                   // no converter — string fallback

@@ -170,6 +170,38 @@ func TestVarBoundConverter_NoConsumerOrUnknown(t *testing.T) {
 	assert.Nil(t, varBoundConverter(&fv, meta), "non-converter consumer → no inference")
 }
 
+func TestVarBoundConverter_NonConverterConsumerStopsInference(t *testing.T) {
+	// Regression: when the closest forward consumer of the bound variable is
+	// NOT a converter (e.g. strings.Split), inference must stop and fall
+	// through to the default schema. Skipping past the non-converter would
+	// leak a converter from a later, unrelated shadowed-`v` scope into this
+	// scope's parameter — the bug reported against the strings.Split idiom.
+	meta := newTestMeta()
+
+	// FormValue at line 40, bound to v.
+	fv := makeEdge(meta, "Upload", "main", "FormValue", "net/http", nil)
+	fv.CalleeRecvVarName = "v"
+	fv.Position = meta.StringPool.Get(formatLine(40))
+
+	// Closest forward consumer at line 41: strings.Split (non-converter).
+	split := makeEdge(meta, "Upload", "main", "Split", "strings",
+		[]*metadata.CallArgument{makeIdentArg(meta, "v", "string")})
+	split.Position = meta.StringPool.Get(formatLine(41))
+
+	// Later sibling at line 51 in a different (shadowed) `v` scope: ParseBool.
+	// Without the fix this is what the old logic erroneously selected.
+	parseBool := makeEdge(meta, "Upload", "main", "ParseBool", "strconv",
+		[]*metadata.CallArgument{makeIdentArg(meta, "v", "string")})
+	parseBool.Position = meta.StringPool.Get(formatLine(51))
+
+	meta.Callers = map[string][]*metadata.CallGraphEdge{
+		fv.Caller.BaseID(): {&fv, &split, &parseBool},
+	}
+
+	assert.Nil(t, varBoundConverter(&fv, meta),
+		"closest forward consumer is non-converter — must not jump past it to a later converter in a different scope")
+}
+
 func TestVarBoundConverter_PreferKnownPositionOverUnknown(t *testing.T) {
 	// When metadata lacks position info on one consumer (sibLine == 0), a
 	// later valid-position consumer must still win — otherwise the first
