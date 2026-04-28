@@ -1157,6 +1157,39 @@ func TestParamPatternMatcher_ExtractParam_Basic(t *testing.T) {
 	assert.Equal(t, "string", param.Schema.Type) // default schema
 }
 
+func TestParamPatternMatcher_ExtractParam_FormFile_BinarySchema(t *testing.T) {
+	meta := newTestMeta()
+	cfg := &APISpecConfig{}
+	contextProvider := NewContextProvider(meta)
+	schemaMapper := NewSchemaMapper(cfg)
+
+	paramNameArg := makeLiteralArg(meta, "upload")
+	edge := makeEdge(meta, "handler", "main", "FormFile", "net/http", []*metadata.CallArgument{paramNameArg})
+	node := makeTrackerNode(&edge)
+
+	matcher := &ParamPatternMatcherImpl{
+		BasePatternMatcher: &BasePatternMatcher{
+			contextProvider: contextProvider,
+			cfg:             cfg,
+			schemaMapper:    schemaMapper,
+		},
+		pattern: ParamPattern{
+			ParamIn:       "form",
+			ParamArgIndex: 0,
+			DefaultType:   "string",
+			DefaultFormat: "binary",
+		},
+	}
+
+	param := matcher.ExtractParam(node, NewRouteInfo())
+	require.NotNil(t, param)
+	assert.Equal(t, "upload", param.Name)
+	assert.Equal(t, "form", param.In)
+	require.NotNil(t, param.Schema)
+	assert.Equal(t, "string", param.Schema.Type)
+	assert.Equal(t, "binary", param.Schema.Format)
+}
+
 func TestParamPatternMatcher_ExtractParam_QueryParam(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}

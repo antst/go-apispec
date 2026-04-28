@@ -1546,9 +1546,23 @@ func (p *ParamPatternMatcherImpl) ExtractParam(node TrackerNodeInterface, route 
 		param.Schema = schema
 	}
 
+	// When the pattern doesn't pin a schema (no TypeFromArg, no DefaultType),
+	// try to infer one from the converter applied to the parameter value
+	// (e.g. strconv.Atoi → integer, strconv.ParseBool → boolean). DefaultType
+	// takes precedence so callers like FormFile keep their fixed schema.
+	if param.Schema == nil && p.pattern.DefaultType == "" {
+		if inferred := inferParamConverterSchema(node, route); inferred != nil {
+			param.Schema = inferred
+		}
+	}
+
 	// Ensure all parameters have a schema - default to string if none specified
 	if param.Schema == nil {
-		param.Schema = &Schema{Type: "string"}
+		schemaType := "string"
+		if p.pattern.DefaultType != "" {
+			schemaType = p.pattern.DefaultType
+		}
+		param.Schema = &Schema{Type: schemaType, Format: p.pattern.DefaultFormat}
 	}
 
 	// Ensure path parameters are always required

@@ -136,6 +136,12 @@ type ParamPattern struct {
 	// Extraction hints
 	TypeFromArg bool `yaml:"typeFromArg,omitempty"` // Extract type from argument
 	Deref       bool `yaml:"deref,omitempty"`       // Dereference pointer types
+
+	// Default schema hints used when TypeFromArg is false. Useful for calls
+	// like r.FormFile(name) where the schema is fixed (string/binary) regardless
+	// of how the result is consumed.
+	DefaultType   string `yaml:"defaultType,omitempty"`
+	DefaultFormat string `yaml:"defaultFormat,omitempty"`
 }
 
 // MountPattern defines how to extract mount/subrouter information
@@ -588,6 +594,11 @@ func DefaultChiConfig() *APISpecConfig {
 				{BasePattern: BasePattern{CallRegex: "^FormValue$"}, ParamIn: "form",
 					ParamArgIndex: 0,
 				},
+				{BasePattern: BasePattern{CallRegex: "^FormFile$"}, ParamIn: "form",
+					ParamArgIndex: 0,
+					DefaultType:   "string",
+					DefaultFormat: "binary",
+				},
 				{BasePattern: BasePattern{CallRegex: "^Get$",
 
 					RecvType: "net/url.Values"}, ParamIn: "query",
@@ -740,6 +751,11 @@ func DefaultEchoConfig() *APISpecConfig {
 				},
 				{BasePattern: BasePattern{CallRegex: "^FormValue$"}, ParamIn: "form",
 					ParamArgIndex: 0,
+				},
+				{BasePattern: BasePattern{CallRegex: "^FormFile$"}, ParamIn: "form",
+					ParamArgIndex: 0,
+					DefaultType:   "string",
+					DefaultFormat: "binary",
 				},
 				{BasePattern: BasePattern{CallRegex: "^Cookie$"}, ParamIn: "cookie",
 					ParamArgIndex: 0,
@@ -897,6 +913,13 @@ func DefaultFiberConfig() *APISpecConfig {
 
 					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`}, ParamIn: "form",
 					ParamArgIndex: 0,
+				},
+				{BasePattern: BasePattern{CallRegex: "^FormFile$",
+
+					RecvTypeRegex: `^github\.com/gofiber/fiber(/v\d)?\.\*Ctx$`}, ParamIn: "form",
+					ParamArgIndex: 0,
+					DefaultType:   "string",
+					DefaultFormat: "binary",
 				},
 				{BasePattern: BasePattern{CallRegex: "^Cookies$",
 
@@ -1352,6 +1375,11 @@ func DefaultHTTPConfig() *APISpecConfig {
 			ParamPatterns: []ParamPattern{
 				{BasePattern: BasePattern{CallRegex: "^FormValue$"}, ParamIn: "form",
 					ParamArgIndex: 0,
+				},
+				{BasePattern: BasePattern{CallRegex: "^FormFile$"}, ParamIn: "form",
+					ParamArgIndex: 0,
+					DefaultType:   "string",
+					DefaultFormat: "binary",
 				},
 				{BasePattern: BasePattern{CallRegex: "^Get$"}, ParamIn: "header",
 					ParamArgIndex: 0,

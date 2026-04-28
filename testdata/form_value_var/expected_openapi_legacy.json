@@ -1,0 +1,99 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    },
+    "license": {
+      "name": ""
+    }
+  },
+  "paths": {
+    "/upload": {
+      "post": {
+        "summary": "Upload accepts a multipart-form POST and reads several fields, each via a\ndifferent idiom.",
+        "description": "Upload accepts a multipart-form POST and reads several fields, each via a\ndifferent idiom. Every field is part of the public API contract and should\nappear as a form parameter in the generated spec.",
+        "operationId": "form_value_var.Upload",
+        "parameters": [
+          {
+            "name": "storageBucketId",
+            "in": "form",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "temporaryLocation",
+            "in": "form",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "maxFileSize",
+            "in": "form",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "displayName",
+            "in": "form",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "file",
+            "in": "form",
+            "schema": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/form_value_var.UploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "form_value_var.UploadResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      }
+    }
+  }
+}
