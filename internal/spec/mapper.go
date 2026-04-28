@@ -405,6 +405,7 @@ func buildPathsFromRoutes(routes []*RouteInfo, cfg *APISpecConfig) map[string]Pa
 						Schema: route.Request.Schema,
 					},
 				},
+				Required: route.Request.Required,
 			}
 		}
 
@@ -1041,6 +1042,10 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 				schema.Required = append(schema.Required, fieldName)
 			}
 		}
+
+		// `apispec:"..."` is the user's explicit override — applied last so it
+		// wins over both validator constraints and Go-type-derived defaults.
+		applyAPISpecTag(fieldSchema, parseAPISpecTag(getStringFromPool(meta, field.Tag)))
 
 		// Detect and apply enum values from constants if no enum was specified in tags
 		// Only apply enum detection for custom types (not built-in types)

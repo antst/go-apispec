@@ -152,6 +152,19 @@ type RequestInfo struct {
 	ContentType string
 	BodyType    string
 	Schema      *Schema
+
+	// Required indicates whether the OpenAPI requestBody.required flag should be
+	// set. When a request-body pattern matches (json.Decode, c.Bind, etc.) the
+	// body must arrive populated — handlers that decode it are deterministic
+	// 400s on empty input — so the matcher sets this true.
+	Required bool
+
+	// DecodeTargetVar is the local variable name the request body decodes
+	// into (e.g., `body` in `json.NewDecoder(r.Body).Decode(&body)`). Used
+	// to drive field-level converter inference: any later access to
+	// `<DecodeTargetVar>.<FieldName>` consumed by a known converter back-
+	// propagates schema type/format onto that struct field.
+	DecodeTargetVar string
 }
 
 // ResponseInfo represents response information

@@ -95,7 +95,8 @@
                 "$ref": "#/components/schemas/products.CreateProductRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -185,7 +186,8 @@
                 "$ref": "#/components/schemas/users.CreateUserRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {

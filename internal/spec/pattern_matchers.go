@@ -528,6 +528,7 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		}
 
 		reqInfo.BodyType = preprocessingBodyType(bodyType)
+		reqInfo.DecodeTargetVar = decodeTargetVarName(arg)
 		schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
 		reqInfo.Schema = schema
 	}
@@ -536,7 +537,45 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		return nil
 	}
 
+	// A handler reading the body via Decode/Bind/etc. is committed to receiving
+	// it — empty input fails decoding or returns a zero-valued struct that the
+	// handler then 400s on. Marking required:true reflects that contract.
+	reqInfo.Required = true
+
+	// Walk the rest of the handler for `<targetVar>.<field>` accesses fed into
+	// known converters and back-propagate their schema formats onto the struct
+	// fields. Cheap (we already have the call graph indexed by caller) and
+	// strictly additive — never erases existing information.
+	if reqInfo.DecodeTargetVar != "" && route.Metadata != nil {
+		applyJSONFieldConverterFormats(
+			reqInfo.DecodeTargetVar,
+			reqInfo.BodyType,
+			edge.Caller.BaseID(),
+			route,
+		)
+	}
+
 	return reqInfo
+}
+
+// decodeTargetVarName returns the local variable name that the decode call's
+// type-arg refers to (e.g., "body" in `Decode(&body)` or `Decode(body)`).
+// Empty when the argument isn't a simple variable reference (literal, call
+// expression, complex expression).
+func decodeTargetVarName(arg *metadata.CallArgument) string {
+	if arg == nil {
+		return ""
+	}
+	switch arg.GetKind() {
+	case metadata.KindIdent:
+		return arg.GetName()
+	case metadata.KindUnary, metadata.KindStar:
+		// `&body` / `*body` — unwrap one level.
+		if arg.X != nil && arg.X.GetKind() == metadata.KindIdent {
+			return arg.X.GetName()
+		}
+	}
+	return ""
 }
 
 // Helper methods for BasePatternMatcher

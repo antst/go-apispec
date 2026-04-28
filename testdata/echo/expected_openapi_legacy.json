@@ -89,7 +89,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_echo.CreateUserRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -205,7 +206,8 @@
                 "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_echo.UpdateUserRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {

@@ -89,7 +89,8 @@
                 "$ref": "#/components/schemas/echo.CreateUserRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "201": {
@@ -205,7 +206,8 @@
                 "$ref": "#/components/schemas/echo.UpdateUserRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
