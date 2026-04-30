@@ -78,6 +78,7 @@ All frameworks also detect `fmt.Fprintf`, `io.Copy`, and `io.WriteString` as res
 - JSON-DTO field flow inference: when a decoded body's field is later passed to a converter (`uuid.Parse(body.SourceID)`, including pointer-deref `uuid.Parse(*body.TagsetID)`), apispec back-propagates the converter's schema (e.g. `format: uuid`) onto the struct field
 - Explicit per-field overrides via the `apispec:"format=uuid,type=string"` struct tag — covers fields the flow analysis can't reach (e.g. UUIDs that are read but never parsed in the handler, or `format: date-time` / `format: email` hints)
 - `requestBody.required: true` is emitted automatically when a handler reads the body via `json.Decode`, `json.Unmarshal`, `c.Bind`, `c.BodyParser`, etc.
+- Struct-level validation via a blank-marker field — `_ struct{} `apispec:"minProperties=1,anyOf=displayName|storageBucketId|temporaryLocation"`` — emits OpenAPI `minProperties` and per-field `anyOf` blocks. The marker is invisible in JSON; tag values use `,` for key=value pairs and `|` to separate field names inside `anyOf`. Useful for PATCH endpoints that require at least one field
 
 **Output Quality**
 - Deterministic YAML/JSON — sorted map keys, identical output across runs, safe for CI diffing

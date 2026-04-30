@@ -50,6 +50,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "error_helpers", inputDir: "../../testdata/error_helpers", configFn: spec.DefaultChiConfig},
 		{name: "form_value_var", inputDir: "../../testdata/form_value_var", configFn: spec.DefaultChiConfig},
 		{name: "json_dto", inputDir: "../../testdata/json_dto", configFn: spec.DefaultChiConfig},
+		{name: "json_patch", inputDir: "../../testdata/json_patch", configFn: spec.DefaultChiConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
@@ -192,6 +193,47 @@ func TestE2E_FormValueVar_AllPatternsExtracted(t *testing.T) {
 		assert.Equal(t, want.Type, s.Type, "wrong type for %q", name)
 		assert.Equal(t, want.Format, s.Format, "wrong format for %q", name)
 	}
+}
+
+// TestE2E_JSONPatch_StructLevelValidation asserts that a blank-marker
+// `_ struct{} `apispec:"minProperties=...,anyOf=..."“ field on a request
+// DTO produces both schema-level validation keywords and that the marker
+// itself never leaks into the property map or `required` list.
+func TestE2E_JSONPatch_StructLevelValidation(t *testing.T) {
+	cfg := newDefaultCfg("../../testdata/json_patch", spec.DefaultChiConfig())
+	eng := NewEngine(cfg)
+	result, err := eng.GenerateOpenAPI()
+	require.NoError(t, err)
+	require.NotNil(t, result.Components, "components missing")
+
+	schema := result.Components.Schemas["json_patch.UpdateDocumentRequest"]
+	require.NotNil(t, schema, "request schema missing")
+
+	// Marker must not appear as a property — the field is just a tag carrier.
+	for prop := range schema.Properties {
+		assert.NotEqual(t, "_", prop, "blank marker leaked into Properties")
+	}
+	for _, req := range schema.Required {
+		assert.NotEqual(t, "_", req, "blank marker leaked into Required")
+	}
+
+	// minProperties=1 emitted.
+	assert.Equal(t, 1, schema.MinProperties)
+
+	// anyOf emitted with exactly one `{required: [name]}` entry per listed
+	// field, in tag-declaration order.
+	require.Len(t, schema.AnyOf, 3, "anyOf should have one entry per listed field")
+	wantOrder := []string{"displayName", "storageBucketId", "temporaryLocation"}
+	for i, want := range wantOrder {
+		require.NotNil(t, schema.AnyOf[i])
+		assert.Equal(t, []string{want}, schema.AnyOf[i].Required, "anyOf[%d]", i)
+	}
+
+	// Field-level apispec tag on StorageBucketID still works alongside the
+	// marker — they're independent tags on different fields.
+	bucket := schema.Properties["storageBucketId"]
+	require.NotNil(t, bucket)
+	assert.Equal(t, "uuid", bucket.Format)
 }
 
 // TestE2E_JSONDto_FormatAndRequiredInference asserts the json_dto fixture's
