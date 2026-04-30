@@ -928,9 +928,25 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 
 	pkgName := getStringFromPool(meta, typ.Pkg)
 
+	// structLevelTag accumulates the struct-scope overrides (minProperties,
+	// anyOf) declared on the blank `_` marker field. We can't apply it
+	// inline because the marker is iterated alongside real fields and the
+	// override must land on the parent schema, not on a property.
+	var structLevelTag *apispecTag
+
 	for _, field := range typ.Fields {
 		fieldName := getStringFromPool(meta, field.Name)
 		fieldType := getStringFromPool(meta, field.Type)
+
+		// `_ struct{} `apispec:"..."`` is the convention for struct-level
+		// hints — it never serializes (zero-sized + unexported) but its tag
+		// gives us a place to attach minProperties/anyOf without inventing a
+		// new annotation language. Skip it from Properties/Required and read
+		// the tag for later application.
+		if fieldName == "_" {
+			structLevelTag = parseAPISpecTag(getStringFromPool(meta, field.Tag))
+			continue
+		}
 
 		if genericType, ok := genericTypes[fieldType]; ok {
 			fieldType = genericType
@@ -1072,6 +1088,11 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 
 		schema.Properties[fieldName] = fieldSchema
 	}
+
+	// Struct-level overrides land last so they sit on the fully-built schema
+	// — minProperties is independent of the per-field passes above, and the
+	// anyOf array references property names that are now finalized.
+	applyStructLevelAPISpecTag(schema, structLevelTag)
 
 	return schema, schemas
 }

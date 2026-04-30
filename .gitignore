@@ -59,3 +59,4 @@ specs/
 testdata/error_helpers/error_helpers
 testdata/form_value_var/form_value_var
 testdata/json_dto/json_dto
+testdata/json_patch/json_patch

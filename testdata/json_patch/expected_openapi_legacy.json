@@ -1,0 +1,121 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    },
+    "license": {
+      "name": ""
+    }
+  },
+  "paths": {
+    "/documents/{id}": {
+      "patch": {
+        "summary": "Update applies a partial update to a document.",
+        "description": "Update applies a partial update to a document. Empty bodies are rejected.",
+        "operationId": "json_patch.Update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/json_patch.UpdateDocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/json_patch.UpdateDocumentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "$ref": "#/components/schemas/error.Error"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "json_patch.UpdateDocumentRequest": {
+        "type": "object",
+        "anyOf": [
+          {
+            "required": [
+              "displayName"
+            ]
+          },
+          {
+            "required": [
+              "storageBucketId"
+            ]
+          },
+          {
+            "required": [
+              "temporaryLocation"
+            ]
+          }
+        ],
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "storageBucketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "temporaryLocation": {
+            "type": "boolean"
+          }
+        },
+        "minProperties": 1
+      },
+      "json_patch.UpdateDocumentResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      }
+    }
+  }
+}
