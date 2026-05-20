@@ -49,6 +49,12 @@ func BuildFunctionCFGs(funcDecls []*ast.FuncDecl, fset *token.FileSet, meta *Met
 
 // buildEdgePositionIndex creates a map from source position string to
 // CallGraphEdge pointers for fast lookup during CFG annotation.
+//
+// Edge positions are stored via getPosition() which strips the repo-root
+// prefix when one is set (see SetRepoRoot). CFG-side lookups use
+// fset.Position(...).String() directly and would miss every edge unless we
+// store both forms in the index — silently disabling all branch annotation
+// (issue #27 was an instance of this mismatch).
 func buildEdgePositionIndex(meta *Metadata, _ *token.FileSet) map[string]*CallGraphEdge {
 	index := make(map[string]*CallGraphEdge, len(meta.CallGraph))
 	for i := range meta.CallGraph {
@@ -56,13 +62,17 @@ func buildEdgePositionIndex(meta *Metadata, _ *token.FileSet) map[string]*CallGr
 		pos := meta.StringPool.GetString(edge.Position)
 		if pos != "" {
 			index[pos] = edge
+			if repoRoot != "" {
+				index[repoRoot+pos] = edge
+			}
 		}
 	}
 	return index
 }
 
 // buildAssignmentPositionIndex creates a map from source position string to
-// Assignment pointers across all call graph edges.
+// Assignment pointers across all call graph edges. Mirrors
+// buildEdgePositionIndex's repoRoot-stripped + raw double-keying.
 func buildAssignmentPositionIndex(meta *Metadata, _ *token.FileSet) map[string]*Assignment {
 	index := make(map[string]*Assignment)
 	for i := range meta.CallGraph {
@@ -72,6 +82,9 @@ func buildAssignmentPositionIndex(meta *Metadata, _ *token.FileSet) map[string]*
 				pos := meta.StringPool.GetString(assign.Position)
 				if pos != "" {
 					index[pos] = assign
+					if repoRoot != "" {
+						index[repoRoot+pos] = assign
+					}
 				}
 			}
 		}
@@ -111,16 +124,25 @@ func annotateBranches(graph *cfg.CFG, fset *token.FileSet, meta *Metadata,
 			ctx.CaseValues = extractCaseValues(block.Stmt)
 		}
 
-		// Walk all AST nodes in this block and tag matching edges/assignments
+		// Walk all AST nodes in this block and tag matching edges/assignments.
+		// block.Nodes are statement-level; the position of an AssignStmt like
+		// `_, _ = w.Write(...)` is the underscore, while the call edge is
+		// indexed at the inner CallExpr's position. Descend into every node
+		// so each inner CallExpr/AssignStmt gets a chance to match.
 		for _, node := range block.Nodes {
-			pos := fset.Position(node.Pos()).String()
-
-			if edge, ok := edgesByPos[pos]; ok {
-				edge.Branch = ctx
-			}
-			if assign, ok := assignsByPos[pos]; ok {
-				assign.Branch = ctx
-			}
+			ast.Inspect(node, func(n ast.Node) bool {
+				if n == nil {
+					return false
+				}
+				pos := fset.Position(n.Pos()).String()
+				if edge, ok := edgesByPos[pos]; ok {
+					edge.Branch = ctx
+				}
+				if assign, ok := assignsByPos[pos]; ok {
+					assign.Branch = ctx
+				}
+				return true
+			})
 		}
 	}
 }

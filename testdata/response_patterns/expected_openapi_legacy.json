@@ -89,6 +89,36 @@
       }
     },
     "/dispatch": {
+      "get": {
+        "summary": "DispatchHandler handles both GET and POST with different responses\nbased on r.Method.",
+        "description": "DispatchHandler handles both GET and POST with different responses\nbased on r.Method. This tests conditional HTTP method detection.",
+        "operationId": "github.com/antst/go-apispec/testdata/response_patterns.DispatchHandler",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "summary": "DispatchHandler handles both GET and POST with different responses\nbased on r.Method.",
         "description": "DispatchHandler handles both GET and POST with different responses\nbased on r.Method. This tests conditional HTTP method detection.",
@@ -110,19 +140,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
-                }
-              }
-            }
-          },
-          "405": {
-            "description": "Method Not Allowed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
-                  }
                 }
               }
             }
