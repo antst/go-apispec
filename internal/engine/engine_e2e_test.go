@@ -244,9 +244,11 @@ func TestE2E_SecurityBearer_AllSchemesAndSuppression(t *testing.T) {
 		require.Contains(t, pi.Post.Security[0], schemeName,
 			"%s security must reference %s", path, schemeName)
 		// Authorization header must NOT appear as a parameter — the scheme
-		// reference already documents it.
+		// reference already documents it. Case-insensitive match because
+		// HTTP header names are case-insensitive (and production suppression
+		// uses strings.EqualFold, so this assertion has to too).
 		for _, p := range pi.Post.Parameters {
-			assert.NotEqual(t, "Authorization", p.Name,
+			assert.False(t, strings.EqualFold(p.Name, "Authorization"),
 				"%s parameter %q must not coexist with security scheme", path, p.Name)
 		}
 	}
