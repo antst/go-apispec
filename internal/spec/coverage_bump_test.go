@@ -316,8 +316,10 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfEnumOverlaysOntoStoredSchema(t *testing
 	meta := newTestMeta()
 	sp := meta.StringPool
 
-	// Status is a string-based enum type with three constants. Building
-	// the metadata directly so we don't need a full project parse.
+	// Status is a string-based enum type with three const values. Building
+	// the metadata directly so we don't need a full project parse. Tok
+	// MUST be "const" — detectEnumFromConstants skips variables that
+	// aren't marked as constants in the source.
 	meta.Packages = map[string]*metadata.Package{
 		"enum": {
 			Files: map[string]*metadata.File{
@@ -332,14 +334,18 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfEnumOverlaysOntoStoredSchema(t *testing
 					},
 					Variables: map[string]*metadata.Variable{
 						"Active": {
-							Name:  sp.Get("Active"),
-							Type:  sp.Get("enum.Status"),
-							Value: sp.Get(`"active"`),
+							Name:          sp.Get("Active"),
+							Type:          sp.Get("enum.Status"),
+							Tok:           sp.Get("const"),
+							Value:         sp.Get(`"active"`),
+							ComputedValue: "active",
 						},
 						"Inactive": {
-							Name:  sp.Get("Inactive"),
-							Type:  sp.Get("enum.Status"),
-							Value: sp.Get(`"inactive"`),
+							Name:          sp.Get("Inactive"),
+							Type:          sp.Get("enum.Status"),
+							Tok:           sp.Get("const"),
+							Value:         sp.Get(`"inactive"`),
+							ComputedValue: "inactive",
 						},
 					},
 				},
@@ -351,11 +357,14 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfEnumOverlaysOntoStoredSchema(t *testing
 	schema, schemas := mapGoTypeToOpenAPISchema(usedTypes, "[]enum.Status", meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
-	// The test's primary value is locking the branch entry condition:
-	// the array branch ran with a non-primitive element type, taking the
-	// enum-overlay code path. detectEnumFromConstants depends on real
-	// types.Info that isn't available from synthetic metadata, so we
-	// don't assert enum presence — just that the branch executes.
+	// Element type was non-primitive (`enum.Status`) so the array branch
+	// took the enum-overlay path. With Tok=const + ComputedValue set on the
+	// fixture, detectEnumFromConstants finds the two declared values and
+	// attaches them — the test locks both the branch entry AND the overlay
+	// itself, so a regression that drops either side will fail here.
+	require.NotNil(t, schema.Items, "items schema must be set for [] of named type")
+	assert.ElementsMatch(t, []interface{}{"active", "inactive"}, schema.Items.Enum,
+		"enum overlay must attach the package-level const values to the items schema")
 	_ = schemas
 }
 
