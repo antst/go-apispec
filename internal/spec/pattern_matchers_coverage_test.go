@@ -208,6 +208,40 @@ func TestExtractRouteDetails_PathFromArg(t *testing.T) {
 	assert.Equal(t, "/users", routeInfo.Path)
 }
 
+func TestExtractRouteDetails_Go122MethodPrefix(t *testing.T) {
+	// Go 1.22+ ServeMux syntax: `HandleFunc("METHOD /path", h)`. The path
+	// arg packs both method and path with a single space separator. The
+	// matcher must split them so the routed path is "/health/live" and
+	// the operation verb is GET — not POST (the RouteInfo's default).
+	meta := pmcTestMeta()
+
+	pathArg := buildLiteralArg(meta, "GET /health/live")
+	edge := buildCallGraphEdge(meta, "main", "main", "HandleFunc", "net/http",
+		[]*metadata.CallArgument{pathArg})
+	node := buildTrackerNode(edge)
+
+	matcher := newRoutePatternMatcher(meta, RoutePattern{
+		PathFromArg:  true,
+		PathArgIndex: 0,
+	})
+
+	// Seed with the default Method=POST that ExtractRoute applies — the
+	// matcher must still override because path-prefix syntax is explicit
+	// user intent.
+	routeInfo := &RouteInfo{
+		Method:    "POST",
+		File:      "test.go",
+		Package:   "main",
+		Response:  map[string]*ResponseInfo{},
+		UsedTypes: map[string]*Schema{},
+	}
+
+	found := matcher.extractRouteDetails(node, routeInfo)
+	assert.True(t, found)
+	assert.Equal(t, "/health/live", routeInfo.Path, "method prefix stripped")
+	assert.Equal(t, "GET", routeInfo.Method, "method derived from prefix overrides POST default")
+}
+
 func TestExtractRouteDetails_PathFromArgFallsBackToSlash(t *testing.T) {
 	meta := pmcTestMeta()
 

@@ -1623,12 +1623,20 @@ func processCallExpression(call *ast.CallExpr, file *ast.File, pkgs map[string]m
 				chainRoot = ident.Name
 				chainDepth = 0
 			} else if chainCall, ok := sel.X.(*ast.CallExpr); ok {
-				// Chained method call (e.g., "app.Group().Use()")
-				// Find the parent call in our current callees
+				// Chained method call (e.g., "app.Group().Use()").
+				// Find the parent call by snapshotting the CallGraph length
+				// before recursing — the recursive processCallExpression
+				// only sometimes appends (it short-circuits for builtin
+				// calls, unresolved generics, etc.). When it doesn't, we
+				// must skip the chain-parent fixup rather than indexing
+				// CallGraph[len-1], which panics when len is 0.
+				lenBefore := len(metadata.CallGraph)
 				processCallExpression(chainCall, file, pkgs, pkgName, parentAssign, fileToInfo, funcMap, fset, metadata, info, calleeMap, argMap)
-				chainParent = &metadata.CallGraph[len(metadata.CallGraph)-1]
-				chainRoot = chainParent.CalleeVarName
-				chainDepth = chainParent.ChainDepth + 1
+				if len(metadata.CallGraph) > lenBefore {
+					chainParent = &metadata.CallGraph[len(metadata.CallGraph)-1]
+					chainRoot = chainParent.CalleeVarName
+					chainDepth = chainParent.ChainDepth + 1
+				}
 
 				// Fallback: try to extract root variable from the chain
 				if chainRoot == "" {

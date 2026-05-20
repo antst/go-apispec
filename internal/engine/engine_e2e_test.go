@@ -51,6 +51,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "form_value_var", inputDir: "../../testdata/form_value_var", configFn: spec.DefaultChiConfig},
 		{name: "json_dto", inputDir: "../../testdata/json_dto", configFn: spec.DefaultChiConfig},
 		{name: "json_patch", inputDir: "../../testdata/json_patch", configFn: spec.DefaultChiConfig},
+		{name: "servemux_methods", inputDir: "../../testdata/servemux_methods", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
@@ -193,6 +194,70 @@ func TestE2E_FormValueVar_AllPatternsExtracted(t *testing.T) {
 		assert.Equal(t, want.Type, s.Type, "wrong type for %q", name)
 		assert.Equal(t, want.Format, s.Format, "wrong format for %q", name)
 	}
+}
+
+// TestE2E_ServeMux_MethodPrefixAndGenericResponse covers two related Go 1.22+
+// behaviors: HandleFunc("METHOD /path") syntax must yield clean path keys
+// and the right operation verb (issue #21), and a generic response helper
+// like `WriteJSON[T any](w, status, v T)` must instantiate T to the concrete
+// call-site type rather than emitting the bare type parameter or — worse,
+// per issue #22 — substituting an unrelated same-prefix type.
+func TestE2E_ServeMux_MethodPrefixAndGenericResponse(t *testing.T) {
+	cfg := newDefaultCfg("../../testdata/servemux_methods", spec.DefaultHTTPConfig())
+	eng := NewEngine(cfg)
+	result, err := eng.GenerateOpenAPI()
+	require.NoError(t, err)
+	require.NotNil(t, result.Components, "components missing")
+
+	// Issue #21: path keys must be clean, no "METHOD " prefix.
+	pi, ok := result.Paths["/health/live"]
+	require.True(t, ok, "expected /health/live; got: %v", pathKeys(result))
+	require.NotContains(t, result.Paths, "/GET /health/live",
+		"malformed method-prefixed key must not be emitted")
+	require.NotNil(t, pi.Get, "GET prefix must produce a get: operation, not post:")
+	assert.Nil(t, pi.Post, "GET-prefix HandleFunc must NOT register a POST operation")
+
+	pi, ok = result.Paths["/matrix/check-room"]
+	require.True(t, ok, "expected /matrix/check-room; got: %v", pathKeys(result))
+	require.NotContains(t, result.Paths, "/POST /matrix/check-room",
+		"malformed method-prefixed key must not be emitted")
+	require.NotNil(t, pi.Post, "POST prefix must produce a post: operation")
+
+	// Issue #22: requestBody must reference dto.CheckRoomHTTPRequest, NOT
+	// dto.CheckRoomResponse — even though the call graph reaches an
+	// internal `json.Unmarshal(respBytes, &rmqResp)` inside the rpcClient
+	// service (which deserialises a RabbitMQ payload into
+	// dto.CheckRoomResponse). The first request-body match — the handler's
+	// own r.Body Decode — must win.
+	require.NotNil(t, pi.Post.RequestBody)
+	require.Contains(t, pi.Post.RequestBody.Content, "application/json",
+		"JSON request body must be advertised under application/json")
+	body := pi.Post.RequestBody.Content["application/json"]
+	require.NotNil(t, body.Schema, "requestBody schema must be set")
+	assert.Equal(t, "#/components/schemas/dto.CheckRoomHTTPRequest", body.Schema.Ref,
+		"requestBody must point to the handler's r.Body decode target, not an internal Unmarshal target")
+
+	// The internal rpcClient's json.Unmarshal target type must not leak
+	// into the spec at all when no endpoint actually exposes it.
+	require.NotNil(t, result.Components.Schemas, "components.schemas must be present")
+	require.NotContains(t, result.Components.Schemas, "dto.CheckRoomResponse",
+		"internal RabbitMQ payload type must not leak into the public schema set")
+
+	// Response: the WriteJSON(w, 200, dto.CheckRoomHTTPResponse{...}) call
+	// must resolve the interface{} parameter back to the concrete type.
+	require.Contains(t, pi.Post.Responses, "200", "200 response must be present")
+	resp200 := pi.Post.Responses["200"]
+	require.NotNil(t, resp200)
+	require.Contains(t, resp200.Content, "application/json")
+	respSchema := resp200.Content["application/json"].Schema
+	require.NotNil(t, respSchema)
+	assert.Equal(t, "#/components/schemas/dto.CheckRoomHTTPResponse", respSchema.Ref,
+		"response must substitute interface{} to the concrete call-site type")
+
+	// Legacy (no method prefix) keeps the default POST behavior.
+	pi, ok = result.Paths["/legacy"]
+	require.True(t, ok)
+	assert.NotNil(t, pi.Post, "no-prefix HandleFunc keeps the default POST")
 }
 
 // TestE2E_JSONPatch_StructLevelValidation asserts that a blank-marker

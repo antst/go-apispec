@@ -1074,8 +1074,15 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 				e.handleRouteNode(node, route, "", mountTags, routes)
 			}
 		},
-		// Request extraction
+		// Request extraction — first match wins. The handler-level decode of
+		// r.Body is hit by depth-first traversal before any nested
+		// json.Decode / json.Unmarshal inside helper or service functions
+		// (which deserialize unrelated payloads like RabbitMQ messages and
+		// must not override the real request body type).
 		func(node TrackerNodeInterface, route *RouteInfo) {
+			if route.Request != nil {
+				return
+			}
 			if req := e.extractRequestFromNode(node, route); req != nil {
 				route.Request = req
 			}
@@ -1494,6 +1501,22 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
 func (r *ResponsePatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
+	// Honour explicit resolved-type info on the argument first — set when an
+	// earlier analysis pass already pinned the concrete type.
+	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
+		return resolvedType
+	}
+
+	// Substitute generic type parameters using the call site's TypeParamMap.
+	// Without this, a response written through a helper like
+	// `WriteJSON[T any](w, status, v T)` would emit the bare type parameter
+	// (e.g. `pkg.T`) instead of the concrete instantiation at the call site
+	// (e.g. `dto.CheckRoomHTTPResponse`). Mirrors the request-side logic.
+	typeParts := TypeParts(originalType)
+	if genericType := traceGenericOrigin(node, typeParts); genericType != "" {
+		return genericType
+	}
+
 	return sharedResolveTypeOrigin(arg, node, originalType, r.contextProvider, false)
 }
 
