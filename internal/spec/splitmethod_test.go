@@ -52,6 +52,24 @@ func TestSplitMethodPrefixedPath_UnknownMethod(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestSplitMethodPrefixedPath_HostQualified(t *testing.T) {
+	// Go 1.22+ ServeMux accepts host-qualified patterns:
+	// "GET api.example.com/users" → method=GET, host=api.example.com, path=/users.
+	// apispec keeps the path (host belongs in OpenAPI `servers:`, which we
+	// don't infer from this).
+	cases := map[string][2]string{
+		"GET api.example.com/users":      {"GET", "/users"},
+		"POST host.local/api/v1/widgets": {"POST", "/api/v1/widgets"},
+		"DELETE example.com/x":           {"DELETE", "/x"},
+	}
+	for in, want := range cases {
+		method, path, ok := splitMethodPrefixedPath(in)
+		assert.True(t, ok, "input=%q should parse as host-qualified", in)
+		assert.Equal(t, want[0], method, "input=%q method", in)
+		assert.Equal(t, want[1], path, "input=%q path", in)
+	}
+}
+
 func TestSplitMethodPrefixedPath_NoPathLeadingSlash(t *testing.T) {
 	// "GET something" without a leading slash on the second token isn't the
 	// Go 1.22+ syntax — splitter declines, preserving the raw value.

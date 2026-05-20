@@ -346,11 +346,12 @@ func isHTTPMethod(method string) bool {
 }
 
 // splitMethodPrefixedPath recognises the Go 1.22+ net/http ServeMux pattern
-// syntax `"METHOD /path"` (or `"METHOD host/path"`) and returns the method
-// and path components separately. Returns ok=false if the input isn't in
-// this form — the second token must start with "/" so the function leaves
-// unrelated strings (e.g., paths that happen to share a word boundary with
-// a method-like prefix) untouched.
+// syntax `"[METHOD ][HOST]/[PATH]"` and returns the method plus the path
+// component. Both bare paths (`"GET /health"`) and host-qualified patterns
+// (`"GET example.com/api"` → method=GET, path=/api) are accepted; the host
+// is dropped because OpenAPI carries it in `servers:`, not the path key.
+// Returns ok=false for non-pattern strings so unrelated values pass through
+// unchanged.
 func splitMethodPrefixedPath(s string) (method, path string, ok bool) {
 	space := strings.IndexByte(s, ' ')
 	if space <= 0 {
@@ -361,10 +362,15 @@ func splitMethodPrefixedPath(s string) (method, path string, ok bool) {
 	if !isHTTPMethod(candidate) {
 		return "", "", false
 	}
-	if !strings.HasPrefix(rest, "/") {
-		return "", "", false
+	// Either `/path` (no host) or `host.example.com/path` (host-qualified).
+	// In the latter case strip the host so the OpenAPI key stays `/path`.
+	if strings.HasPrefix(rest, "/") {
+		return strings.ToUpper(candidate), rest, true
 	}
-	return strings.ToUpper(candidate), rest, true
+	if slash := strings.IndexByte(rest, '/'); slash > 0 {
+		return strings.ToUpper(candidate), rest[slash:], true
+	}
+	return "", "", false
 }
 
 // inferMethodFromContext attempts to infer HTTP method from context
