@@ -257,6 +257,15 @@ func TestE2E_SecurityBearer_AllSchemesAndSuppression(t *testing.T) {
 	expectScheme(t, "/protected/basic", "basicAuth")
 	expectScheme(t, "/protected/apikey", "apiKeyAuth")
 
+	// Regression: /matrix/user reads Authorization (no TrimPrefix on the
+	// header value) AND processes a Matrix user-ID via
+	// strings.TrimPrefix(userID, "@"). The unrelated "@" TrimPrefix must
+	// NOT poison auth detection — the resulting scheme stays apiKeyAuth,
+	// not the v0.4.12-era nonsense "@Auth".
+	expectScheme(t, "/matrix/user", "apiKeyAuth")
+	require.NotContains(t, result.Components.SecuritySchemes, "@Auth",
+		"unrelated TrimPrefix on '@' must not produce a bogus scheme")
+
 	// Open endpoint: no security stanza, no Authorization parameter.
 	open, ok := result.Paths["/open/ping"]
 	require.True(t, ok, "expected /open/ping in paths; got %v", pathKeys(result))

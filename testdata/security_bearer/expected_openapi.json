@@ -13,6 +13,49 @@
     }
   },
   "paths": {
+    "/matrix/user": {
+      "post": {
+        "summary": "matrixUserHandler reads Authorization (no scheme prefix → apiKey) AND\nprocesses a Matrix user ID via stripMatrixIDPrefix.",
+        "description": "matrixUserHandler reads Authorization (no scheme prefix → apiKey) AND\nprocesses a Matrix user ID via stripMatrixIDPrefix. apispec must still\nemit apiKeyAuth — the unrelated TrimPrefix on \"@\" must NOT contaminate\nauth detection. Regression test for the v0.4.12 false-positive.",
+        "operationId": "security_bearer.matrixUserHandler",
+        "parameters": [
+          {
+            "name": "user",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/security_bearer.ProtectedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
     "/open/ping": {
       "get": {
         "summary": "openPing has no auth and must not be associated with any security scheme.",

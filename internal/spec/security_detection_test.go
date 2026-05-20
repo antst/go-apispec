@@ -203,6 +203,207 @@ func TestDetectSecuritySchemeFromHandler_NoAuth(t *testing.T) {
 	assert.Nil(t, detectSecuritySchemeFromHandler(&RouteInfo{Function: "pkg.Handler", Metadata: meta}))
 }
 
+func TestDetectSecuritySchemeFromHandler_UnrelatedTrimPrefix_DoesNotPoison(t *testing.T) {
+	// Handler reads r.Header.Get("Authorization") without trimming any
+	// prefix from the result, AND also calls strings.TrimPrefix(userID, "@")
+	// on an unrelated variable — exactly the alkem-io/matrix-adapter-go
+	// shape that produced bogus "@Auth" schemes in v0.4.12. The fix scopes
+	// TrimPrefix matching to calls whose first argument traces back to the
+	// Authorization-header read, so the "@" prefix is ignored and the
+	// handler resolves to plain apiKeyAuth.
+	meta := newTestMeta()
+
+	// Header.Get("Authorization") — result NOT trimmed by anything related.
+	get := makeEdge(meta, "Handler", "pkg", "Get", "net/http",
+		[]*metadata.CallArgument{makeLiteralArg(meta, `"Authorization"`)})
+	get.Callee.RecvType = meta.StringPool.Get("Header")
+	get.CalleeRecvVarName = "token"
+	// Unrelated TrimPrefix on a totally different variable (Matrix user ID).
+	matrixTrim := makeEdge(meta, "Handler", "pkg", "TrimPrefix", "strings",
+		[]*metadata.CallArgument{
+			makeIdentArg(meta, "userID", "string"),
+			makeLiteralArg(meta, `"@"`),
+		})
+	meta.Callers = map[string][]*metadata.CallGraphEdge{
+		get.Caller.BaseID(): {&get, &matrixTrim},
+	}
+
+	got := detectSecuritySchemeFromHandler(&RouteInfo{
+		Function: get.Caller.BaseID(),
+		Metadata: meta,
+	})
+	require.NotNil(t, got)
+	assert.Equal(t, "apiKeyAuth", got.Name,
+		"unrelated TrimPrefix on '@' must not change the scheme away from apiKey")
+}
+
+func TestTrimPrefixOnAuthVar_VariableMatch(t *testing.T) {
+	meta := newTestMeta()
+	authVars := map[string]bool{"header": true}
+	edge := makeEdge(meta, "h", "pkg", "TrimPrefix", "strings",
+		[]*metadata.CallArgument{
+			makeIdentArg(meta, "header", "string"),
+			makeLiteralArg(meta, `"Bearer "`),
+		})
+	assert.True(t, trimPrefixOnAuthVar(&edge, authVars, meta))
+
+	// Different ident → not the auth variable, refuse.
+	other := makeEdge(meta, "h", "pkg", "TrimPrefix", "strings",
+		[]*metadata.CallArgument{
+			makeIdentArg(meta, "userID", "string"),
+			makeLiteralArg(meta, `"@"`),
+		})
+	assert.False(t, trimPrefixOnAuthVar(&other, authVars, meta))
+}
+
+func TestTrimPrefixOnAuthVar_EmptyArgsOrNil(t *testing.T) {
+	meta := newTestMeta()
+	edge := makeEdge(meta, "h", "pkg", "TrimPrefix", "strings", nil)
+	assert.False(t, trimPrefixOnAuthVar(&edge, map[string]bool{}, meta))
+
+	withNil := makeEdge(meta, "h", "pkg", "TrimPrefix", "strings",
+		[]*metadata.CallArgument{nil, makeLiteralArg(meta, `"Bearer "`)})
+	assert.False(t, trimPrefixOnAuthVar(&withNil, map[string]bool{}, meta))
+}
+
+func TestTrimPrefixOnAuthVar_NonIdentNonCallFirstArg(t *testing.T) {
+	// First arg is a literal — not an ident, not a call. Must not match.
+	meta := newTestMeta()
+	edge := makeEdge(meta, "h", "pkg", "TrimPrefix", "strings",
+		[]*metadata.CallArgument{
+			makeLiteralArg(meta, `"some literal"`),
+			makeLiteralArg(meta, `"Bearer "`),
+		})
+	assert.False(t, trimPrefixOnAuthVar(&edge, map[string]bool{"header": true}, meta))
+}
+
+// buildHeaderGetCallArg constructs a CallArgument shaped like
+// `r.Header.Get("Authorization")` for the inline-call helper tests. The
+// arg.Fun is a selector whose Sel name is "Get" and whose receiver
+// resolves to a type containing "Header"; arg.Args[0] is the
+// literal header name. Mirrors what ExprToCallArgument builds for the
+// real `strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")`
+// idiom.
+func buildHeaderGetCallArg(meta *metadata.Metadata, headerName string) *metadata.CallArgument {
+	receiver := makeCallArg(meta)
+	receiver.SetKind(metadata.KindIdent)
+	receiver.SetType("net/http.Header")
+
+	sel := makeCallArg(meta)
+	sel.SetKind(metadata.KindSelector)
+	sel.X = receiver
+	sel.Sel = makeCallArg(meta)
+	sel.Sel.SetKind(metadata.KindIdent)
+	sel.Sel.SetName("Get")
+
+	arg := makeCallArg(meta)
+	arg.SetKind(metadata.KindCall)
+	arg.Fun = sel
+	arg.Args = []*metadata.CallArgument{makeLiteralArg(meta, `"`+headerName+`"`)}
+	return arg
+}
+
+func TestIsInlineAuthHeaderCall_HappyPath(t *testing.T) {
+	// strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") — the
+	// first arg of TrimPrefix is a KindCall to Header.Get with literal
+	// "Authorization". This must match without the result ever being
+	// bound to a local variable first.
+	meta := newTestMeta()
+	arg := buildHeaderGetCallArg(meta, authHeaderName)
+	assert.True(t, isInlineAuthHeaderCall(arg, meta))
+}
+
+func TestIsInlineAuthHeaderCall_FallbackReceiverPath(t *testing.T) {
+	// Some builders fill arg.Fun.Type instead of arg.Fun.X.Type. Both
+	// should resolve. Clear X.Type, set Fun.Type — same conclusion.
+	meta := newTestMeta()
+	arg := buildHeaderGetCallArg(meta, authHeaderName)
+	arg.Fun.X.SetType("")
+	arg.Fun.SetType("net/http.Header")
+	assert.True(t, isInlineAuthHeaderCall(arg, meta))
+}
+
+func TestIsInlineAuthHeaderCall_DifferentHeader(t *testing.T) {
+	// Header.Get for a header other than Authorization — must not match.
+	meta := newTestMeta()
+	arg := buildHeaderGetCallArg(meta, "X-Trace-ID")
+	assert.False(t, isInlineAuthHeaderCall(arg, meta))
+}
+
+func TestIsInlineAuthHeaderCall_DifferentMethod(t *testing.T) {
+	// Some other method on Header (e.g. Set) — must not match.
+	meta := newTestMeta()
+	arg := buildHeaderGetCallArg(meta, authHeaderName)
+	arg.Fun.Sel.SetName("Set")
+	assert.False(t, isInlineAuthHeaderCall(arg, meta))
+}
+
+func TestIsInlineAuthHeaderCall_WrongReceiverType(t *testing.T) {
+	// Selector exists but receiver type doesn't contain "Header" — e.g.
+	// some other type's Get method. Must not match.
+	meta := newTestMeta()
+	arg := buildHeaderGetCallArg(meta, authHeaderName)
+	arg.Fun.X.SetType("url.Values")
+	// Also clear the fallback path so neither resolves.
+	arg.Fun.SetType("url.Values")
+	assert.False(t, isInlineAuthHeaderCall(arg, meta))
+}
+
+func TestIsInlineAuthHeaderCall_NotASelector(t *testing.T) {
+	// arg.Fun is an ident (not a selector) — e.g. a bare package-level
+	// call. The recognised shape requires the X.Sel form.
+	meta := newTestMeta()
+	arg := makeCallArg(meta)
+	arg.SetKind(metadata.KindCall)
+	arg.Fun = makeIdentArg(meta, "Get", "")
+	assert.False(t, isInlineAuthHeaderCall(arg, meta))
+
+	// Selector with nil Sel — bail safely.
+	arg2 := makeCallArg(meta)
+	arg2.SetKind(metadata.KindCall)
+	arg2.Fun = makeCallArg(meta)
+	arg2.Fun.SetKind(metadata.KindSelector)
+	assert.False(t, isInlineAuthHeaderCall(arg2, meta))
+
+	// Selector with nil X.
+	arg3 := makeCallArg(meta)
+	arg3.SetKind(metadata.KindCall)
+	arg3.Fun = makeCallArg(meta)
+	arg3.Fun.SetKind(metadata.KindSelector)
+	arg3.Fun.Sel = makeCallArg(meta)
+	arg3.Fun.Sel.SetName("Get")
+	assert.False(t, isInlineAuthHeaderCall(arg3, meta))
+}
+
+func TestIsInlineAuthHeaderCall_NoArgs(t *testing.T) {
+	// Selector + receiver look right but the inner call has no args.
+	meta := newTestMeta()
+	arg := buildHeaderGetCallArg(meta, authHeaderName)
+	arg.Args = nil
+	assert.False(t, isInlineAuthHeaderCall(arg, meta))
+}
+
+func TestTrimPrefixOnAuthVar_InlineCallFirstArg(t *testing.T) {
+	// strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") — the
+	// inline-call path: the auth-var set is empty but the first arg IS
+	// an Authorization-header read inline, so this still matches.
+	meta := newTestMeta()
+	innerCall := buildHeaderGetCallArg(meta, authHeaderName)
+	edge := makeEdge(meta, "h", "pkg", "TrimPrefix", "strings",
+		[]*metadata.CallArgument{innerCall, makeLiteralArg(meta, `"Bearer "`)})
+	assert.True(t, trimPrefixOnAuthVar(&edge, map[string]bool{}, meta))
+}
+
+func TestIsInlineAuthHeaderCall_NilGuards(t *testing.T) {
+	meta := newTestMeta()
+	assert.False(t, isInlineAuthHeaderCall(nil, meta))
+
+	// Arg with no Fun.
+	bare := makeCallArg(meta)
+	bare.SetKind(metadata.KindCall)
+	assert.False(t, isInlineAuthHeaderCall(bare, meta))
+}
+
 func TestDetectSecuritySchemeFromHandler_HelperTransitive(t *testing.T) {
 	// Handler() calls ValidateBearer(). ValidateBearer() does the actual
 	// Header.Get + TrimPrefix. The BFS must follow into the helper and
@@ -213,11 +414,12 @@ func TestDetectSecuritySchemeFromHandler_HelperTransitive(t *testing.T) {
 
 	// Handler → ValidateBearer (helper call)
 	helperCall := makeEdge(meta, "Handler", "pkg", "ValidateBearer", "pkg", nil)
-	// ValidateBearer → Header.Get("Authorization")
+	// ValidateBearer → header := r.Header.Get("Authorization")
 	headerGet := makeEdge(meta, "ValidateBearer", "pkg", "Get", "net/http",
 		[]*metadata.CallArgument{makeLiteralArg(meta, `"Authorization"`)})
 	headerGet.Callee.RecvType = meta.StringPool.Get("Header")
-	// ValidateBearer → strings.TrimPrefix(_, "Bearer ")
+	headerGet.CalleeRecvVarName = "header"
+	// ValidateBearer → strings.TrimPrefix(header, "Bearer ")
 	trim := makeEdge(meta, "ValidateBearer", "pkg", "TrimPrefix", "strings",
 		[]*metadata.CallArgument{
 			makeIdentArg(meta, "header", "string"),
@@ -398,20 +600,23 @@ func TestDropAuthorizationHeaderParam(t *testing.T) {
 
 // buildAuthHandlerMeta is a shared fixture for the detector tests — it
 // stamps a tiny call graph mimicking a handler that reads the Auth header
-// and runs TrimPrefix with the given scheme prefix.
+// into a local variable `header` and runs TrimPrefix on that variable
+// with the given scheme prefix. The CalleeRecvVarName on the Header.Get
+// edge is what lets the scoped TrimPrefix matcher pair the two.
 func buildAuthHandlerMeta(t *testing.T, prefix string) *metadata.Metadata {
 	t.Helper()
 	meta := newTestMeta()
 	get := makeEdge(meta, "Handler", "pkg", "Get", "net/http",
 		[]*metadata.CallArgument{makeLiteralArg(meta, `"Authorization"`)})
 	get.Callee.RecvType = meta.StringPool.Get("Header")
+	get.CalleeRecvVarName = "header"
 	trim := makeEdge(meta, "Handler", "pkg", "TrimPrefix", "strings",
 		[]*metadata.CallArgument{
 			makeIdentArg(meta, "header", "string"),
 			makeLiteralArg(meta, `"`+prefix+`"`),
 		})
 	meta.Callers = map[string][]*metadata.CallGraphEdge{
-		"pkg.Handler": {&get, &trim},
+		get.Caller.BaseID(): {&get, &trim},
 	}
 	return meta
 }
