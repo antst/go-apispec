@@ -1074,9 +1074,14 @@ func (e *Extractor) collectHelperCallGroups(routeNode TrackerNodeInterface) map[
 // route.Response entry. Used as a fallback when the primary response pass did
 // not seed a schema for any of the helper's status codes (see issue #27 — a
 // WriteJSON helper whose body argument is a builtin call like `append`).
+//
+// Parameter names are visited in sorted order so that helpers with multiple
+// status-typed parameters yield the same pick across runs — same reasoning
+// as the disambiguateOperationIDs determinism fix below.
 func (e *Extractor) inferStatusParamFromCalls(calls []helperCall) string {
 	for _, call := range calls {
-		for pName, arg := range call.edge.ParamArgMap {
+		for _, pName := range slices.Sorted(maps.Keys(call.edge.ParamArgMap)) {
+			arg := call.edge.ParamArgMap[pName]
 			if _, ok := e.resolveArgToStatusCode(&arg); ok {
 				return pName
 			}
