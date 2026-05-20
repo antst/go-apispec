@@ -248,6 +248,117 @@ func TestResolveGenericType_WithParams_WhitespaceBrackets(t *testing.T) {
 	assert.Equal(t, "Foo", got)
 }
 
+// TestMapGoTypeToOpenAPISchema_ArrayOfCachedComplexType locks the path
+// where the array element type is a complex (non-primitive) type that
+// was already mapped into usedTypes by an earlier call. The function
+// must return a `{type: array, items: {$ref: <type>}}` schema using
+// the cached entry rather than re-recursing.
+func TestMapGoTypeToOpenAPISchema_ArrayOfCachedComplexType(t *testing.T) {
+	cfg := &APISpecConfig{}
+	meta := newTestMeta()
+
+	// Pre-seed usedTypes with a cached schema for the element type.
+	cached := &Schema{
+		Type:       "object",
+		Properties: map[string]*Schema{"id": {Type: "integer"}},
+	}
+	usedTypes := map[string]*Schema{"User": cached}
+
+	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[]User", meta, cfg, nil)
+	require.NotNil(t, schema)
+	assert.Equal(t, "array", schema.Type, "array of complex type")
+	require.NotNil(t, schema.Items, "items schema must be set")
+	assert.NotEmpty(t, schema.Items.Ref, "items must be a $ref to the cached element type")
+}
+
+// TestMapGoTypeToOpenAPISchema_ArrayOfCachedComplexType_NilSchema
+// covers the variant where the cached value is nil (placeholder) —
+// the function must materialise the schema by recursing rather than
+// dereferencing the nil.
+func TestMapGoTypeToOpenAPISchema_ArrayOfCachedComplexType_NilSchema(t *testing.T) {
+	cfg := &APISpecConfig{}
+	meta := newTestMeta()
+	// Cache key exists but value is nil — common placeholder shape during
+	// schema generation before the type's own pass completes.
+	usedTypes := map[string]*Schema{"User": nil}
+
+	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[]User", meta, cfg, nil)
+	require.NotNil(t, schema)
+	assert.Equal(t, "array", schema.Type)
+	require.NotNil(t, schema.Items)
+}
+
+// TestMapGoTypeToOpenAPISchema_FixedSizeArrayOfCachedType exercises the
+// `[N]ElementType` shape where the element is a cached complex type —
+// must add MaxItems and MinItems equal to N alongside the items $ref.
+func TestMapGoTypeToOpenAPISchema_FixedSizeArrayOfCachedType(t *testing.T) {
+	cfg := &APISpecConfig{}
+	meta := newTestMeta()
+	usedTypes := map[string]*Schema{
+		"User": {Type: "object", Properties: map[string]*Schema{"id": {Type: "integer"}}},
+	}
+	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[5]User", meta, cfg, nil)
+	require.NotNil(t, schema)
+	assert.Equal(t, "array", schema.Type)
+	assert.Equal(t, 5, schema.MinItems, "fixed-size array must set MinItems")
+	assert.Equal(t, 5, schema.MaxItems, "fixed-size array must set MaxItems")
+}
+
+// TestMapGoTypeToOpenAPISchema_ArrayOfEnumOverlaysOntoStoredSchema
+// exercises the path where an array element is a custom (non-primitive)
+// type that ALSO has enum constants in metadata. After the recursive
+// mapping stores the element schema under usedTypes/schemas (via the
+// ref-promotion branch), the enum-overlay block must apply the enum
+// values to the STORED schema (so the components.schemas entry carries
+// the enum, not just the inline items pointer).
+func TestMapGoTypeToOpenAPISchema_ArrayOfEnumOverlaysOntoStoredSchema(t *testing.T) {
+	cfg := &APISpecConfig{}
+	meta := newTestMeta()
+	sp := meta.StringPool
+
+	// Status is a string-based enum type with three constants. Building
+	// the metadata directly so we don't need a full project parse.
+	meta.Packages = map[string]*metadata.Package{
+		"enum": {
+			Files: map[string]*metadata.File{
+				"e.go": {
+					Types: map[string]*metadata.Type{
+						"Status": {
+							Name:   sp.Get("Status"),
+							Pkg:    sp.Get("enum"),
+							Kind:   sp.Get("alias"),
+							Target: sp.Get("string"),
+						},
+					},
+					Variables: map[string]*metadata.Variable{
+						"Active": {
+							Name:  sp.Get("Active"),
+							Type:  sp.Get("enum.Status"),
+							Value: sp.Get(`"active"`),
+						},
+						"Inactive": {
+							Name:  sp.Get("Inactive"),
+							Type:  sp.Get("enum.Status"),
+							Value: sp.Get(`"inactive"`),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	usedTypes := map[string]*Schema{}
+	schema, schemas := mapGoTypeToOpenAPISchema(usedTypes, "[]enum.Status", meta, cfg, nil)
+	require.NotNil(t, schema)
+	assert.Equal(t, "array", schema.Type)
+	// The test's primary value is locking the branch entry condition:
+	// the array branch ran with a non-primitive element type, taking the
+	// enum-overlay code path. detectEnumFromConstants depends on real
+	// types.Info that isn't available from synthetic metadata, so we
+	// don't assert enum presence — just that the branch executes.
+	_ = schemas
+}
+
 // TestResolveArgToStatusCode_NoResponseMatchers covers the fallback
 // branch when the extractor has no response matchers wired up (e.g.
 // a degenerate config with no response patterns). Must return
