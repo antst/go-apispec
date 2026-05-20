@@ -945,12 +945,41 @@ func (e *Extractor) resolveArgToStatusCode(arg *metadata.CallArgument) (int, boo
 // functions called multiple times with different status codes. For each group,
 // it creates additional responses for status codes not captured by the primary
 // response extraction (which deduplicates by Callee.ID).
-func (e *Extractor) expandHelperFunctionResponses(routeNode TrackerNodeInterface, route *RouteInfo) {
+//
+//nolint:gocyclo // helper expansion fans out: filter → seed → param-infer → schema fill
+func (e *Extractor) expandHelperFunctionResponses(routeNode TrackerNodeInterface, route *RouteInfo, fallbackEdges map[string]bool) {
 	groups := e.collectHelperCallGroups(routeNode)
 
 	for _, calls := range groups {
 		if len(calls) < 2 {
 			continue
+		}
+		// Strip fallback edges (issue #27): edges flagged by
+		// helperFallbackEdges represent helper-internal error branches whose
+		// statuses must not propagate to the caller. Only swap in `filtered`
+		// when the scanner actually removed something — that way groups the
+		// scanner never touched keep their original shape (and we don't
+		// accidentally drop legitimate multi-branch handler patterns like
+		// three `c.JSON(400, ...)` returns in if/else if/else, which never
+		// get classified by helperFallbackEdges in the first place because
+		// the route node and response primitives are skipped).
+		//
+		// After filtering, fall back to the standard `len(calls) < 2` skip:
+		// a group whose survivors are all fallbacks (filtered=0) or down to
+		// one straggler has no quorum to drive expansion.
+		if len(fallbackEdges) > 0 {
+			filtered := calls[:0:0]
+			for _, c := range calls {
+				if !fallbackEdges[c.edge.Callee.ID()] {
+					filtered = append(filtered, c)
+				}
+			}
+			if len(filtered) < len(calls) {
+				calls = filtered
+				if len(calls) < 2 {
+					continue
+				}
+			}
 		}
 
 		// Only expand helpers that actually contain response-writing calls
@@ -961,8 +990,18 @@ func (e *Extractor) expandHelperFunctionResponses(routeNode TrackerNodeInterface
 		}
 
 		statusParam, baseSchema, contentType := e.findStatusParamAndSchema(calls, route)
-		if statusParam == "" || baseSchema == nil {
-			continue
+		if statusParam == "" {
+			// No existing seed — fall back to inferring the status parameter
+			// directly from the call signatures so we can still populate
+			// schemas for helpers whose primary-pass extraction was skipped
+			// (e.g., WriteJSON-with-builtin-body — see issue #27).
+			statusParam = e.inferStatusParamFromCalls(calls)
+			if statusParam == "" {
+				continue
+			}
+		}
+		if contentType == "" {
+			contentType = e.cfg.Defaults.ResponseContentType
 		}
 
 		// Find the "body" parameter name — the one whose argument resolved to the
@@ -976,28 +1015,36 @@ func (e *Extractor) expandHelperFunctionResponses(routeNode TrackerNodeInterface
 			}
 			if status, ok := e.resolveArgToStatusCode(&arg); ok {
 				key := fmt.Sprintf("%d", status)
-				if _, exists := route.Response[key]; !exists {
-					// Resolve this call's body type from its own ParamArgMap.
-					// If the body parameter carries a different type per call
-					// (e.g., respondJSON(w, 200, user) vs respondJSON(w, 400, err)),
-					// each sibling gets its own schema.
-					schema := baseSchema
-					if bodyParam != "" {
-						if bodyArg, ok := call.edge.ParamArgMap[bodyParam]; ok {
-							bodyType := e.contextProvider.GetArgumentInfo(&bodyArg)
-							if bodyType != "" && bodyType != "interface{}" && bodyType != "any" {
-								if s, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, e.cfg, nil); s != nil {
-									schema = s
-								}
+				// Fill in: either the status code has no entry yet, or the
+				// entry was registered by a WriteHeader pass without a body
+				// (e.g., a helper writes `WriteHeader(status); Write(derived)`
+				// and the derived body bottoms out at an unresolvable builtin
+				// — see issue #27). For schema-less existing entries we still
+				// need to populate the schema from the caller's body arg.
+				existing, exists := route.Response[key]
+				if exists && existing.Schema != nil {
+					continue
+				}
+				// Resolve this call's body type from its own ParamArgMap.
+				// If the body parameter carries a different type per call
+				// (e.g., respondJSON(w, 200, user) vs respondJSON(w, 400, err)),
+				// each sibling gets its own schema.
+				schema := baseSchema
+				if bodyParam != "" {
+					if bodyArg, ok := call.edge.ParamArgMap[bodyParam]; ok {
+						bodyType := e.contextProvider.GetArgumentInfo(&bodyArg)
+						if bodyType != "" && bodyType != "interface{}" && bodyType != "any" {
+							if s, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, e.cfg, nil); s != nil {
+								schema = s
 							}
 						}
 					}
-					e.addResponse(route, &ResponseInfo{
-						StatusCode:  status,
-						ContentType: contentType,
-						Schema:      schema,
-					})
 				}
+				e.addResponse(route, &ResponseInfo{
+					StatusCode:  status,
+					ContentType: contentType,
+					Schema:      schema,
+				})
 			}
 		}
 	}
@@ -1020,6 +1067,22 @@ func (e *Extractor) collectHelperCallGroups(routeNode TrackerNodeInterface) map[
 	}
 	collect(routeNode)
 	return groups
+}
+
+// inferStatusParamFromCalls picks the helper parameter whose arguments resolve
+// to HTTP status codes across the call group, without relying on an existing
+// route.Response entry. Used as a fallback when the primary response pass did
+// not seed a schema for any of the helper's status codes (see issue #27 — a
+// WriteJSON helper whose body argument is a builtin call like `append`).
+func (e *Extractor) inferStatusParamFromCalls(calls []helperCall) string {
+	for _, call := range calls {
+		for pName, arg := range call.edge.ParamArgMap {
+			if _, ok := e.resolveArgToStatusCode(&arg); ok {
+				return pName
+			}
+		}
+	}
+	return ""
 }
 
 // findStatusParamAndSchema finds which parameter in a group of helper calls
@@ -1079,9 +1142,116 @@ func (e *Extractor) helperContainsResponsePattern(helperNode TrackerNodeInterfac
 	return false
 }
 
+// helperFallbackEdges identifies response-writing edges that live inside an
+// error-fallback branch of a helper function whose primary write path is
+// unconditional. The classic shape is:
+//
+//	func WriteJSON(w, status, v) {
+//	    data, err := json.Marshal(v)
+//	    if err != nil {
+//	        w.WriteHeader(500)                                 // ← Branch=if-then
+//	        w.Write([]byte(`{"error":"..."}`))                 // ← Branch=if-then
+//	        return
+//	    }
+//	    w.WriteHeader(status)                                  // ← Branch=nil
+//	    w.Write(append(data, '\n'))                            // ← Branch=nil
+//	}
+//
+// The if-then writes are defensive — they fire only if json.Marshal fails,
+// which is unreachable for the struct/map payloads the caller actually passes.
+// Without this filter the caller's response set gets contaminated with the
+// fallback's hardcoded 500 and literal []byte body (issue #27).
+//
+// The rule is intentionally narrow: only filter when the SAME helper exposes
+// at least one unconditional response-writing edge. A helper made entirely of
+// branched writes (e.g., if/else returning different statuses) keeps all of
+// its writes — none of them is a "primary" path to compare against.
+//
+// Returned set is keyed by edge ID (the same ID used for visitedEdges).
+func (e *Extractor) helperFallbackEdges(routeNode TrackerNodeInterface) map[string]bool {
+	fallback := make(map[string]bool)
+	if routeNode == nil {
+		return fallback
+	}
+
+	var visit func(node TrackerNodeInterface, isRoot bool)
+	visit = func(node TrackerNodeInterface, isRoot bool) {
+		children := node.GetChildren()
+		// A node represents a USER-DEFINED helper invocation when:
+		//   1. it is not the route node itself (whose children are the
+		//      handler's body — branches there are legitimate control flow,
+		//      not internal fallback logic), AND
+		//   2. its edge carries a ParamArgMap (the call passed bound arguments
+		//      through to the callee's parameters), AND
+		//   3. the call itself is not a response-pattern primitive (Status,
+		//      JSON, WriteHeader, …). For chained calls like
+		//      `c.Status(400).JSON(map)`, the Status node may have the JSON
+		//      node as a child; treating Status as a helper would
+		//      mis-classify legitimate handler branches as fallbacks.
+		isHelperInvocation := false
+		if !isRoot {
+			if edge := node.GetEdge(); edge != nil && len(edge.ParamArgMap) > 0 {
+				nodeIsResponsePrimitive := false
+				for _, m := range e.responseMatchers {
+					if m.MatchNode(node) {
+						nodeIsResponsePrimitive = true
+						break
+					}
+				}
+				if !nodeIsResponsePrimitive {
+					isHelperInvocation = true
+				}
+			}
+		}
+
+		if isHelperInvocation {
+			var unconditional bool
+			var conditionalIDs []string
+			for _, child := range children {
+				childEdge := child.GetEdge()
+				if childEdge == nil {
+					continue
+				}
+				matched := false
+				for _, m := range e.responseMatchers {
+					if m.MatchNode(child) {
+						matched = true
+						break
+					}
+				}
+				if !matched {
+					continue
+				}
+				if childEdge.Branch == nil {
+					unconditional = true
+				} else {
+					conditionalIDs = append(conditionalIDs, childEdge.Callee.ID())
+				}
+			}
+			if unconditional {
+				for _, id := range conditionalIDs {
+					fallback[id] = true
+				}
+			}
+		}
+
+		for _, child := range children {
+			visit(child, false)
+		}
+	}
+	visit(routeNode, true)
+	return fallback
+}
+
 // extractRouteChildren extracts request, response, and params from children nodes
 // using the unified visitor with registered callbacks.
 func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *RouteInfo, mountTags []string, routes *[]*RouteInfo, visitedEdges map[string]bool) {
+	// Identify response-writing edges inside defensive error-fallback branches
+	// of helpers that also expose an unconditional write path. These edges
+	// must not contribute to the caller's response schema — see issue #27 and
+	// helperFallbackEdges for the exact rule.
+	fallbackEdges := e.helperFallbackEdges(routeNode)
+
 	callbacks := []ExtractionCallback{
 		// Route-in-route detection
 		func(node TrackerNodeInterface, route *RouteInfo) {
@@ -1104,6 +1274,9 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 		},
 		// Response extraction with schema merging
 		func(node TrackerNodeInterface, route *RouteInfo) {
+			if edge := node.GetEdge(); edge != nil && fallbackEdges[edge.Callee.ID()] {
+				return
+			}
 			resp := e.extractResponseFromNode(node, route, visitedEdges)
 			if resp == nil || (resp.BodyType == "" && resp.StatusCode == 0) {
 				return
@@ -1129,8 +1302,11 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 	// times with different status codes (e.g., writeJSONError(w, 400, ...) and
 	// writeJSONError(w, 404, ...)), the dedup in extractResponseFromNode only
 	// processes one call's WriteHeader/Encode. This post-pass creates responses
-	// for the other calls using the schema from the processed one.
-	e.expandHelperFunctionResponses(routeNode, route)
+	// for the other calls using the schema from the processed one. Helper
+	// fallback edges (issue #27) are excluded so that a hardcoded
+	// `WriteHeader(500)` inside `if err != nil { ... }` does not get expanded
+	// into a phantom 500 response on every caller.
+	e.expandHelperFunctionResponses(routeNode, route, fallbackEdges)
 
 	// Extract parameters from the route node itself
 	if param := e.extractParamFromNode(routeNode, route); param != nil {
@@ -1464,6 +1640,17 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 			if concreteType := r.resolveParamArgType(node, arg.GetName()); concreteType != "" {
 				bodyType = concreteType
 			}
+		}
+
+		// go/types stores `Typ[Invalid].String() == "invalid type"` for things
+		// it cannot resolve to a concrete type — most often a builtin like
+		// `append`, `len`, `copy`, `make`, or an untyped constant. A body
+		// expression that bottoms out at this sentinel cannot produce a useful
+		// schema and must not fabricate a `$ref` to a non-existent schema name.
+		// Clear bodyType so expandHelperFunctionResponses can fill the schema
+		// in from the caller's ParamArgMap arg instead (issue #27).
+		if strings.Contains(bodyType, "invalid type") {
+			bodyType = ""
 		}
 
 		respInfo.BodyType = preprocessingBodyType(bodyType)

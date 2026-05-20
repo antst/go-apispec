@@ -894,7 +894,7 @@ func TestExpandHelperFunctionResponses_AddsNewResponses(t *testing.T) {
 		Metadata:  meta,
 	}
 
-	ext.expandHelperFunctionResponses(routeNode, route)
+	ext.expandHelperFunctionResponses(routeNode, route, nil)
 
 	// Should have added a 400 response
 	assert.Contains(t, route.Response, "400")
@@ -927,7 +927,7 @@ func TestExpandHelperFunctionResponses_SkipsSingleCall(t *testing.T) {
 	}
 
 	initialCount := len(route.Response)
-	ext.expandHelperFunctionResponses(routeNode, route)
+	ext.expandHelperFunctionResponses(routeNode, route, nil)
 	assert.Equal(t, initialCount, len(route.Response), "should not add responses for single-call groups")
 }
 
@@ -968,7 +968,7 @@ func TestExpandHelperFunctionResponses_SkipsExistingStatus(t *testing.T) {
 	}
 
 	initialCount := len(route.Response)
-	ext.expandHelperFunctionResponses(routeNode, route)
+	ext.expandHelperFunctionResponses(routeNode, route, nil)
 	assert.Equal(t, initialCount, len(route.Response), "should not overwrite existing responses")
 }
 
@@ -982,7 +982,7 @@ func TestExpandHelperFunctionResponses_NoChildren(t *testing.T) {
 		Metadata: meta,
 	}
 
-	ext.expandHelperFunctionResponses(routeNode, route)
+	ext.expandHelperFunctionResponses(routeNode, route, nil)
 	assert.Empty(t, route.Response)
 }
 
@@ -1016,6 +1016,417 @@ func TestExpandHelperFunctionResponses_NoStatusParamFound(t *testing.T) {
 		Metadata: meta,
 	}
 
-	ext.expandHelperFunctionResponses(routeNode, route)
+	ext.expandHelperFunctionResponses(routeNode, route, nil)
 	assert.Empty(t, route.Response)
+}
+
+// ===========================================================================
+// 8. inferStatusParamFromCalls (issue #27 fallback path)
+// ===========================================================================
+
+func TestInferStatusParamFromCalls_PicksStatusArg(t *testing.T) {
+	meta := newTestMeta()
+	ext, _ := newTestExtractor(meta)
+
+	bodyArg := makeCallArg(meta)
+	bodyArg.SetKind(metadata.KindIdent)
+	bodyArg.SetName("v")
+	bodyArg.SetType("interface{}")
+
+	edge := makeHelperEdge(meta, "WriteJSON", "helpers", map[string]metadata.CallArgument{
+		"w":      {Meta: meta},
+		"status": makeSelectorArg(meta, "net/http", "http", "StatusCreated"),
+		"v":      *bodyArg,
+	})
+	calls := []helperCall{{node: &TrackerNode{key: "c1", CallGraphEdge: &edge}, edge: &edge}}
+
+	got := ext.inferStatusParamFromCalls(calls)
+	assert.Equal(t, "status", got)
+}
+
+func TestInferStatusParamFromCalls_NoStatusArg(t *testing.T) {
+	meta := newTestMeta()
+	ext, _ := newTestExtractor(meta)
+
+	dataArg := makeCallArg(meta)
+	dataArg.SetKind(metadata.KindIdent)
+	dataArg.SetName("payload")
+	dataArg.SetType("User")
+	dataArg.SetPkg("models")
+
+	edge := makeHelperEdge(meta, "Send", "helpers", map[string]metadata.CallArgument{
+		"data": *dataArg,
+	})
+	calls := []helperCall{{node: &TrackerNode{key: "c1", CallGraphEdge: &edge}, edge: &edge}}
+
+	got := ext.inferStatusParamFromCalls(calls)
+	assert.Empty(t, got)
+}
+
+// ===========================================================================
+// 9. helperFallbackEdges (issue #27 — defensive write filter)
+// ===========================================================================
+
+// fallbackTestRig builds a route → WriteJSON helper tree where the helper has
+// both an unconditional WriteHeader (status param) and a conditional
+// WriteHeader(500) inside an `if err != nil { ... }` branch. Returns the
+// route node and the conditional edge for assertions.
+func fallbackTestRig(meta *metadata.Metadata) (*TrackerNode, *metadata.CallGraphEdge) {
+	condWHEdge := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta:     meta,
+			Name:     meta.StringPool.Get("WriteHeader"),
+			Pkg:      meta.StringPool.Get("net/http"),
+			RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("file.go:10:5"),
+		},
+		Branch: &metadata.BranchContext{BlockKind: "if-then"},
+	}
+	succWHEdge := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta:     meta,
+			Name:     meta.StringPool.Get("WriteHeader"),
+			Pkg:      meta.StringPool.Get("net/http"),
+			RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("file.go:20:5"),
+		},
+	}
+
+	helperEdge := makeHelperEdge(meta, "WriteJSON", "helpers", map[string]metadata.CallArgument{
+		"status": makeSelectorArg(meta, "net/http", "http", "StatusOK"),
+	})
+	helperNode := &TrackerNode{
+		key:           "helper",
+		CallGraphEdge: &helperEdge,
+		Children: []*TrackerNode{
+			{key: "wh-cond", CallGraphEdge: condWHEdge},
+			{key: "wh-succ", CallGraphEdge: succWHEdge},
+		},
+	}
+	routeNode := &TrackerNode{
+		key:      "route",
+		Children: []*TrackerNode{helperNode},
+	}
+	return routeNode, condWHEdge
+}
+
+func TestHelperFallbackEdges_FlagsConditionalWhenUnconditionalExists(t *testing.T) {
+	meta := newTestMeta()
+	ext, _ := newTestExtractor(meta)
+	routeNode, condEdge := fallbackTestRig(meta)
+
+	fallback := ext.helperFallbackEdges(routeNode)
+	assert.True(t, fallback[condEdge.Callee.ID()],
+		"conditional write inside a helper that also has an unconditional write must be flagged as a fallback")
+}
+
+func TestHelperFallbackEdges_NoUnconditional_KeepsAll(t *testing.T) {
+	meta := newTestMeta()
+	ext, _ := newTestExtractor(meta)
+
+	condWH1 := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta: meta, Name: meta.StringPool.Get("WriteHeader"),
+			Pkg: meta.StringPool.Get("net/http"), RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("f.go:1:1"),
+		},
+		Branch: &metadata.BranchContext{BlockKind: "if-then"},
+	}
+	condWH2 := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta: meta, Name: meta.StringPool.Get("WriteHeader"),
+			Pkg: meta.StringPool.Get("net/http"), RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("f.go:2:1"),
+		},
+		Branch: &metadata.BranchContext{BlockKind: "if-else"},
+	}
+	helperEdge := makeHelperEdge(meta, "WriteEither", "helpers", map[string]metadata.CallArgument{
+		"x": {Meta: meta},
+	})
+	helperNode := &TrackerNode{
+		key:           "helper",
+		CallGraphEdge: &helperEdge,
+		Children: []*TrackerNode{
+			{key: "a", CallGraphEdge: condWH1},
+			{key: "b", CallGraphEdge: condWH2},
+		},
+	}
+	routeNode := &TrackerNode{key: "route", Children: []*TrackerNode{helperNode}}
+
+	fallback := ext.helperFallbackEdges(routeNode)
+	assert.Empty(t, fallback, "no unconditional write → nothing to flag")
+}
+
+func TestHelperFallbackEdges_SkipsRouteNode(t *testing.T) {
+	meta := newTestMeta()
+	ext, _ := newTestExtractor(meta)
+
+	cond := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta: meta, Name: meta.StringPool.Get("WriteHeader"),
+			Pkg: meta.StringPool.Get("net/http"), RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("h.go:1:1"),
+		},
+		Branch: &metadata.BranchContext{BlockKind: "if-then"},
+	}
+	uncond := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta: meta, Name: meta.StringPool.Get("WriteHeader"),
+			Pkg: meta.StringPool.Get("net/http"), RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("h.go:2:1"),
+		},
+	}
+	routeOwnEdge := makeHelperEdge(meta, "HandleFunc", "net/http", map[string]metadata.CallArgument{
+		"path": {Meta: meta},
+	})
+	routeNode := &TrackerNode{
+		key:           "route",
+		CallGraphEdge: &routeOwnEdge,
+		Children: []*TrackerNode{
+			{key: "c", CallGraphEdge: cond},
+			{key: "u", CallGraphEdge: uncond},
+		},
+	}
+
+	fallback := ext.helperFallbackEdges(routeNode)
+	assert.Empty(t, fallback,
+		"branches at the route level are handler control flow, not fallbacks — must not flag")
+}
+
+func TestHelperFallbackEdges_SkipsResponsePrimitives(t *testing.T) {
+	meta := newTestMeta()
+	ext, _ := newTestExtractor(meta)
+
+	statusEdge := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta:     meta,
+			Name:     meta.StringPool.Get("WriteHeader"),
+			Pkg:      meta.StringPool.Get("net/http"),
+			RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("p.go:1:1"),
+		},
+		ParamArgMap: map[string]metadata.CallArgument{
+			"statusCode": makeSelectorArg(meta, "net/http", "http", "StatusBadRequest"),
+		},
+	}
+
+	condChild := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta: meta, Name: meta.StringPool.Get("Write"),
+			Pkg: meta.StringPool.Get("net/http"), RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("p.go:2:1"),
+		},
+		Branch: &metadata.BranchContext{BlockKind: "if-then"},
+	}
+	uncondChild := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta: meta, Name: meta.StringPool.Get("Write"),
+			Pkg: meta.StringPool.Get("net/http"), RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("p.go:3:1"),
+		},
+	}
+	primitive := &TrackerNode{
+		key:           "primitive",
+		CallGraphEdge: statusEdge,
+		Children: []*TrackerNode{
+			{key: "wc", CallGraphEdge: condChild},
+			{key: "wu", CallGraphEdge: uncondChild},
+		},
+	}
+	routeNode := &TrackerNode{key: "route", Children: []*TrackerNode{primitive}}
+
+	fallback := ext.helperFallbackEdges(routeNode)
+	assert.Empty(t, fallback,
+		"response-pattern primitives are not user-defined helpers — must not classify their children")
+}
+
+func TestHelperFallbackEdges_NilRoute(t *testing.T) {
+	meta := newTestMeta()
+	ext, _ := newTestExtractor(meta)
+	assert.Empty(t, ext.helperFallbackEdges(nil))
+}
+
+// ===========================================================================
+// 10. expandHelperFunctionResponses — inferStatusParam fallback (issue #27)
+// ===========================================================================
+
+// When the primary response pass skipped a helper's status (the body
+// argument bottomed out at "invalid type" so the schema seed is missing),
+// expandHelperFunctionResponses must still populate per-status schemas from
+// each call's caller arg via the inferStatusParamFromCalls fallback path.
+func TestExpandHelperFunctionResponses_InferStatusParamFromCalls(t *testing.T) {
+	meta := newTestMeta()
+	ext, _ := newTestExtractor(meta)
+
+	bodyArg1 := makeCallArg(meta)
+	bodyArg1.SetKind(metadata.KindIdent)
+	bodyArg1.SetName("user")
+	bodyArg1.SetType("User")
+	bodyArg1.SetPkg("models")
+
+	bodyArg2 := makeCallArg(meta)
+	bodyArg2.SetKind(metadata.KindIdent)
+	bodyArg2.SetName("errResp")
+	bodyArg2.SetType("ErrorResponse")
+	bodyArg2.SetPkg("models")
+
+	edge1 := makeHelperEdge(meta, "WriteJSON", "helpers", map[string]metadata.CallArgument{
+		"status": makeSelectorArg(meta, "net/http", "http", "StatusOK"),
+		"v":      *bodyArg1,
+	})
+	edge2 := makeHelperEdge(meta, "WriteJSON", "helpers", map[string]metadata.CallArgument{
+		"status": makeSelectorArg(meta, "net/http", "http", "StatusBadRequest"),
+		"v":      *bodyArg2,
+	})
+
+	// Helper must contain a response-pattern child for the expansion to fire.
+	writeHeaderEdge := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta:     meta,
+			Name:     meta.StringPool.Get("WriteHeader"),
+			Pkg:      meta.StringPool.Get("net/http"),
+			RecvType: meta.StringPool.Get("ResponseWriter"),
+		},
+	}
+	whChild := &TrackerNode{key: "wh", CallGraphEdge: writeHeaderEdge}
+
+	routeNode := &TrackerNode{
+		key: "route",
+		Children: []*TrackerNode{
+			{key: "c1", CallGraphEdge: &edge1, Children: []*TrackerNode{whChild}},
+			{key: "c2", CallGraphEdge: &edge2, Children: []*TrackerNode{whChild}},
+		},
+	}
+
+	// route.Response intentionally EMPTY — primary pass found nothing to seed.
+	route := &RouteInfo{
+		Response:  map[string]*ResponseInfo{},
+		UsedTypes: map[string]*Schema{},
+		Metadata:  meta,
+	}
+
+	ext.expandHelperFunctionResponses(routeNode, route, nil)
+
+	// Both status codes should now be populated from per-call body args.
+	assert.Contains(t, route.Response, "200",
+		"200 should be filled from caller's user arg via inferStatusParamFromCalls fallback")
+	assert.Contains(t, route.Response, "400",
+		"400 should be filled from caller's errResp arg via inferStatusParamFromCalls fallback")
+	if r := route.Response["200"]; r != nil {
+		assert.NotEmpty(t, r.ContentType,
+			"contentType must fall back to defaults when no seed exists")
+	}
+}
+
+// ===========================================================================
+// 11. expandHelperFunctionResponses — fallback edge filter (issue #27)
+// ===========================================================================
+
+func TestExpandHelperFunctionResponses_FallbackEdgesFiltered(t *testing.T) {
+	// A WriteHeader "helper" group containing only fallback (if-then) edges
+	// should not synthesize a phantom response on the caller.
+	meta := newTestMeta()
+	ext, _ := newTestExtractor(meta)
+
+	fallback500Edge := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta: meta, Name: meta.StringPool.Get("WriteHeader"),
+			Pkg: meta.StringPool.Get("net/http"), RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("h.go:10:5"),
+		},
+		Branch: &metadata.BranchContext{BlockKind: "if-then"},
+		ParamArgMap: map[string]metadata.CallArgument{
+			"statusCode": makeSelectorArg(meta, "net/http", "http", "StatusInternalServerError"),
+		},
+	}
+	fallback500Edge2 := &metadata.CallGraphEdge{
+		Callee: metadata.Call{
+			Meta: meta, Name: meta.StringPool.Get("WriteHeader"),
+			Pkg: meta.StringPool.Get("net/http"), RecvType: meta.StringPool.Get("ResponseWriter"),
+			Position: meta.StringPool.Get("h.go:11:5"),
+		},
+		Branch: &metadata.BranchContext{BlockKind: "if-then"},
+		ParamArgMap: map[string]metadata.CallArgument{
+			"statusCode": makeSelectorArg(meta, "net/http", "http", "StatusInternalServerError"),
+		},
+	}
+
+	routeNode := &TrackerNode{
+		key: "route",
+		Children: []*TrackerNode{
+			{key: "wh1", CallGraphEdge: fallback500Edge, Children: []*TrackerNode{
+				{key: "wh1-child", CallGraphEdge: fallback500Edge},
+			}},
+			{key: "wh2", CallGraphEdge: fallback500Edge2, Children: []*TrackerNode{
+				{key: "wh2-child", CallGraphEdge: fallback500Edge2},
+			}},
+		},
+	}
+	route := &RouteInfo{Response: map[string]*ResponseInfo{}, Metadata: meta}
+	fbEdges := map[string]bool{
+		fallback500Edge.Callee.ID():  true,
+		fallback500Edge2.Callee.ID(): true,
+	}
+
+	ext.expandHelperFunctionResponses(routeNode, route, fbEdges)
+	_, has500 := route.Response["500"]
+	assert.False(t, has500, "all calls in the group were filtered as fallback edges — must NOT add 500")
+}
+
+// ===========================================================================
+// 12. ExtractResponse — "invalid type" sentinel detection (issue #27)
+// ===========================================================================
+
+// When the body argument's resolved type bottoms out at go/types' "invalid
+// type" sentinel (e.g., `Write(append(data, '\n'))` where `append` is a
+// builtin without a defined type), ExtractResponse must clear the body type
+// so it can't fabricate a `$ref` to a non-existent schema name and so
+// expandHelperFunctionResponses can fill the schema from the caller's
+// ParamArgMap arg instead.
+func TestExtractResponse_InvalidTypeSentinel_ClearsBody(t *testing.T) {
+	meta := newTestMeta()
+
+	// Argument that mimics go/types' fallback for an unresolvable builtin:
+	// a KindCall arg whose name string contains "invalid type".
+	bodyArg := metadata.NewCallArgument(meta)
+	bodyArg.SetKind(metadata.KindCall)
+	bodyArg.SetName("invalid type")
+	bodyArg.SetPkg("mypkg")
+	// arg.Fun is required so callArgToString doesn't bail to "call(...)".
+	funArg := metadata.NewCallArgument(meta)
+	funArg.SetKind(metadata.KindIdent)
+	funArg.SetName("append")
+	bodyArg.Fun = funArg
+
+	edge := makeEdge(meta, "handler", "main", "Write", "http", []*metadata.CallArgument{bodyArg})
+	node := makeTrackerNode(&edge)
+
+	cfg := &APISpecConfig{
+		Defaults: Defaults{ResponseContentType: "application/json"},
+	}
+	contextProvider := NewContextProvider(meta)
+	schemaMapper := NewSchemaMapper(cfg)
+
+	pattern := ResponsePattern{
+		DefaultStatus: 200,
+		TypeFromArg:   true,
+		TypeArgIndex:  0,
+	}
+	matcher := &ResponsePatternMatcherImpl{
+		BasePatternMatcher: &BasePatternMatcher{
+			contextProvider: contextProvider,
+			cfg:             cfg,
+			schemaMapper:    schemaMapper,
+		},
+		pattern: pattern,
+	}
+
+	route := NewRouteInfo()
+	route.Metadata = meta
+	resp := matcher.ExtractResponse(node, route)
+
+	require.NotNil(t, resp)
+	assert.Empty(t, resp.BodyType,
+		"`invalid type` sentinel must clear bodyType — otherwise a `$ref` to "+
+			"`<pkg>.invalid-type` would leak into the spec (issue #27)")
 }
