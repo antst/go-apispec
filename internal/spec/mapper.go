@@ -156,12 +156,28 @@ func disambiguateOperationIDs(paths map[string]PathItem, routes []*RouteInfo) {
 	}
 
 	idRefs := make(map[string][]opRef)
-	for pathStr, pathItem := range paths {
-		for method, op := range map[string]*Operation{
-			"GET": pathItem.Get, "POST": pathItem.Post, "PUT": pathItem.Put,
-			"DELETE": pathItem.Delete, "PATCH": pathItem.Patch, "OPTIONS": pathItem.Options,
-			"HEAD": pathItem.Head,
-		} {
+	// Iterate paths and methods in deterministic order — without this, the
+	// disambiguation result for two operations that share an operationId
+	// (e.g., GET and POST split off the same handler by switch r.Method)
+	// flips between runs depending on Go's randomized map iteration, which
+	// then trips the determinism test.
+	sortedPaths := slices.Sorted(maps.Keys(paths))
+	for _, pathStr := range sortedPaths {
+		pathItem := paths[pathStr]
+		methodOps := []struct {
+			method string
+			op     *Operation
+		}{
+			{"GET", pathItem.Get},
+			{"POST", pathItem.Post},
+			{"PUT", pathItem.Put},
+			{"DELETE", pathItem.Delete},
+			{"PATCH", pathItem.Patch},
+			{"OPTIONS", pathItem.Options},
+			{"HEAD", pathItem.Head},
+		}
+		for _, mo := range methodOps {
+			method, op := mo.method, mo.op
 			if op != nil && op.OperationID != "" {
 				// Find the matching route for full package info.
 				var matchedRoute *RouteInfo
@@ -591,19 +607,21 @@ func buildResponses(respInfo map[string]*ResponseInfo) map[string]Response {
 	// Add responses (sorted for deterministic output)
 	for _, statusCode := range slices.Sorted(maps.Keys(respInfo)) {
 		resp := respInfo[statusCode]
-		// If status code is unknown but the response has a body, infer 200 (OK).
-		// This handles the common case where handlers write a response without
-		// calling WriteHeader explicitly.
-		if resp.StatusCode < 0 && resp.BodyType != "" {
-			resp.StatusCode = http.StatusOK
+		// Compute effective status as a local value so we don't mutate the
+		// shared *ResponseInfo — multiple route entries can hold pointers to
+		// the same ResponseInfo (e.g., when splitByConditionalMethods fans
+		// out a switch-case handler into per-method routes), and mutating
+		// the underlying StatusCode would corrupt subsequent rebuilds.
+		effectiveStatus := resp.StatusCode
+		if effectiveStatus < 0 && resp.BodyType != "" {
+			effectiveStatus = http.StatusOK
 			statusCode = "200"
-		} else if resp.StatusCode < 0 {
-			// No body and no status — use "default"
+		} else if effectiveStatus < 0 {
 			statusCode = "default"
 		}
 
-		description := http.StatusText(resp.StatusCode)
-		if resp.StatusCode < 0 || description == "" {
+		description := http.StatusText(effectiveStatus)
+		if effectiveStatus < 0 || description == "" {
 			description = "Status code could not be determined"
 		}
 

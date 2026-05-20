@@ -1,0 +1,95 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    },
+    "license": {
+      "name": ""
+    }
+  },
+  "paths": {
+    "/room/check": {
+      "post": {
+        "summary": "checkRoom is the bug shape: success returns CheckRoomHTTPResponse,\nfailure returns a map[string]string error.",
+        "description": "checkRoom is the bug shape: success returns CheckRoomHTTPResponse,\nfailure returns a map[string]string error. Expected oneOf has exactly\nthose two; the helper's internal error fallback must NOT show up.",
+        "operationId": "writejson_helper.checkRoom",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/writejson_helper.CheckRoomHTTPResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/room/check-io": {
+      "post": {
+        "summary": "checkRoomIo is the io.WriteString variant — same expected behaviour.",
+        "operationId": "writejson_helper.checkRoomIo",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/writejson_helper.CheckRoomHTTPResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "writejson_helper.CheckRoomHTTPResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      }
+    }
+  }
+}

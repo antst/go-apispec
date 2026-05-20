@@ -53,6 +53,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "json_patch", inputDir: "../../testdata/json_patch", configFn: spec.DefaultChiConfig},
 		{name: "servemux_methods", inputDir: "../../testdata/servemux_methods", configFn: spec.DefaultHTTPConfig},
 		{name: "security_bearer", inputDir: "../../testdata/security_bearer", configFn: spec.DefaultHTTPConfig},
+		{name: "writejson_helper", inputDir: "../../testdata/writejson_helper", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
