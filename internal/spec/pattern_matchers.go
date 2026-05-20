@@ -294,6 +294,18 @@ func (r *RoutePatternMatcherImpl) extractRouteDetails(node TrackerNodeInterface,
 				}
 			}
 		}
+		// Go 1.22+ net/http ServeMux accepts an optional method prefix in
+		// the pattern: `HandleFunc("GET /path", h)`. The space separator
+		// makes the syntax unambiguous — URL paths can't contain spaces —
+		// so this heuristic is safe across frameworks, not just stdlib.
+		if method, path, ok := splitMethodPrefixedPath(routeInfo.Path); ok {
+			// Path-prefix syntax is explicit user intent — override the
+			// initial-default method as well as an empty one. (The route
+			// info is initialized with Method=POST by default; without this
+			// override, "GET /health/live" would still emit a POST operation.)
+			routeInfo.Path = path
+			routeInfo.Method = method
+		}
 		if routeInfo.Path == "" {
 			routeInfo.Path = "/"
 		}
@@ -319,17 +331,40 @@ func (r *RoutePatternMatcherImpl) extractRouteDetails(node TrackerNodeInterface,
 
 // isValidHTTPMethod checks if a string is a valid HTTP method
 func (r *RoutePatternMatcherImpl) isValidHTTPMethod(method string) bool {
-	validMethods := []string{
-		"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD", "TRACE", "CONNECT",
-	}
+	return isHTTPMethod(method)
+}
 
-	upperMethod := strings.ToUpper(method)
-	for _, valid := range validMethods {
-		if upperMethod == valid {
-			return true
-		}
+// isHTTPMethod is the package-level version used by helpers that don't have a
+// matcher in scope. Method names are compared case-insensitively against the
+// fixed RFC 7231 / 5789 / 7540 set.
+func isHTTPMethod(method string) bool {
+	switch strings.ToUpper(method) {
+	case "GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD", "TRACE", "CONNECT":
+		return true
 	}
 	return false
+}
+
+// splitMethodPrefixedPath recognises the Go 1.22+ net/http ServeMux pattern
+// syntax `"METHOD /path"` (or `"METHOD host/path"`) and returns the method
+// and path components separately. Returns ok=false if the input isn't in
+// this form — the second token must start with "/" so the function leaves
+// unrelated strings (e.g., paths that happen to share a word boundary with
+// a method-like prefix) untouched.
+func splitMethodPrefixedPath(s string) (method, path string, ok bool) {
+	space := strings.IndexByte(s, ' ')
+	if space <= 0 {
+		return "", "", false
+	}
+	candidate := s[:space]
+	rest := strings.TrimLeft(s[space+1:], " ")
+	if !isHTTPMethod(candidate) {
+		return "", "", false
+	}
+	if !strings.HasPrefix(rest, "/") {
+		return "", "", false
+	}
+	return strings.ToUpper(candidate), rest, true
 }
 
 // inferMethodFromContext attempts to infer HTTP method from context

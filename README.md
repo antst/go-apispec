@@ -34,6 +34,8 @@ That's it. The tool detects your framework, finds all routes, resolves handler t
 | **Gorilla Mux** | Full | Path template `{id}` | `json.Decode` | `json.Encode`, `w.Write` | `PathPrefix`, `Subrouter` |
 | **net/http** | Basic | Path template, `r.FormValue`, `r.FormFile` | `json.Decode` | `json.Encode`, `w.Write`, `http.Error` | Nested `ServeMux` |
 
+Go 1.22+ `ServeMux` method-prefix patterns are supported — `mux.HandleFunc("GET /health/live", h)` produces `get: /health/live`, not a literal `/GET /health/live` key.
+
 Projects using **multiple frameworks** simultaneously are fully supported — all routes from all detected frameworks appear in the spec.
 
 All frameworks also detect `fmt.Fprintf`, `io.Copy`, and `io.WriteString` as response writes.

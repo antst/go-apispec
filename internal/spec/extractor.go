@@ -1494,6 +1494,22 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
 func (r *ResponsePatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
+	// Honour explicit resolved-type info on the argument first — set when an
+	// earlier analysis pass already pinned the concrete type.
+	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
+		return resolvedType
+	}
+
+	// Substitute generic type parameters using the call site's TypeParamMap.
+	// Without this, a response written through a helper like
+	// `WriteJSON[T any](w, status, v T)` would emit the bare type parameter
+	// (e.g. `pkg.T`) instead of the concrete instantiation at the call site
+	// (e.g. `dto.CheckRoomHTTPResponse`). Mirrors the request-side logic.
+	typeParts := TypeParts(originalType)
+	if genericType := traceGenericOrigin(node, typeParts); genericType != "" {
+		return genericType
+	}
+
 	return sharedResolveTypeOrigin(arg, node, originalType, r.contextProvider, false)
 }
 

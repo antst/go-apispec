@@ -1,0 +1,127 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    },
+    "license": {
+      "name": ""
+    }
+  },
+  "paths": {
+    "/health/live": {
+      "get": {
+        "summary": "liveness returns a fixed JSON payload — never reads the body.",
+        "operationId": "servemux_methods.liveness",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/servemux_methods_dto.LivenessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/legacy": {
+      "post": {
+        "summary": "legacy is registered without a method prefix; defaults still apply.",
+        "operationId": "servemux_methods.legacy",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/servemux_methods_dto.LivenessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/matrix/check-room": {
+      "post": {
+        "operationId": "servemux_methods.servemux_methods.CheckRoomHandler.handleCheckRoom",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/servemux_methods_dto.CheckRoomHTTPRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/servemux_methods_dto.CheckRoomHTTPResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "servemux_methods_dto.CheckRoomHTTPRequest": {
+        "type": "object",
+        "properties": {
+          "room": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "room"
+        ]
+      },
+      "servemux_methods_dto.CheckRoomHTTPResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "servemux_methods_dto.LivenessResponse": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      }
+    }
+  }
+}

@@ -51,6 +51,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "form_value_var", inputDir: "../../testdata/form_value_var", configFn: spec.DefaultChiConfig},
 		{name: "json_dto", inputDir: "../../testdata/json_dto", configFn: spec.DefaultChiConfig},
 		{name: "json_patch", inputDir: "../../testdata/json_patch", configFn: spec.DefaultChiConfig},
+		{name: "servemux_methods", inputDir: "../../testdata/servemux_methods", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
@@ -193,6 +194,51 @@ func TestE2E_FormValueVar_AllPatternsExtracted(t *testing.T) {
 		assert.Equal(t, want.Type, s.Type, "wrong type for %q", name)
 		assert.Equal(t, want.Format, s.Format, "wrong format for %q", name)
 	}
+}
+
+// TestE2E_ServeMux_MethodPrefixAndGenericResponse covers two related Go 1.22+
+// behaviors: HandleFunc("METHOD /path") syntax must yield clean path keys
+// and the right operation verb (issue #21), and a generic response helper
+// like `WriteJSON[T any](w, status, v T)` must instantiate T to the concrete
+// call-site type rather than emitting the bare type parameter or — worse,
+// per issue #22 — substituting an unrelated same-prefix type.
+func TestE2E_ServeMux_MethodPrefixAndGenericResponse(t *testing.T) {
+	cfg := newDefaultCfg("../../testdata/servemux_methods", spec.DefaultHTTPConfig())
+	eng := NewEngine(cfg)
+	result, err := eng.GenerateOpenAPI()
+	require.NoError(t, err)
+	require.NotNil(t, result.Components, "components missing")
+
+	// Issue #21: path keys must be clean, no "METHOD " prefix.
+	pi, ok := result.Paths["/health/live"]
+	require.True(t, ok, "expected /health/live; got: %v", pathKeys(result))
+	require.NotNil(t, pi.Get, "GET prefix must produce a get: operation, not post:")
+	assert.Nil(t, pi.Post, "GET-prefix HandleFunc must NOT register a POST operation")
+
+	pi, ok = result.Paths["/matrix/check-room"]
+	require.True(t, ok, "expected /matrix/check-room; got: %v", pathKeys(result))
+	require.NotNil(t, pi.Post, "POST prefix must produce a post: operation")
+
+	// Issue #22 surface: requestBody must reference the HTTPRequest, not any
+	// of the same-prefix shadow types in the dto package.
+	require.NotNil(t, pi.Post.RequestBody)
+	body := pi.Post.RequestBody.Content["application/json"]
+	assert.Equal(t, "#/components/schemas/dto.CheckRoomHTTPRequest", body.Schema.Ref,
+		"requestBody must point to the HTTP-layer request type, not an RPC shadow")
+
+	// Generic-response fix: 200 must reference dto.CheckRoomHTTPResponse
+	// (the concrete T-substituted type), not a bare type parameter.
+	resp200 := pi.Post.Responses["200"]
+	require.NotNil(t, resp200)
+	respSchema := resp200.Content["application/json"].Schema
+	require.NotNil(t, respSchema)
+	assert.Equal(t, "#/components/schemas/dto.CheckRoomHTTPResponse", respSchema.Ref,
+		"response must substitute the generic T to the concrete call-site type")
+
+	// Legacy (no method prefix) keeps the default POST behavior.
+	pi, ok = result.Paths["/legacy"]
+	require.True(t, ok)
+	assert.NotNil(t, pi.Post, "no-prefix HandleFunc keeps the default POST")
 }
 
 // TestE2E_JSONPatch_StructLevelValidation asserts that a blank-marker
