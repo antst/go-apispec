@@ -1381,7 +1381,14 @@ func DefaultHTTPConfig() *APISpecConfig {
 					DefaultType:   "string",
 					DefaultFormat: "binary",
 				},
-				{BasePattern: BasePattern{CallRegex: "^Get$"}, ParamIn: "header",
+				{BasePattern: BasePattern{CallRegex: "^Get$",
+
+					RecvTypeRegex: `\.Header$|^net/http\.Header$`}, ParamIn: "header",
+					ParamArgIndex: 0,
+				},
+				{BasePattern: BasePattern{CallRegex: "^Get$",
+
+					RecvType: "net/url.Values"}, ParamIn: "query",
 					ParamArgIndex: 0,
 				},
 				{BasePattern: BasePattern{CallRegex: "^Cookie$"}, ParamIn: "cookie",

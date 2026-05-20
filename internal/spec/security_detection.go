@@ -69,46 +69,56 @@ func walkCallersForAuthPrefix(handlerID string, meta *metadata.Metadata) (string
 	queue := []queued{{handlerID, 0}}
 
 	hasHeaderRead := false
-	// authVars holds the names of local variables assigned from
-	// r.Header.Get("Authorization"). A TrimPrefix call only counts as an
-	// auth-scheme signal when its first argument is one of these variables
-	// (or an inline Header.Get("Authorization") call expression). Without
-	// this scoping, unrelated TrimPrefix calls elsewhere in the call graph
-	// — e.g. strings.TrimPrefix(matrixUserID, "@") — were being picked up
-	// as the auth prefix, producing nonsense schemes like "@Auth".
-	authVars := map[string]bool{}
 	var prefix string
 
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
 
-		for _, edge := range edgesFromCaller(meta, cur.id) {
+		edges := edgesFromCaller(meta, cur.id)
+
+		// Two-pass scan, scoped to THIS function. authVars are local-scope
+		// identifiers — a `header` variable in one function has nothing to
+		// do with a `header` variable in another — so the set is rebuilt
+		// per caller. Pass 1 registers Authorization-header reads (so we
+		// know which variables hold the result before any TrimPrefix can
+		// reference them, irrespective of slice order). Pass 2 then
+		// validates TrimPrefix matches against that local set.
+		authVars := map[string]bool{}
+		for _, edge := range edges {
 			callee := stringFromPool(meta, edge.Callee.Name)
-			pkg := stringFromPool(meta, edge.Callee.Pkg)
 			recv := stringFromPool(meta, edge.Callee.RecvType)
-
-			switch {
-			case isAuthHeaderRead(callee, recv, edge, meta):
-				hasHeaderRead = true
-				if v := edge.CalleeRecvVarName; v != "" {
-					authVars[v] = true
-				}
-			case isTrimPrefixCall(callee, pkg):
-				if prefix == "" && trimPrefixOnAuthVar(edge, authVars, meta) {
-					if p := trimPrefixValue(edge, meta); p != "" {
-						prefix = p
-					}
-				}
-			}
-
-			if cur.depth+1 >= maxDepth {
+			if !isAuthHeaderRead(callee, recv, edge, meta) {
 				continue
 			}
-			// Descend into the callee — but only when it's a user-defined
-			// function we can re-look-up in meta.Callers. Builtins and
-			// stdlib calls (json, strings, http stdlib helpers) don't have
-			// further edges relevant to auth detection.
+			hasHeaderRead = true
+			if v := edge.CalleeRecvVarName; v != "" {
+				authVars[v] = true
+			}
+		}
+		if prefix == "" {
+			for _, edge := range edges {
+				callee := stringFromPool(meta, edge.Callee.Name)
+				pkg := stringFromPool(meta, edge.Callee.Pkg)
+				if !isTrimPrefixCall(callee, pkg) {
+					continue
+				}
+				if !trimPrefixOnAuthVar(edge, authVars, meta) {
+					continue
+				}
+				if p := trimPrefixValue(edge, meta); p != "" {
+					prefix = p
+					break
+				}
+			}
+		}
+
+		// Enqueue user-defined callees (builtins and stdlib helpers don't
+		// expose edges that matter for auth detection).
+		if cur.depth+1 >= maxDepth {
+			continue
+		}
+		for _, edge := range edges {
 			calleeID := edge.Callee.BaseID()
 			if visited[calleeID] {
 				continue

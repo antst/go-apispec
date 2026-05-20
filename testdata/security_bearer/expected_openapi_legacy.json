@@ -21,7 +21,7 @@
         "parameters": [
           {
             "name": "user",
-            "in": "header",
+            "in": "query",
             "schema": {
               "type": "string"
             }

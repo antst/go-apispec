@@ -203,6 +203,78 @@ func TestDetectSecuritySchemeFromHandler_NoAuth(t *testing.T) {
 	assert.Nil(t, detectSecuritySchemeFromHandler(&RouteInfo{Function: "pkg.Handler", Metadata: meta}))
 }
 
+func TestDetectSecuritySchemeFromHandler_CrossFunctionVarLeak(t *testing.T) {
+	// Defensive: authVars are local to a function. Handler A does
+	// `header := r.Header.Get("Authorization")` (no TrimPrefix). Helper B
+	// has `strings.TrimPrefix(header, "Bearer ")` on ITS OWN local variable
+	// named `header` (unrelated — could be any string named "header"). The
+	// two `header` idents are scope-distinct, so the helper's TrimPrefix
+	// must NOT count as the handler's auth-scheme signal. The handler must
+	// resolve to apiKeyAuth (raw read, no prefix).
+	meta := newTestMeta()
+
+	get := makeEdge(meta, "Handler", "pkg", "Get", "net/http",
+		[]*metadata.CallArgument{makeLiteralArg(meta, `"Authorization"`)})
+	get.Callee.RecvType = meta.StringPool.Get("Header")
+	get.CalleeRecvVarName = "header"
+	helperCall := makeEdge(meta, "Handler", "pkg", "UnrelatedHelper", "pkg", nil)
+
+	// In UnrelatedHelper there's a local `header` (e.g. parameter name)
+	// passed to TrimPrefix with "Bearer ". Without per-function scoping
+	// this would leak into Handler's detection.
+	helperTrim := makeEdge(meta, "UnrelatedHelper", "pkg", "TrimPrefix", "strings",
+		[]*metadata.CallArgument{
+			makeIdentArg(meta, "header", "string"),
+			makeLiteralArg(meta, `"Bearer "`),
+		})
+
+	meta.Callers = map[string][]*metadata.CallGraphEdge{
+		get.Caller.BaseID():        {&get, &helperCall},
+		helperTrim.Caller.BaseID(): {&helperTrim},
+	}
+
+	got := detectSecuritySchemeFromHandler(&RouteInfo{
+		Function: get.Caller.BaseID(),
+		Metadata: meta,
+	})
+	require.NotNil(t, got)
+	assert.Equal(t, "apiKeyAuth", got.Name,
+		"a same-named ident in a different function must not poison auth detection")
+}
+
+func TestDetectSecuritySchemeFromHandler_TrimBeforeGetInSlice(t *testing.T) {
+	// Defensive: meta.Callers stores edges in call-graph build order, not
+	// necessarily source order. If TrimPrefix appears EARLIER in the slice
+	// than the corresponding Header.Get, a single-pass scan would skip the
+	// match because authVars wasn't populated yet. The two-pass scan
+	// resolves it regardless of slice ordering.
+	meta := newTestMeta()
+
+	get := makeEdge(meta, "Handler", "pkg", "Get", "net/http",
+		[]*metadata.CallArgument{makeLiteralArg(meta, `"Authorization"`)})
+	get.Callee.RecvType = meta.StringPool.Get("Header")
+	get.CalleeRecvVarName = "header"
+	trim := makeEdge(meta, "Handler", "pkg", "TrimPrefix", "strings",
+		[]*metadata.CallArgument{
+			makeIdentArg(meta, "header", "string"),
+			makeLiteralArg(meta, `"Bearer "`),
+		})
+
+	// TrimPrefix listed BEFORE Get — order-shuffled to expose any
+	// single-pass dependency.
+	meta.Callers = map[string][]*metadata.CallGraphEdge{
+		get.Caller.BaseID(): {&trim, &get},
+	}
+
+	got := detectSecuritySchemeFromHandler(&RouteInfo{
+		Function: get.Caller.BaseID(),
+		Metadata: meta,
+	})
+	require.NotNil(t, got)
+	assert.Equal(t, "bearerAuth", got.Name,
+		"two-pass scan must resolve regardless of edge order in the slice")
+}
+
 func TestDetectSecuritySchemeFromHandler_UnrelatedTrimPrefix_DoesNotPoison(t *testing.T) {
 	// Handler reads r.Header.Get("Authorization") without trimming any
 	// prefix from the result, AND also calls strings.TrimPrefix(userID, "@")
