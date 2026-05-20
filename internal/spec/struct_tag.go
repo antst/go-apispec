@@ -130,6 +130,32 @@ func applyAPISpecTag(schema *Schema, t *apispecTag) {
 	}
 }
 
+// mergeStructLevelTag combines two parsed apispec tags into one, preserving
+// struct-level keys (MinProperties, AnyOf) seen on prior markers.
+//
+// Multiple `_` marker fields are unusual but legal — a user splitting hints
+// across markers shouldn't silently lose data. Semantics:
+//   - MinProperties: last-write-wins (a later marker explicitly overrides)
+//   - AnyOf: appended in declaration order (markers add to the constraint)
+//
+// Field-level keys (Type, Format) aren't relevant on a `_` marker so they're
+// not merged here; only callers that pass struct-level data use this.
+func mergeStructLevelTag(prev, next *apispecTag) *apispecTag {
+	if next == nil {
+		return prev
+	}
+	if prev == nil {
+		return next
+	}
+	if next.MinProperties != nil {
+		prev.MinProperties = next.MinProperties
+	}
+	if len(next.AnyOf) > 0 {
+		prev.AnyOf = append(prev.AnyOf, next.AnyOf...)
+	}
+	return prev
+}
+
 // applyStructLevelAPISpecTag writes struct-scope overrides (MinProperties,
 // AnyOf) onto the parent schema. Called once per struct after every field
 // has been processed, with the tag read from a blank marker field.

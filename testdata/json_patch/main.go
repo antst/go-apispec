@@ -24,12 +24,17 @@ import (
 // expressed via minProperties=1 plus an explicit anyOf listing the eligible
 // fields. Both annotations are emitted; clients that only honour one of the
 // two still get the constraint enforced.
+//
+// Fields are pointer-typed so "absent in JSON" (nil) is distinguishable from
+// "present but empty" (non-nil pointer to ""). That matches OpenAPI anyOf
+// semantics, which check property presence, not value emptiness — runtime
+// validation below mirrors the same rule.
 type UpdateDocumentRequest struct {
 	_ struct{} `apispec:"minProperties=1,anyOf=displayName|storageBucketId|temporaryLocation"`
 
-	DisplayName       string `json:"displayName,omitempty"`
-	StorageBucketID   string `json:"storageBucketId,omitempty" apispec:"format=uuid"`
-	TemporaryLocation *bool  `json:"temporaryLocation,omitempty"`
+	DisplayName       *string `json:"displayName,omitempty"`
+	StorageBucketID   *string `json:"storageBucketId,omitempty" apispec:"format=uuid"`
+	TemporaryLocation *bool   `json:"temporaryLocation,omitempty"`
 }
 
 // UpdateDocumentResponse is unconstrained — the marker only goes on inputs
@@ -63,8 +68,10 @@ func Update(w http.ResponseWriter, r *http.Request) {
 
 // validateAtLeastOne mirrors the OpenAPI anyOf constraint at runtime so the
 // fixture is self-consistent: handler enforces it, spec advertises it.
+// Checks JSON property presence (nil pointer == absent) — empty-but-present
+// values like `{"displayName":""}` satisfy the constraint, matching anyOf.
 func validateAtLeastOne(body UpdateDocumentRequest) error {
-	if body.DisplayName == "" && body.StorageBucketID == "" && body.TemporaryLocation == nil {
+	if body.DisplayName == nil && body.StorageBucketID == nil && body.TemporaryLocation == nil {
 		return errors.New("at least one of displayName, storageBucketId, temporaryLocation must be set")
 	}
 	return nil

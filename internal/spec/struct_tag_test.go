@@ -169,6 +169,47 @@ func TestApplyStructLevelAPISpecTag_NilGuards(t *testing.T) {
 	assert.Nil(t, s.AnyOf)
 }
 
+func TestMergeStructLevelTag_Accumulates(t *testing.T) {
+	// Two markers split between minProperties and anyOf — both must survive.
+	one := 1
+	prev := &apispecTag{MinProperties: &one}
+	next := &apispecTag{AnyOf: []string{"a", "b"}}
+
+	got := mergeStructLevelTag(prev, next)
+	require.NotNil(t, got)
+	require.NotNil(t, got.MinProperties)
+	assert.Equal(t, 1, *got.MinProperties)
+	assert.Equal(t, []string{"a", "b"}, got.AnyOf)
+}
+
+func TestMergeStructLevelTag_LastMinPropertiesWins(t *testing.T) {
+	// Conflicting minProperties — last marker wins (matches Go's
+	// duplicate-field resolution semantics).
+	one := 1
+	two := 2
+	got := mergeStructLevelTag(&apispecTag{MinProperties: &one}, &apispecTag{MinProperties: &two})
+	require.NotNil(t, got.MinProperties)
+	assert.Equal(t, 2, *got.MinProperties)
+}
+
+func TestMergeStructLevelTag_AnyOfAppends(t *testing.T) {
+	// Each marker contributes to the anyOf set — append in declaration
+	// order rather than replacing.
+	prev := &apispecTag{AnyOf: []string{"a"}}
+	next := &apispecTag{AnyOf: []string{"b", "c"}}
+	got := mergeStructLevelTag(prev, next)
+	assert.Equal(t, []string{"a", "b", "c"}, got.AnyOf)
+}
+
+func TestMergeStructLevelTag_NilInputs(t *testing.T) {
+	// nil on either side returns the other unchanged; both nil → nil.
+	one := 1
+	tag := &apispecTag{MinProperties: &one}
+	assert.Equal(t, tag, mergeStructLevelTag(nil, tag))
+	assert.Equal(t, tag, mergeStructLevelTag(tag, nil))
+	assert.Nil(t, mergeStructLevelTag(nil, nil))
+}
+
 func TestApplyAPISpecTag_NilGuards(t *testing.T) {
 	applyAPISpecTag(nil, &apispecTag{Format: "uuid"}) // shouldn't panic
 	applyAPISpecTag(&Schema{}, nil)                   // shouldn't panic

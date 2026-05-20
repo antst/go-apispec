@@ -943,8 +943,13 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 		// gives us a place to attach minProperties/anyOf without inventing a
 		// new annotation language. Skip it from Properties/Required and read
 		// the tag for later application.
+		//
+		// Multiple `_` markers merge rather than overwrite: scalar keys take
+		// last-write-wins (matching how Go itself resolves duplicate field
+		// declarations) and list keys (AnyOf) accumulate. A user splitting
+		// hints across markers shouldn't silently lose earlier ones.
 		if fieldName == "_" {
-			structLevelTag = parseAPISpecTag(getStringFromPool(meta, field.Tag))
+			structLevelTag = mergeStructLevelTag(structLevelTag, parseAPISpecTag(getStringFromPool(meta, field.Tag)))
 			continue
 		}
 
