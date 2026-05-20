@@ -1,0 +1,212 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    },
+    "license": {
+      "name": ""
+    }
+  },
+  "paths": {
+    "/open/ping": {
+      "get": {
+        "summary": "openPing has no auth and must not be associated with any security scheme.",
+        "operationId": "security_bearer.openPing",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/security_bearer.PingResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/protected/apikey": {
+      "post": {
+        "summary": "protectedAPIKey reads the Authorization header as a raw token — no\nscheme prefix.",
+        "description": "protectedAPIKey reads the Authorization header as a raw token — no\nscheme prefix. Detection falls back to apiKey-in-header.",
+        "operationId": "security_bearer.protectedAPIKey",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/security_bearer.ProtectedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "apiKeyAuth": []
+          }
+        ]
+      }
+    },
+    "/protected/basic": {
+      "post": {
+        "summary": "protectedBasic uses the Basic-auth helper.",
+        "description": "protectedBasic uses the Basic-auth helper. The generated spec should\nexpose a separate basicAuth scheme alongside bearerAuth.",
+        "operationId": "security_bearer.protectedBasic",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/security_bearer.ProtectedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ]
+      }
+    },
+    "/protected/helper": {
+      "post": {
+        "summary": "protectedViaHelper delegates auth to ValidateBearerToken.",
+        "description": "protectedViaHelper delegates auth to ValidateBearerToken. The\nAuthorization header doesn't appear directly in this function — apispec\nhas to follow the call into the helper to recognise the pattern.",
+        "operationId": "security_bearer.protectedViaHelper",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/security_bearer.ProtectedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/protected/inline": {
+      "post": {
+        "summary": "protectedInline does the Header.Get + TrimPrefix dance directly in the\nhandler body — same security scheme should be inferred without the\nhelper indirection.",
+        "description": "protectedInline does the Header.Get + TrimPrefix dance directly in the\nhandler body — same security scheme should be inferred without the\nhelper indirection. Both /protected/helper and /protected/inline must\nresolve to the SAME bearerAuth scheme (deduplicated under components).",
+        "operationId": "security_bearer.protectedInline",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/security_bearer.ProtectedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "security_bearer.PingResponse": {
+        "type": "object",
+        "properties": {
+          "pong": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pong"
+        ]
+      },
+      "security_bearer.ProtectedResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      }
+    },
+    "securitySchemes": {
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "name": "Authorization",
+        "in": "header"
+      },
+      "basicAuth": {
+        "type": "http",
+        "scheme": "basic"
+      },
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  }
+}
