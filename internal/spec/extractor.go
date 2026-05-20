@@ -1074,8 +1074,15 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 				e.handleRouteNode(node, route, "", mountTags, routes)
 			}
 		},
-		// Request extraction
+		// Request extraction — first match wins. The handler-level decode of
+		// r.Body is hit by depth-first traversal before any nested
+		// json.Decode / json.Unmarshal inside helper or service functions
+		// (which deserialize unrelated payloads like RabbitMQ messages and
+		// must not override the real request body type).
 		func(node TrackerNodeInterface, route *RouteInfo) {
+			if route.Request != nil {
+				return
+			}
 			if req := e.extractRequestFromNode(node, route); req != nil {
 				route.Request = req
 			}

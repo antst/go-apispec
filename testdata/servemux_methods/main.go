@@ -21,11 +21,12 @@ import (
 	"net/http"
 
 	"servemux_methods/dto"
+	"servemux_methods/httpx"
 )
 
 func main() {
 	mux := http.NewServeMux()
-	h := &CheckRoomHandler{}
+	h := &CheckRoomHandler{rpc: &rpcClient{}}
 
 	// Go 1.22+ method-prefix syntax: GET-only liveness probe.
 	mux.HandleFunc("GET /health/live", liveness)
@@ -39,10 +40,31 @@ func main() {
 	http.ListenAndServe(":3000", mux)
 }
 
+// rpcClient is a stand-in for an injected RPC dependency. The CheckRoom
+// method does its own JSON deserialization (json.Unmarshal) — that
+// internal decode of a RabbitMQ-style byte payload must NOT be picked
+// up by apispec's request-body extraction and substituted for the
+// HTTP handler's real body type. This is the exact failure shape from
+// issue #22.
+type rpcClient struct{}
+
+func (r *rpcClient) CheckRoom(req dto.CheckRoomRequest) (dto.CheckRoomResponse, error) {
+	// Pretend we received this from the message broker.
+	respBytes := []byte(`{"allowed":true}`)
+	var rmqResp dto.CheckRoomResponse
+	if err := json.Unmarshal(respBytes, &rmqResp); err != nil {
+		return dto.CheckRoomResponse{}, err
+	}
+	_ = req
+	return rmqResp, nil
+}
+
 // CheckRoomHandler holds dependencies for the /matrix/check-room handler.
-// In the reporter's project it had an injected RPC client; here we just
-// keep the receiver so the call shape matches.
-type CheckRoomHandler struct{}
+// Matches the reporter's project — handler is a method on a struct with an
+// injected RPC client.
+type CheckRoomHandler struct {
+	rpc *rpcClient
+}
 
 // handleCheckRoom decodes the body into dto.CheckRoomHTTPRequest, talks to
 // an internal RPC layer (whose Request/Response types share a confusing
@@ -57,29 +79,26 @@ func (h *CheckRoomHandler) handleCheckRoom(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Internal RPC step — these variables have the look-alike non-HTTP types.
+	// Internal RPC call — returns a CheckRoomResponse, which is the
+	// look-alike type the issue-#22 bug confused with the request body.
 	rpcReq := dto.CheckRoomRequest{RoomID: httpReq.Room}
-	rpcResp := dto.CheckRoomResponse{Allowed: rpcReq.RoomID != ""}
+	rpcResp, err := h.rpc.CheckRoom(rpcReq)
+	if err != nil {
+		http.Error(w, "rpc failed", http.StatusInternalServerError)
+		return
+	}
 
 	// Final HTTP response value.
 	httpResp := dto.CheckRoomHTTPResponse{OK: rpcResp.Allowed}
-	WriteJSON(w, http.StatusOK, httpResp)
-}
-
-// WriteJSON is a generic response helper of the kind common in real apps;
-// its presence has historically confused the response type tracer.
-func WriteJSON[T any](w http.ResponseWriter, status int, v T) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	httpx.WriteJSON(w, http.StatusOK, httpResp)
 }
 
 // liveness returns a fixed JSON payload — never reads the body.
 func liveness(w http.ResponseWriter, _ *http.Request) {
-	WriteJSON(w, http.StatusOK, dto.LivenessResponse{Status: "ok"})
+	httpx.WriteJSON(w, http.StatusOK, dto.LivenessResponse{Status: "ok"})
 }
 
 // legacy is registered without a method prefix; defaults still apply.
 func legacy(w http.ResponseWriter, _ *http.Request) {
-	WriteJSON(w, http.StatusOK, dto.LivenessResponse{Status: "legacy"})
+	httpx.WriteJSON(w, http.StatusOK, dto.LivenessResponse{Status: "legacy"})
 }

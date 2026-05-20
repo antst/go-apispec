@@ -219,21 +219,30 @@ func TestE2E_ServeMux_MethodPrefixAndGenericResponse(t *testing.T) {
 	require.True(t, ok, "expected /matrix/check-room; got: %v", pathKeys(result))
 	require.NotNil(t, pi.Post, "POST prefix must produce a post: operation")
 
-	// Issue #22 surface: requestBody must reference the HTTPRequest, not any
-	// of the same-prefix shadow types in the dto package.
+	// Issue #22: requestBody must reference dto.CheckRoomHTTPRequest, NOT
+	// dto.CheckRoomResponse — even though the call graph reaches an
+	// internal `json.Unmarshal(respBytes, &rmqResp)` inside the rpcClient
+	// service (which deserialises a RabbitMQ payload into
+	// dto.CheckRoomResponse). The first request-body match — the handler's
+	// own r.Body Decode — must win.
 	require.NotNil(t, pi.Post.RequestBody)
 	body := pi.Post.RequestBody.Content["application/json"]
 	assert.Equal(t, "#/components/schemas/dto.CheckRoomHTTPRequest", body.Schema.Ref,
-		"requestBody must point to the HTTP-layer request type, not an RPC shadow")
+		"requestBody must point to the handler's r.Body decode target, not an internal Unmarshal target")
 
-	// Generic-response fix: 200 must reference dto.CheckRoomHTTPResponse
-	// (the concrete T-substituted type), not a bare type parameter.
+	// The internal rpcClient's json.Unmarshal target type must not leak
+	// into the spec at all when no endpoint actually exposes it.
+	_, hasShadow := result.Components.Schemas["dto.CheckRoomResponse"]
+	assert.False(t, hasShadow, "internal RabbitMQ payload type must not leak into the public schema set")
+
+	// Response: the WriteJSON(w, 200, dto.CheckRoomHTTPResponse{...}) call
+	// must resolve the interface{} parameter back to the concrete type.
 	resp200 := pi.Post.Responses["200"]
 	require.NotNil(t, resp200)
 	respSchema := resp200.Content["application/json"].Schema
 	require.NotNil(t, respSchema)
 	assert.Equal(t, "#/components/schemas/dto.CheckRoomHTTPResponse", respSchema.Ref,
-		"response must substitute the generic T to the concrete call-site type")
+		"response must substitute interface{} to the concrete call-site type")
 
 	// Legacy (no method prefix) keeps the default POST behavior.
 	pi, ok = result.Paths["/legacy"]
