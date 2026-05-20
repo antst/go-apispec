@@ -75,27 +75,50 @@ func walkCallersForAuthPrefix(handlerID string, meta *metadata.Metadata) (string
 		cur := queue[0]
 		queue = queue[1:]
 
-		for _, edge := range edgesFromCaller(meta, cur.id) {
+		edges := edgesFromCaller(meta, cur.id)
+
+		// Two-pass scan, scoped to THIS function. authVars are local-scope
+		// identifiers — a `header` variable in one function has nothing to
+		// do with a `header` variable in another — so the set is rebuilt
+		// per caller. Pass 1 registers Authorization-header reads (so we
+		// know which variables hold the result before any TrimPrefix can
+		// reference them, irrespective of slice order). Pass 2 then
+		// validates TrimPrefix matches against that local set.
+		authVars := map[string]bool{}
+		for _, edge := range edges {
 			callee := stringFromPool(meta, edge.Callee.Name)
-			pkg := stringFromPool(meta, edge.Callee.Pkg)
 			recv := stringFromPool(meta, edge.Callee.RecvType)
-
-			switch {
-			case isAuthHeaderRead(callee, recv, edge, meta):
-				hasHeaderRead = true
-			case isTrimPrefixCall(callee, pkg):
-				if p := trimPrefixValue(edge, meta); p != "" && prefix == "" {
-					prefix = p
-				}
-			}
-
-			if cur.depth+1 >= maxDepth {
+			if !isAuthHeaderRead(callee, recv, edge, meta) {
 				continue
 			}
-			// Descend into the callee — but only when it's a user-defined
-			// function we can re-look-up in meta.Callers. Builtins and
-			// stdlib calls (json, strings, http stdlib helpers) don't have
-			// further edges relevant to auth detection.
+			hasHeaderRead = true
+			if v := edge.CalleeRecvVarName; v != "" {
+				authVars[v] = true
+			}
+		}
+		if prefix == "" {
+			for _, edge := range edges {
+				callee := stringFromPool(meta, edge.Callee.Name)
+				pkg := stringFromPool(meta, edge.Callee.Pkg)
+				if !isTrimPrefixCall(callee, pkg) {
+					continue
+				}
+				if !trimPrefixOnAuthVar(edge, authVars, meta) {
+					continue
+				}
+				if p := trimPrefixValue(edge, meta); p != "" {
+					prefix = p
+					break
+				}
+			}
+		}
+
+		// Enqueue user-defined callees (builtins and stdlib helpers don't
+		// expose edges that matter for auth detection).
+		if cur.depth+1 >= maxDepth {
+			continue
+		}
+		for _, edge := range edges {
 			calleeID := edge.Callee.BaseID()
 			if visited[calleeID] {
 				continue
@@ -109,6 +132,73 @@ func walkCallersForAuthPrefix(handlerID string, meta *metadata.Metadata) (string
 	}
 
 	return prefix, hasHeaderRead
+}
+
+// trimPrefixOnAuthVar reports whether the TrimPrefix call's first argument
+// traces back to an Authorization-header read. Two shapes count:
+//
+//   - First arg is an ident whose name is in authVars (the common
+//     `header := r.Header.Get("Authorization"); strings.TrimPrefix(header, "Bearer ")`
+//     idiom — Header.Get's result is bound to a local variable that's
+//     then trimmed).
+//   - First arg is itself a call to Header.Get("Authorization") — the
+//     inline `strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")`
+//     idiom that skips the intermediate variable.
+//
+// Any other shape (different ident, literal, expression that doesn't
+// reduce to a Header.Get) is treated as unrelated and ignored — this is
+// what stops e.g. `strings.TrimPrefix(matrixUserID, "@")` from poisoning
+// auth detection.
+func trimPrefixOnAuthVar(edge *metadata.CallGraphEdge, authVars map[string]bool, meta *metadata.Metadata) bool {
+	if len(edge.Args) == 0 {
+		return false
+	}
+	first := edge.Args[0]
+	if first == nil {
+		return false
+	}
+	switch first.GetKind() {
+	case metadata.KindIdent:
+		return authVars[first.GetName()]
+	case metadata.KindCall:
+		return isInlineAuthHeaderCall(first, meta)
+	}
+	return false
+}
+
+// isInlineAuthHeaderCall recognises the call expression
+// `r.Header.Get("Authorization")` (or any equivalent receiver shape) when
+// it appears directly as another call's argument. Used so the inline-trim
+// idiom `strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")`
+// resolves without the result being bound to a local variable first.
+func isInlineAuthHeaderCall(arg *metadata.CallArgument, meta *metadata.Metadata) bool {
+	if arg == nil || arg.Fun == nil {
+		return false
+	}
+	if arg.Fun.GetKind() != metadata.KindSelector || arg.Fun.Sel == nil {
+		return false
+	}
+	if stringFromPool(meta, arg.Fun.Sel.Name) != "Get" {
+		return false
+	}
+	// The receiver shape can land in either arg.Fun.X.Type (canonical) or
+	// arg.Fun.Type depending on how the chained expression was parsed;
+	// match against both so we don't miss equivalent shapes.
+	recv := stringFromPool(meta, 0)
+	if arg.Fun.X != nil {
+		recv = stringFromPool(meta, arg.Fun.X.Type)
+	}
+	if !strings.Contains(recv, "Header") {
+		recv = stringFromPool(meta, arg.Fun.Type)
+		if !strings.Contains(recv, "Header") {
+			return false
+		}
+	}
+	if len(arg.Args) == 0 {
+		return false
+	}
+	name := strings.Trim(stringFromPool(meta, arg.Args[0].Value), `"`)
+	return strings.EqualFold(name, authHeaderName)
 }
 
 // edgesFromCaller returns the edges originating from the named function

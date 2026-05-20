@@ -22,8 +22,35 @@ func main() {
 	mux.HandleFunc("POST /protected/inline", protectedInline)
 	mux.HandleFunc("POST /protected/basic", protectedBasic)
 	mux.HandleFunc("POST /protected/apikey", protectedAPIKey)
+	mux.HandleFunc("POST /matrix/user", matrixUserHandler)
 	mux.HandleFunc("GET /open/ping", openPing)
 	http.ListenAndServe(":3000", mux)
+}
+
+// stripMatrixIDPrefix is a Matrix-specific helper that has NOTHING to do with
+// HTTP auth — Matrix user IDs start with "@" (e.g. "@alice:example.com") and
+// some flows want them stripped. It's the kind of unrelated TrimPrefix that
+// previously poisoned auth detection: the BFS would find this and misclassify
+// the handler's auth as scheme "@".
+func stripMatrixIDPrefix(userID string) string {
+	return strings.TrimPrefix(userID, "@")
+}
+
+// matrixUserHandler reads Authorization (no scheme prefix → apiKey) AND
+// processes a Matrix user ID via stripMatrixIDPrefix. apispec must still
+// emit apiKeyAuth — the unrelated TrimPrefix on "@" must NOT contaminate
+// auth detection. Regression test for the v0.4.12 false-positive.
+func matrixUserHandler(w http.ResponseWriter, r *http.Request) {
+	token := r.Header.Get("Authorization")
+	if token == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// Unrelated to auth — Matrix user ID processing happens here.
+	userID := stripMatrixIDPrefix(r.URL.Query().Get("user"))
+	_ = userID
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ProtectedResponse{OK: true})
 }
 
 // PingResponse is the trivial success payload for /open/ping.
