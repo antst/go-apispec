@@ -255,12 +255,24 @@ func MapMetadataToOpenAPI(tree TrackerTreeInterface, cfg *APISpecConfig, genCfg 
 		ExternalDocs: cfg.ExternalDocs,
 	}
 
-	// Fill securitySchemes in components if present in config
-	if len(cfg.SecuritySchemes) > 0 {
+	// Fill securitySchemes in components. Two sources, merged in this order
+	// (config wins on conflict — explicit user declaration overrides
+	// inference):
+	//   1. Schemes detected by walking each route's call graph for
+	//      Authorization-header reads (see detectSecuritySchemeForRoute).
+	//   2. Schemes declared in apispec.yaml under `securitySchemes:`.
+	if detected := collectDetectedSecuritySchemes(routes); len(detected) > 0 || len(cfg.SecuritySchemes) > 0 {
 		if spec.Components == nil {
 			spec.Components = &Components{}
 		}
-		spec.Components.SecuritySchemes = cfg.SecuritySchemes
+		merged := make(map[string]SecurityScheme, len(detected)+len(cfg.SecuritySchemes))
+		for name, sch := range detected {
+			merged[name] = sch
+		}
+		for name, sch := range cfg.SecuritySchemes {
+			merged[name] = sch
+		}
+		spec.Components.SecuritySchemes = merged
 	}
 
 	// Post-process: shorten all $ref values to match shortened schema names.
@@ -417,6 +429,18 @@ func buildPathsFromRoutes(routes []*RouteInfo, cfg *APISpecConfig) map[string]Pa
 		}
 		operation.Parameters = ensureAllPathParams(openAPIPath, operation.Parameters)
 
+		// Attach security scheme + drop the now-redundant Authorization
+		// header parameter. The scheme is detected during route extraction
+		// (see detectSecuritySchemeForRoute); a single Components.securitySchemes
+		// entry is shared across every operation referencing it (done outside
+		// this loop — see attachSecuritySchemesToComponents).
+		if route.SecurityScheme != nil {
+			operation.Security = []SecurityRequirement{
+				{route.SecurityScheme.Name: []string{}},
+			}
+			operation.Parameters = dropAuthorizationHeaderParam(operation.Parameters)
+		}
+
 		// Add responses
 		operation.Responses = buildResponses(route.Response)
 
@@ -426,6 +450,46 @@ func buildPathsFromRoutes(routes []*RouteInfo, cfg *APISpecConfig) map[string]Pa
 	}
 
 	return paths
+}
+
+// collectDetectedSecuritySchemes deduplicates the SecurityScheme attached
+// to each route into a single map keyed by scheme name. Routes that share
+// the same scheme name share the same scheme definition in the output —
+// SDK generators and humans get one canonical entry per kind of auth.
+func collectDetectedSecuritySchemes(routes []*RouteInfo) map[string]SecurityScheme {
+	out := map[string]SecurityScheme{}
+	for _, r := range routes {
+		if r.SecurityScheme == nil || r.SecurityScheme.Name == "" {
+			continue
+		}
+		// First-write wins: detection is deterministic per (prefix → scheme)
+		// so distinct routes that contribute the same name always carry the
+		// same shape. Skipping later writes just avoids redundant work.
+		if _, ok := out[r.SecurityScheme.Name]; ok {
+			continue
+		}
+		out[r.SecurityScheme.Name] = r.SecurityScheme.Scheme
+	}
+	return out
+}
+
+// dropAuthorizationHeaderParam removes the canonical Authorization header
+// parameter from a parameter list. Called when a security scheme is
+// attached to the operation — the header is already implicit in the
+// scheme reference, so leaving it as a parameter would double-document
+// the same auth surface and confuse SDK generators.
+func dropAuthorizationHeaderParam(params []Parameter) []Parameter {
+	out := params[:0]
+	for _, p := range params {
+		if p.In == "header" && strings.EqualFold(p.Name, "Authorization") {
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // ensureAllPathParams ensures all path parameters in the path are present in the parameters slice

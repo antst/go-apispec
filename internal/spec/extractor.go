@@ -133,6 +133,21 @@ type RouteInfo struct {
 
 	// Content-Type detected from Header().Set("Content-Type", value) calls
 	detectedContentType string
+
+	// SecurityScheme, when set, names the security scheme this route uses
+	// (e.g. "bearerAuth"). The scheme definition itself is held centrally
+	// on the generator config — multiple routes that use the same auth
+	// pattern share a single Components.securitySchemes entry. nil means
+	// no auth was detected for this route.
+	SecurityScheme *DetectedSecurityScheme
+}
+
+// DetectedSecurityScheme captures the result of scanning a handler's call
+// graph for an Authorization-header check. Name is the chosen schema key
+// (under components.securitySchemes); Scheme is the inferred shape.
+type DetectedSecurityScheme struct {
+	Name   string
+	Scheme SecurityScheme
 }
 
 func NewRouteInfo() *RouteInfo {
@@ -1120,6 +1135,17 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 	// Extract parameters from the route node itself
 	if param := e.extractParamFromNode(routeNode, route); param != nil {
 		route.Params = append(route.Params, *param)
+	}
+
+	// Look for Authorization-header reads transitively from the handler
+	// function and infer the matching OpenAPI security scheme. Uses the
+	// call-graph caller index directly because the tracker tree's
+	// route-shaped subtree doesn't always surface handler-body edges as
+	// children. Done after parameter extraction so the mapper can prune
+	// the redundant Authorization header parameter from operations that
+	// now use a securityScheme.
+	if scheme := detectSecuritySchemeFromHandler(route); scheme != nil {
+		route.SecurityScheme = scheme
 	}
 }
 

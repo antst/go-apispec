@@ -52,6 +52,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "json_dto", inputDir: "../../testdata/json_dto", configFn: spec.DefaultChiConfig},
 		{name: "json_patch", inputDir: "../../testdata/json_patch", configFn: spec.DefaultChiConfig},
 		{name: "servemux_methods", inputDir: "../../testdata/servemux_methods", configFn: spec.DefaultHTTPConfig},
+		{name: "security_bearer", inputDir: "../../testdata/security_bearer", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
@@ -194,6 +195,73 @@ func TestE2E_FormValueVar_AllPatternsExtracted(t *testing.T) {
 		assert.Equal(t, want.Type, s.Type, "wrong type for %q", name)
 		assert.Equal(t, want.Format, s.Format, "wrong format for %q", name)
 	}
+}
+
+// TestE2E_SecurityBearer_AllSchemesAndSuppression locks down the full
+// Authorization-header detection matrix on testdata/security_bearer:
+//
+//   - bearer via helper (transitive call-graph walk) and bearer inline
+//     (direct call in handler body) must share ONE bearerAuth scheme.
+//   - basic via helper produces a separate basicAuth scheme.
+//   - apiKey (raw header read, no TrimPrefix) falls back to apiKey-in-header.
+//   - The Authorization header parameter must be SUPPRESSED on every
+//     operation that gained a security scheme — leaving it would
+//     double-document the same auth surface and confuse SDK generators.
+//   - An open endpoint must remain free of any security stanza.
+//
+// Golden file separately covers the full JSON shape; this test asserts the
+// behavioural invariants so a regression that flips a scheme name or
+// breaks suppression fails with a clear diagnostic instead of a generic
+// golden diff.
+func TestE2E_SecurityBearer_AllSchemesAndSuppression(t *testing.T) {
+	cfg := newDefaultCfg("../../testdata/security_bearer", spec.DefaultHTTPConfig())
+	eng := NewEngine(cfg)
+	result, err := eng.GenerateOpenAPI()
+	require.NoError(t, err)
+	require.NotNil(t, result.Components, "components missing")
+	require.NotNil(t, result.Components.SecuritySchemes, "securitySchemes section must be emitted")
+
+	// Three distinct schemes registered, each with the expected shape.
+	require.Contains(t, result.Components.SecuritySchemes, "bearerAuth")
+	require.Contains(t, result.Components.SecuritySchemes, "basicAuth")
+	require.Contains(t, result.Components.SecuritySchemes, "apiKeyAuth")
+	assert.Equal(t, "http", result.Components.SecuritySchemes["bearerAuth"].Type)
+	assert.Equal(t, "bearer", result.Components.SecuritySchemes["bearerAuth"].Scheme)
+	assert.Equal(t, "http", result.Components.SecuritySchemes["basicAuth"].Type)
+	assert.Equal(t, "basic", result.Components.SecuritySchemes["basicAuth"].Scheme)
+	assert.Equal(t, "apiKey", result.Components.SecuritySchemes["apiKeyAuth"].Type)
+	assert.Equal(t, "header", result.Components.SecuritySchemes["apiKeyAuth"].In)
+	assert.Equal(t, "Authorization", result.Components.SecuritySchemes["apiKeyAuth"].Name)
+
+	// Helper + inline bearer endpoints reference the SAME scheme entry.
+	expectScheme := func(t *testing.T, path, schemeName string) {
+		t.Helper()
+		pi, ok := result.Paths[path]
+		require.True(t, ok, "expected %s in paths; got %v", path, pathKeys(result))
+		require.NotNil(t, pi.Post, "%s must have POST operation", path)
+		require.NotEmpty(t, pi.Post.Security, "%s must carry a security requirement", path)
+		// security: [{schemeName: []}] — single requirement, single scheme.
+		require.Contains(t, pi.Post.Security[0], schemeName,
+			"%s security must reference %s", path, schemeName)
+		// Authorization header must NOT appear as a parameter — the scheme
+		// reference already documents it. Case-insensitive match because
+		// HTTP header names are case-insensitive (and production suppression
+		// uses strings.EqualFold, so this assertion has to too).
+		for _, p := range pi.Post.Parameters {
+			assert.False(t, strings.EqualFold(p.Name, "Authorization"),
+				"%s parameter %q must not coexist with security scheme", path, p.Name)
+		}
+	}
+	expectScheme(t, "/protected/helper", "bearerAuth")
+	expectScheme(t, "/protected/inline", "bearerAuth")
+	expectScheme(t, "/protected/basic", "basicAuth")
+	expectScheme(t, "/protected/apikey", "apiKeyAuth")
+
+	// Open endpoint: no security stanza, no Authorization parameter.
+	open, ok := result.Paths["/open/ping"]
+	require.True(t, ok, "expected /open/ping in paths; got %v", pathKeys(result))
+	require.NotNil(t, open.Get)
+	assert.Empty(t, open.Get.Security, "open endpoint must NOT advertise auth")
 }
 
 // TestE2E_ServeMux_MethodPrefixAndGenericResponse covers two related Go 1.22+
