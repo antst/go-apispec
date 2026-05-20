@@ -250,6 +250,71 @@ func TestExtractDocComment_FallbackWhenPackageDoesntMatch(t *testing.T) {
 	assert.Equal(t, "Serve starts the server.", summary)
 }
 
+func TestExtractDocComment_RoutePackageWinsFirstPass(t *testing.T) {
+	// When route.Package is set, the first pass (most precise) finds the
+	// comment directly in that package without falling back to suffix
+	// matching or global search. Without this branch coverage the first
+	// `if route.Package != "" { ... }` block was dead code in tests.
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{
+		StringPool: sp,
+		Packages: map[string]*metadata.Package{
+			"users": {
+				Files: map[string]*metadata.File{
+					"u.go": {
+						Functions: map[string]*metadata.Function{
+							"Create": {
+								Name:     sp.Get("Create"),
+								Comments: sp.Get("Create registers a new user. Idempotent on email."),
+							},
+						},
+					},
+				},
+			},
+			// Sibling package with the same function name — must NOT be
+			// chosen when route.Package pins the right one.
+			"items": {
+				Files: map[string]*metadata.File{
+					"i.go": {
+						Functions: map[string]*metadata.Function{
+							"Create": {
+								Name:     sp.Get("Create"),
+								Comments: sp.Get("Create adds a new item."),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	route := &RouteInfo{
+		Function: "users.Create",
+		Package:  "users",
+		Metadata: meta,
+	}
+	summary, _ := extractDocComment(route)
+	assert.Equal(t, "Create registers a new user.", summary,
+		"route.Package=users must select the users package's Create, not the items one")
+}
+
+func TestParseFuncNameAndPackage_FuncLitWithPosition(t *testing.T) {
+	// Closure handler IDs come in as "FuncLit:<position>" with no package
+	// prefix (see metadata/analysis.go). parseFuncNameAndPackage must strip
+	// the colon-prefixed position so the remaining "FuncLit" can be looked
+	// up cleanly.
+	funcName, pkgPrefix := parseFuncNameAndPackage("FuncLit:anchor")
+	assert.Equal(t, "FuncLit", funcName)
+	assert.Empty(t, pkgPrefix)
+}
+
+func TestParseFuncNameAndPackage_NoPackagePrefix(t *testing.T) {
+	// Bare function name — no dots — must produce funcName=name, pkgPrefix="".
+	funcName, pkgPrefix := parseFuncNameAndPackage("Plain")
+	assert.Equal(t, "Plain", funcName)
+	assert.Empty(t, pkgPrefix)
+}
+
 func TestExtractDocComment_DescriptionOverrideTakesPrecedence(t *testing.T) {
 	sp := metadata.NewStringPool()
 	meta := &metadata.Metadata{

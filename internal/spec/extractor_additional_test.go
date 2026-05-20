@@ -2430,6 +2430,11 @@ func TestIsLikelyMediaType(t *testing.T) {
 		{"text/plain; charset=utf-8", true},
 		{"application/octet-stream", true},
 		{"application/vnd.api+json", true},
+		// Type segment containing a dot — looks like a media type structurally
+		// (exactly one slash) but the dot in the left side outs it as a Go
+		// field path masquerading as a content-type. Locks the dot-in-type
+		// guard.
+		{"dotted.name/json", false},
 		{"multipart/form-data", true},
 		{"*/*", true},
 		// Go field paths — NOT media types
