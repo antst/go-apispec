@@ -335,23 +335,13 @@ func (e *Extractor) checkContentTypePattern(node TrackerNodeInterface, route *Ro
 					val = "application/octet-stream"
 				}
 				if val != "" {
-					// Override content type on existing responses that use the
-					// default. Don't override responses with pattern-specific
-					// content types (e.g., http.Error → text/plain). Issue #33:
-					// also skip bodyless status entries (1xx/204/304) — their
-					// ContentType is dropped at the output stage anyway, so
-					// mutating it here pollutes RouteInfo for no benefit.
-					defaultCT := e.cfg.Defaults.ResponseContentType
-					for _, resp := range route.Response {
-						if isBodylessStatusCode(resp.StatusCode) {
-							continue
-						}
-						if resp.ContentType == defaultCT {
-							resp.ContentType = val
-						}
-					}
-					// Store for future responses that haven't been added yet
+					// Store the detected value, then propagate to existing
+					// responses via the shared helper — which (a) skips bodyless
+					// status entries per issue #33 and (b) preserves entries
+					// already pinned by pattern-specific DefaultContentType
+					// values (e.g., http.Error → text/plain).
 					route.detectedContentType = val
+					applyDetectedContentType(route, e.cfg.Defaults.ResponseContentType)
 				}
 			}
 		}
