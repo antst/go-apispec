@@ -18,9 +18,6 @@ import (
 // here so the spec generator can resolve the literal at analysis time.
 const fixedETag = `"v1"`
 
-// content is the body returned on the 200 (full-fetch) branch.
-var content = []byte{0x00, 0x01, 0x02, 0x03}
-
 // Handler is a method receiver to mirror real-world service shapes.
 type Handler struct{}
 
@@ -49,9 +46,10 @@ func (h *Handler) GetDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	body := []byte{0x00, 0x01, 0x02, 0x03}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(content)
+	_, _ = w.Write(body)
 }
 
 func main() {

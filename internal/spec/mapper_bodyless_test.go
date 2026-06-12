@@ -9,6 +9,7 @@
 package spec
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,37 +24,34 @@ import (
 // buildResponses MUST make TestBuildResponses_304_NoContent fail — this is
 // SC-005's "load-bearing" check on the mapper fix.
 
-func TestBuildResponses_304_NoContent(t *testing.T) {
-	// 304 with schema and a non-default content-type — both must be dropped
-	// from the emitted Response.
-	respInfo := map[string]*ResponseInfo{
-		"304": {StatusCode: 304, Schema: &Schema{Type: "object"}, ContentType: "application/json"},
+func TestBuildResponses_BodylessStatuses_NoContent(t *testing.T) {
+	// Parameterized coverage of all three bodyless ranges (1xx via 102, 204,
+	// 304). Every case must drop the Content map and emit description-only.
+	// Reverting the `if isBodylessStatusCode(effectiveStatus)` branch in
+	// buildResponses MUST make ALL three subtests fail — SC-005 load-bearing.
+	cases := []struct {
+		name        string
+		statusCode  int
+		schema      *Schema
+		contentType string
+		wantDesc    string
+	}{
+		{"304_NotModified", 304, &Schema{Type: "object"}, "application/json", "Not Modified"},
+		{"204_NoContent", 204, &Schema{Type: "object"}, "application/json", "No Content"},
+		{"102_Processing", 102, &Schema{Type: "string"}, "text/plain", "Processing"},
 	}
-	out := buildResponses(respInfo)
-	got := out["304"]
-	assert.Nil(t, got.Content, "304 must not carry a Content map (RFC 9110)")
-	assert.Equal(t, "Not Modified", got.Description)
-}
-
-func TestBuildResponses_204_NoContent(t *testing.T) {
-	respInfo := map[string]*ResponseInfo{
-		"204": {StatusCode: 204, Schema: &Schema{Type: "object"}, ContentType: "application/json"},
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			key := strconv.Itoa(tc.statusCode)
+			respInfo := map[string]*ResponseInfo{
+				key: {StatusCode: tc.statusCode, Schema: tc.schema, ContentType: tc.contentType},
+			}
+			out := buildResponses(respInfo)
+			got := out[key]
+			assert.Nil(t, got.Content, "%d must not carry a Content map (RFC 9110)", tc.statusCode)
+			assert.Equal(t, tc.wantDesc, got.Description)
+		})
 	}
-	out := buildResponses(respInfo)
-	got := out["204"]
-	assert.Nil(t, got.Content, "204 must not carry a Content map")
-	assert.Equal(t, "No Content", got.Description)
-}
-
-func TestBuildResponses_102_NoContent(t *testing.T) {
-	// 102 Processing is a 1xx — every 1xx is bodyless per isBodylessStatusCode.
-	respInfo := map[string]*ResponseInfo{
-		"102": {StatusCode: 102, Schema: &Schema{Type: "string"}, ContentType: "text/plain"},
-	}
-	out := buildResponses(respInfo)
-	got := out["102"]
-	assert.Nil(t, got.Content, "1xx (102) must not carry a Content map")
-	assert.Equal(t, "Processing", got.Description)
 }
 
 func TestBuildResponses_200_RetainsContent(t *testing.T) {
