@@ -203,14 +203,7 @@
         ],
         "responses": {
           "204": {
-            "description": "No Content",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/gin.H"
-                }
-              }
-            }
+            "description": "No Content"
           },
           "400": {
             "description": "Bad Request",

@@ -56,6 +56,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "writejson_helper", inputDir: "../../testdata/writejson_helper", configFn: spec.DefaultHTTPConfig},
 		{name: "error_switch_minimal", inputDir: "../../testdata/error_switch_minimal", configFn: spec.DefaultChiConfig},
 		{name: "error_switch_file_service", inputDir: "../../testdata/error_switch_file_service", configFn: spec.DefaultChiConfig},
+		{name: "bodyless_status", inputDir: "../../testdata/bodyless_status", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {

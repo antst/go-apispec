@@ -28,8 +28,8 @@
           }
         ],
         "responses": {
-          "304": {
-            "description": "Not Modified",
+          "200": {
+            "description": "OK",
             "content": {
               "application/json": {
                 "schema": {
@@ -37,6 +37,9 @@
                 }
               }
             }
+          },
+          "304": {
+            "description": "Not Modified"
           }
         }
       }
@@ -633,10 +636,7 @@
         ],
         "responses": {
           "204": {
-            "description": "No Content",
-            "content": {
-              "application/json": {}
-            }
+            "description": "No Content"
           }
         }
       }
