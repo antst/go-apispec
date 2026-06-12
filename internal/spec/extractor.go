@@ -63,6 +63,29 @@ const (
 	defaultSep = "."
 )
 
+// findVacantStatusForBody picks the lowest status code in route.Response
+// that hasn't yet been claimed by a body-bearing pattern. An entry is
+// "vacant" only when BOTH BodyType and Schema are empty — entries with a
+// schema set by expandHelperFunctionResponses (Schema != nil, BodyType == "")
+// must NOT be picked, otherwise Render-method schemas mis-attribute to
+// lower-numbered helper statuses (issue #30 — RejectedContentResponse
+// leaking to 400 in alkem-io/file-service). Bodyless status codes
+// (1xx/204/304) are also excluded per RFC 7231.
+//
+// Returns the status code and true on a successful pick; returns 0/false
+// when no vacant slot exists.
+func findVacantStatusForBody(route *RouteInfo) (int, bool) {
+	for _, key := range slices.Sorted(maps.Keys(route.Response)) {
+		resp := route.Response[key]
+		if resp.BodyType == "" && resp.Schema == nil &&
+			resp.StatusCode >= 100 && resp.StatusCode < 600 &&
+			!isBodylessStatusCode(resp.StatusCode) {
+			return resp.StatusCode, true
+		}
+	}
+	return 0, false
+}
+
 // isBodylessStatusCode returns true for HTTP status codes that must not
 // include a message body per RFC 7231: 1xx informational, 204 No Content,
 // and 304 Not Modified.
@@ -1587,12 +1610,8 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		// If status code is not from argument, find the lowest valid status code
 		// with no body type assigned yet. Skip bodyless codes (1xx, 204, 304).
 		if !r.pattern.StatusFromArg {
-			for _, key := range slices.Sorted(maps.Keys(route.Response)) {
-				resp := route.Response[key]
-				if resp.BodyType == "" && resp.StatusCode >= 100 && resp.StatusCode < 600 && !isBodylessStatusCode(resp.StatusCode) {
-					respInfo.StatusCode = resp.StatusCode
-					break
-				}
+			if status, ok := findVacantStatusForBody(route); ok {
+				respInfo.StatusCode = status
 			}
 		}
 
