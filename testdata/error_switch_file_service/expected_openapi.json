@@ -1,0 +1,181 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    },
+    "license": {
+      "name": ""
+    }
+  },
+  "paths": {
+    "/documents/{id}/content": {
+      "put": {
+        "operationId": "DocumentHandler.ReplaceContent",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error_switch_file_service.ReplaceContentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error_switch_file_service.errorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error_switch_file_service.errorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error_switch_file_service.errorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request Entity Too Large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error_switch_file_service.errorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error_switch_file_service.RejectedContentResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/error_switch_file_service.errorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "error_switch_file_service.MimeMismatchDetail": {
+        "type": "object",
+        "properties": {
+          "detectedMime": {
+            "type": "string"
+          },
+          "knownMime": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "knownMime",
+          "detectedMime"
+        ]
+      },
+      "error_switch_file_service.RejectedContentResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "$ref": "#/components/schemas/error_switch_file_service.MimeMismatchDetail"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "error"
+        ]
+      },
+      "error_switch_file_service.ReplaceContentResponse": {
+        "type": "object",
+        "properties": {
+          "externalID": {
+            "type": "string"
+          },
+          "imageHeight": {
+            "type": "integer"
+          },
+          "imageWidth": {
+            "type": "integer"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "externalID",
+          "mimeType",
+          "size"
+        ]
+      },
+      "error_switch_file_service.errorResponse": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "code"
+        ]
+      }
+    }
+  }
+}
