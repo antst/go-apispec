@@ -947,7 +947,21 @@ func (e *Extractor) visitChildren(node TrackerNodeInterface, route *RouteInfo, c
 }
 
 // addResponse adds a response to the route, merging schemas for duplicate status codes.
+//
+// Issue #33 (producer-side invariant): for bodyless status codes (1xx/204/304),
+// strip any body-bearing fields on insert. Per RFC 9110 these statuses cannot
+// carry a message body, and emitting one is incorrect output. Enforcing the
+// invariant here — rather than relying solely on the mapper-side guard in
+// buildResponses — keeps RouteInfo internally consistent for any future
+// consumer that reads the structure directly (debug tooling, alternative
+// emitters, metrics exporters). The mapper-side guard remains as the
+// secondary defense and as the authority for the predicate.
 func (e *Extractor) addResponse(route *RouteInfo, resp *ResponseInfo) {
+	if isBodylessStatusCode(resp.StatusCode) {
+		resp.Schema = nil
+		resp.AlternativeSchemas = nil
+		resp.BodyType = ""
+	}
 	key := fmt.Sprintf("%d", resp.StatusCode)
 	if existing, ok := route.Response[key]; ok && resp.Schema != nil {
 		if existing.Schema == nil {

@@ -9,9 +9,11 @@
 package spec
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestApplyDetectedContentType covers FR-002 from spec 006 (the extractor-side
@@ -88,6 +90,71 @@ func TestApplyDetectedContentType_EmptyResponseMap(t *testing.T) {
 	applyDetectedContentType(route, "application/json")
 
 	assert.Empty(t, route.Response)
+}
+
+// TestAddResponse_StripsBodyFieldsOnBodyless covers the producer-side invariant
+// from issue #33 follow-up (F2): addResponse must strip Schema, AlternativeSchemas,
+// and BodyType when the status code is bodyless (1xx/204/304). RFC 9110 forbids a
+// body on these statuses, and enforcing the invariant at insert time keeps RouteInfo
+// internally consistent for any consumer that reads the structure directly.
+//
+// Reverting the bodyless block at the top of addResponse MUST make this test fail.
+func TestAddResponse_StripsBodyFieldsOnBodyless(t *testing.T) {
+	e := &Extractor{}
+	route := &RouteInfo{Response: map[string]*ResponseInfo{}}
+
+	bodylessCases := []struct {
+		name       string
+		statusCode int
+	}{
+		{"304_NotModified", 304},
+		{"204_NoContent", 204},
+		{"102_Processing", 102},
+	}
+	for _, tc := range bodylessCases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := &ResponseInfo{
+				StatusCode:         tc.statusCode,
+				Schema:             &Schema{Type: "object"},
+				AlternativeSchemas: []*Schema{{Type: "string"}},
+				BodyType:           "github.com/example/pkg.Body",
+				ContentType:        "application/json",
+			}
+			e.addResponse(route, resp)
+			key := strconv.Itoa(tc.statusCode)
+			stored := route.Response[key]
+			require.NotNil(t, stored, "entry must be inserted")
+			assert.Nil(t, stored.Schema, "Schema must be stripped for bodyless status")
+			assert.Nil(t, stored.AlternativeSchemas, "AlternativeSchemas must be stripped for bodyless status")
+			assert.Empty(t, stored.BodyType, "BodyType must be stripped for bodyless status")
+			// ContentType is intentionally retained (see addResponse comment) — it's still
+			// meaningful for negotiation-style headers; the mapper drops the entire Content
+			// map regardless.
+			assert.Equal(t, "application/json", stored.ContentType, "ContentType is intentionally retained")
+		})
+	}
+}
+
+func TestAddResponse_PreservesBodyFieldsOnBodyBearing(t *testing.T) {
+	// Control case: addResponse must NOT strip Schema/BodyType/AlternativeSchemas
+	// for body-bearing statuses. Proves the guard is bodyless-specific.
+	e := &Extractor{}
+	route := &RouteInfo{Response: map[string]*ResponseInfo{}}
+	schema := &Schema{Type: "object"}
+	alt := []*Schema{{Type: "string"}}
+
+	e.addResponse(route, &ResponseInfo{
+		StatusCode:         200,
+		Schema:             schema,
+		AlternativeSchemas: alt,
+		BodyType:           "User",
+		ContentType:        "application/json",
+	})
+	stored := route.Response["200"]
+	require.NotNil(t, stored)
+	assert.Equal(t, schema, stored.Schema, "200 body-bearing: Schema preserved")
+	assert.Equal(t, alt, stored.AlternativeSchemas, "200 body-bearing: AlternativeSchemas preserved")
+	assert.Equal(t, "User", stored.BodyType, "200 body-bearing: BodyType preserved")
 }
 
 func TestApplyDetectedContentType_DetectedEqualsDefault_NoOp(t *testing.T) {
