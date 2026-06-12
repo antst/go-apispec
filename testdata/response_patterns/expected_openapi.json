@@ -28,6 +28,16 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/response_patterns.User"
+                }
+              }
+            }
+          },
           "304": {
             "description": "Not Modified"
           }

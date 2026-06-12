@@ -573,10 +573,17 @@ func buildResponses(respInfo map[string]*ResponseInfo) map[string]Response {
 	// with body-only responses (have body but no explicit status code).
 	// This handles the common pattern: w.WriteHeader(201); json.Encode(user)
 	// where WriteHeader and Encode are captured as separate response entries.
+	//
+	// Issue #33 (per CodeRabbit review): exclude bodyless status entries
+	// (1xx/204/304) from merge candidacy. RFC 9110 forbids a body on these
+	// statuses, and `collectUsedTypesFromRoutes` (mapper.go below) walks
+	// `res.BodyType` to populate components.schemas — so if a bodyless entry
+	// were merged with a body-only schema here, the type would leak into
+	// `components` even though the emitted response has no `content`.
 	var bodyOnlyKeys []string
 	var statusOnlyKeys []string
 	for key, resp := range respInfo {
-		if resp.StatusCode > 0 && resp.BodyType == "" && resp.Schema == nil {
+		if resp.StatusCode > 0 && !isBodylessStatusCode(resp.StatusCode) && resp.BodyType == "" && resp.Schema == nil {
 			statusOnlyKeys = append(statusOnlyKeys, key)
 		} else if resp.StatusCode < 0 && resp.BodyType != "" {
 			bodyOnlyKeys = append(bodyOnlyKeys, key)

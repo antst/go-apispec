@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestBuildResponses_Bodyless covers FR-001 from spec 006 (the mapper-side
@@ -79,6 +80,49 @@ func TestBuildResponses_304_NoSchema_StillNoContent(t *testing.T) {
 	got := out["304"]
 	assert.Nil(t, got.Content, "304 must not carry Content even when Schema is nil")
 	assert.Equal(t, "Not Modified", got.Description)
+}
+
+func TestBuildResponses_BodylessNotMergedWithBodyOnly(t *testing.T) {
+	// Per CodeRabbit review on PR #34: the pre-merge step in buildResponses
+	// (status-only ⨯ body-only fold) must EXCLUDE bodyless statuses from the
+	// status-only candidate set. Otherwise a handler that does
+	//     w.WriteHeader(204)               // 204 entry, status-only
+	//     json.Encode(user)                // body-only entry with sentinel StatusCode
+	// would have the User schema folded into the 204 entry's BodyType/Schema.
+	// The emitted Response correctly omits Content (bodyless mapper guard),
+	// but collectUsedTypesFromRoutes (mapper.go) walks res.BodyType to
+	// populate components.schemas — a phantom User schema would leak into
+	// components even though no response references it.
+	//
+	// Reverting the `!isBodylessStatusCode(resp.StatusCode)` clause in the
+	// pre-merge candidate detection MUST make this test fail.
+	respInfo := map[string]*ResponseInfo{
+		"204": {StatusCode: 204, BodyType: "", Schema: nil, ContentType: "application/json"},
+		"-1":  {StatusCode: -1, BodyType: "User", Schema: &Schema{Type: "object"}, ContentType: "application/json"},
+	}
+	_ = buildResponses(respInfo)
+
+	// After the call, respInfo["204"] must NOT have been mutated to carry the
+	// body-only entry's BodyType/Schema. This is the load-bearing assertion.
+	assert.Empty(t, respInfo["204"].BodyType, "204's BodyType must not be folded from the body-only entry")
+	assert.Nil(t, respInfo["204"].Schema, "204's Schema must not be folded from the body-only entry")
+}
+
+func TestBuildResponses_BodyOnlyStillMergesIntoBodyBearingStatusOnly(t *testing.T) {
+	// Control case: the merge SHOULD still fire for non-bodyless status-only
+	// entries (the original WriteHeader(201)+Encode(user) pattern motivating
+	// the pre-merge logic). Proves the bodyless exclusion is targeted, not
+	// a blanket disable of the merge.
+	respInfo := map[string]*ResponseInfo{
+		"201": {StatusCode: 201, BodyType: "", Schema: nil, ContentType: "application/json"},
+		"-1":  {StatusCode: -1, BodyType: "User", Schema: &Schema{Type: "object"}, ContentType: "application/json"},
+	}
+	out := buildResponses(respInfo)
+
+	got := out["201"]
+	require.NotNil(t, got.Content, "201 must carry Content (body-bearing)")
+	assert.Equal(t, "User", respInfo["201"].BodyType, "201's BodyType must be folded from body-only entry")
+	assert.NotNil(t, respInfo["201"].Schema, "201's Schema must be folded from body-only entry")
 }
 
 func TestBuildResponses_304_OneOf_StillNoContent(t *testing.T) {

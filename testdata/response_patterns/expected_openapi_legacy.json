@@ -28,6 +28,16 @@
           }
         ],
         "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_response_patterns.User"
+                }
+              }
+            }
+          },
           "304": {
             "description": "Not Modified"
           }
