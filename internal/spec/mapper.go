@@ -625,6 +625,16 @@ func buildResponses(respInfo map[string]*ResponseInfo) map[string]Response {
 			description = "Status code could not be determined"
 		}
 
+		// Issue #33: bodyless status codes (1xx, 204, 304) must not carry a
+		// Content map per RFC 9110. Emit description-only and skip body/schema
+		// computation. The Content field's `omitempty` tag (openapi.go) ensures
+		// the field is absent from the serialized output rather than present-
+		// but-empty.
+		if isBodylessStatusCode(effectiveStatus) {
+			responses[statusCode] = Response{Description: description}
+			continue
+		}
+
 		// If multiple schemas exist for this status code, wrap in oneOf.
 		schema := resp.Schema
 		if len(resp.AlternativeSchemas) > 0 && schema != nil {

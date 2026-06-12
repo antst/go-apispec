@@ -203,14 +203,7 @@
         ],
         "responses": {
           "204": {
-            "description": "No Content",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/github.com_gin-gonic_gin.H"
-                }
-              }
-            }
+            "description": "No Content"
           },
           "400": {
             "description": "Bad Request",

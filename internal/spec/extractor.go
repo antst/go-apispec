@@ -86,6 +86,26 @@ func findVacantStatusForBody(route *RouteInfo) (int, bool) {
 	return 0, false
 }
 
+// applyDetectedContentType propagates a handler-detected Content-Type onto
+// route responses whose ContentType is still the default. Issue #33: skip
+// bodyless status entries (1xx/204/304) — they will never carry a body in
+// the emitted spec (per the mapper-side guard in buildResponses), so
+// mutating their ContentType is wasted state that confuses any downstream
+// inspector of RouteInfo. The override only applies when defaultCT is
+// distinct from `route.detectedContentType` and matches the current entry's
+// ContentType — preserving entries already pinned by pattern-specific
+// DefaultContentType values (e.g., http.Error → text/plain).
+func applyDetectedContentType(route *RouteInfo, defaultCT string) {
+	for _, resp := range route.Response {
+		if isBodylessStatusCode(resp.StatusCode) {
+			continue
+		}
+		if resp.ContentType == defaultCT {
+			resp.ContentType = route.detectedContentType
+		}
+	}
+}
+
 // isBodylessStatusCode returns true for HTTP status codes that must not
 // include a message body per RFC 7231: 1xx informational, 204 No Content,
 // and 304 Not Modified.
@@ -540,12 +560,7 @@ func (e *Extractor) handleRouteNode(node TrackerNodeInterface, routeInfo *RouteI
 	// responses that already have a pattern-specific type (e.g., http.Error
 	// sets "text/plain; charset=utf-8" via DefaultContentType on the pattern).
 	if routeInfo.detectedContentType != "" {
-		defaultCT := e.cfg.Defaults.ResponseContentType
-		for _, resp := range routeInfo.Response {
-			if resp.ContentType == defaultCT {
-				resp.ContentType = routeInfo.detectedContentType
-			}
-		}
+		applyDetectedContentType(routeInfo, e.cfg.Defaults.ResponseContentType)
 	}
 
 	// Detect conditional HTTP methods from CFG branch context.

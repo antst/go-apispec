@@ -29,14 +29,7 @@
         ],
         "responses": {
           "304": {
-            "description": "Not Modified",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/response_patterns.User"
-                }
-              }
-            }
+            "description": "Not Modified"
           }
         }
       }
@@ -633,10 +626,7 @@
         ],
         "responses": {
           "204": {
-            "description": "No Content",
-            "content": {
-              "application/json": {}
-            }
+            "description": "No Content"
           }
         }
       }
