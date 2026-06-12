@@ -86,6 +86,30 @@ func findVacantStatusForBody(route *RouteInfo) (int, bool) {
 	return 0, false
 }
 
+// applyDetectedContentType propagates a handler-detected Content-Type onto
+// route responses whose ContentType is still the default. Returns early when
+// the detected type already equals the default (no-op assignment would skip
+// the loop body anyway). Issue #33: skip bodyless status entries (1xx/204/304)
+// — they will never carry a body in the emitted spec (per the mapper-side
+// guard in buildResponses), so mutating their ContentType is wasted state
+// that confuses any downstream inspector of RouteInfo. The override only
+// matches entries whose ContentType is the default — preserving entries
+// already pinned by pattern-specific DefaultContentType values (e.g.,
+// http.Error → text/plain).
+func applyDetectedContentType(route *RouteInfo, defaultCT string) {
+	if route.detectedContentType == defaultCT {
+		return
+	}
+	for _, resp := range route.Response {
+		if isBodylessStatusCode(resp.StatusCode) {
+			continue
+		}
+		if resp.ContentType == defaultCT {
+			resp.ContentType = route.detectedContentType
+		}
+	}
+}
+
 // isBodylessStatusCode returns true for HTTP status codes that must not
 // include a message body per RFC 7231: 1xx informational, 204 No Content,
 // and 304 Not Modified.
@@ -311,17 +335,13 @@ func (e *Extractor) checkContentTypePattern(node TrackerNodeInterface, route *Ro
 					val = "application/octet-stream"
 				}
 				if val != "" {
-					// Override content type on existing responses that use the
-					// default. Don't override responses with pattern-specific
-					// content types (e.g., http.Error → text/plain).
-					defaultCT := e.cfg.Defaults.ResponseContentType
-					for _, resp := range route.Response {
-						if resp.ContentType == defaultCT {
-							resp.ContentType = val
-						}
-					}
-					// Store for future responses that haven't been added yet
+					// Store the detected value, then propagate to existing
+					// responses via the shared helper — which (a) skips bodyless
+					// status entries per issue #33 and (b) preserves entries
+					// already pinned by pattern-specific DefaultContentType
+					// values (e.g., http.Error → text/plain).
 					route.detectedContentType = val
+					applyDetectedContentType(route, e.cfg.Defaults.ResponseContentType)
 				}
 			}
 		}
@@ -540,12 +560,7 @@ func (e *Extractor) handleRouteNode(node TrackerNodeInterface, routeInfo *RouteI
 	// responses that already have a pattern-specific type (e.g., http.Error
 	// sets "text/plain; charset=utf-8" via DefaultContentType on the pattern).
 	if routeInfo.detectedContentType != "" {
-		defaultCT := e.cfg.Defaults.ResponseContentType
-		for _, resp := range routeInfo.Response {
-			if resp.ContentType == defaultCT {
-				resp.ContentType = routeInfo.detectedContentType
-			}
-		}
+		applyDetectedContentType(routeInfo, e.cfg.Defaults.ResponseContentType)
 	}
 
 	// Detect conditional HTTP methods from CFG branch context.
@@ -922,7 +937,21 @@ func (e *Extractor) visitChildren(node TrackerNodeInterface, route *RouteInfo, c
 }
 
 // addResponse adds a response to the route, merging schemas for duplicate status codes.
+//
+// Issue #33 (producer-side invariant): for bodyless status codes (1xx/204/304),
+// strip any body-bearing fields on insert. Per RFC 9110 these statuses cannot
+// carry a message body, and emitting one is incorrect output. Enforcing the
+// invariant here — rather than relying solely on the mapper-side guard in
+// buildResponses — keeps RouteInfo internally consistent for any future
+// consumer that reads the structure directly (debug tooling, alternative
+// emitters, metrics exporters). The mapper-side guard remains as the
+// secondary defense and as the authority for the predicate.
 func (e *Extractor) addResponse(route *RouteInfo, resp *ResponseInfo) {
+	if isBodylessStatusCode(resp.StatusCode) {
+		resp.Schema = nil
+		resp.AlternativeSchemas = nil
+		resp.BodyType = ""
+	}
 	key := fmt.Sprintf("%d", resp.StatusCode)
 	if existing, ok := route.Response[key]; ok && resp.Schema != nil {
 		if existing.Schema == nil {
