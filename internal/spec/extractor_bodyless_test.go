@@ -89,3 +89,24 @@ func TestApplyDetectedContentType_EmptyResponseMap(t *testing.T) {
 
 	assert.Empty(t, route.Response)
 }
+
+func TestApplyDetectedContentType_DetectedEqualsDefault_NoOp(t *testing.T) {
+	// Issue #33 F3: when the detected type equals the default, the function
+	// must return early — no iteration, no mutation, no documentation/code
+	// drift. The body-bearing entry's ContentType stays at the default value
+	// it already had (which equals the detected type, so the result is the
+	// same in either case; the early-return is about cycles + clarity).
+	route := &RouteInfo{
+		detectedContentType: "application/json",
+		Response: map[string]*ResponseInfo{
+			"200": {StatusCode: 200, ContentType: "application/json"},
+			"404": {StatusCode: 404, ContentType: "text/plain"},
+		},
+	}
+	applyDetectedContentType(route, "application/json")
+
+	assert.Equal(t, "application/json", route.Response["200"].ContentType,
+		"200's matching ContentType is unchanged (would have been a no-op even without the guard)")
+	assert.Equal(t, "text/plain", route.Response["404"].ContentType,
+		"404's non-default ContentType is preserved (would have been preserved either way)")
+}

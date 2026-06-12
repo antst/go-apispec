@@ -87,15 +87,19 @@ func findVacantStatusForBody(route *RouteInfo) (int, bool) {
 }
 
 // applyDetectedContentType propagates a handler-detected Content-Type onto
-// route responses whose ContentType is still the default. Issue #33: skip
-// bodyless status entries (1xx/204/304) — they will never carry a body in
-// the emitted spec (per the mapper-side guard in buildResponses), so
-// mutating their ContentType is wasted state that confuses any downstream
-// inspector of RouteInfo. The override only applies when defaultCT is
-// distinct from `route.detectedContentType` and matches the current entry's
-// ContentType — preserving entries already pinned by pattern-specific
-// DefaultContentType values (e.g., http.Error → text/plain).
+// route responses whose ContentType is still the default. Returns early when
+// the detected type already equals the default (no-op assignment would skip
+// the loop body anyway). Issue #33: skip bodyless status entries (1xx/204/304)
+// — they will never carry a body in the emitted spec (per the mapper-side
+// guard in buildResponses), so mutating their ContentType is wasted state
+// that confuses any downstream inspector of RouteInfo. The override only
+// matches entries whose ContentType is the default — preserving entries
+// already pinned by pattern-specific DefaultContentType values (e.g.,
+// http.Error → text/plain).
 func applyDetectedContentType(route *RouteInfo, defaultCT string) {
+	if route.detectedContentType == defaultCT {
+		return
+	}
 	for _, resp := range route.Response {
 		if isBodylessStatusCode(resp.StatusCode) {
 			continue
@@ -333,9 +337,15 @@ func (e *Extractor) checkContentTypePattern(node TrackerNodeInterface, route *Ro
 				if val != "" {
 					// Override content type on existing responses that use the
 					// default. Don't override responses with pattern-specific
-					// content types (e.g., http.Error → text/plain).
+					// content types (e.g., http.Error → text/plain). Issue #33:
+					// also skip bodyless status entries (1xx/204/304) — their
+					// ContentType is dropped at the output stage anyway, so
+					// mutating it here pollutes RouteInfo for no benefit.
 					defaultCT := e.cfg.Defaults.ResponseContentType
 					for _, resp := range route.Response {
+						if isBodylessStatusCode(resp.StatusCode) {
+							continue
+						}
 						if resp.ContentType == defaultCT {
 							resp.ContentType = val
 						}
