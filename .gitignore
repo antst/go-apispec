@@ -62,3 +62,5 @@ testdata/json_dto/json_dto
 testdata/json_patch/json_patch
 testdata/servemux_methods/servemux_methods
 testdata/security_bearer/security_bearer
+testdata/error_switch_minimal/error_switch_minimal
+testdata/error_switch_file_service/error_switch_file_service

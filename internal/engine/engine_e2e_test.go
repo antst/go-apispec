@@ -54,6 +54,8 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "servemux_methods", inputDir: "../../testdata/servemux_methods", configFn: spec.DefaultHTTPConfig},
 		{name: "security_bearer", inputDir: "../../testdata/security_bearer", configFn: spec.DefaultHTTPConfig},
 		{name: "writejson_helper", inputDir: "../../testdata/writejson_helper", configFn: spec.DefaultHTTPConfig},
+		{name: "error_switch_minimal", inputDir: "../../testdata/error_switch_minimal", configFn: spec.DefaultChiConfig},
+		{name: "error_switch_file_service", inputDir: "../../testdata/error_switch_file_service", configFn: spec.DefaultChiConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
