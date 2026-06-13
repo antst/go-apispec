@@ -730,22 +730,33 @@ func resolveBodyTypeThroughCallSite(node TrackerNodeInterface, paramName string,
 }
 
 // edgeCallerIsRouteHandler reports whether the edge's caller is the route's
-// handler function. RouteInfo.Function may be stored either bare ("Copy") or
-// package-qualified ("json_dto.Copy"), so both forms are accepted; the bare
-// form additionally checks the package to avoid cross-package collisions.
+// handler. RouteInfo.Function carries the handler identity in several forms:
+//
+//	free function: "pkg.Func"                       (== caller BaseID)
+//	method:        "pkg-->pkg.RecvType.Method"      (TypeSep-prefixed BaseID)
+//	bare:          "Func"                           (with Package set separately)
+//
+// The first two both end in the caller's BaseID, so the primary check compares
+// against e.Caller.BaseID() after stripping any TypeSep prefix — this is what
+// lets method handlers (issue #41) be matched, not just free functions. The
+// bare form is handled as a fallback.
 func edgeCallerIsRouteHandler(e *metadata.CallGraphEdge, route *RouteInfo) bool {
-	if route == nil || route.Metadata == nil {
+	if route == nil || route.Metadata == nil || route.Function == "" {
 		return false
+	}
+	want := route.Function
+	if idx := strings.Index(want, TypeSep); idx >= 0 {
+		want = want[idx+len(TypeSep):]
+	}
+	if e.Caller.BaseID() == want {
+		return true
 	}
 	name := stringFromPool(route.Metadata, e.Caller.Name)
 	if name == "" {
 		return false
 	}
-	pkg := stringFromPool(route.Metadata, e.Caller.Pkg)
-	if route.Function == name {
-		return route.Package == "" || route.Package == pkg
-	}
-	return route.Function == pkg+"."+name
+	return route.Function == name &&
+		(route.Package == "" || route.Package == stringFromPool(route.Metadata, e.Caller.Pkg))
 }
 
 // concreteTypeFromParamArg resolves the concrete body type and caller-frame
