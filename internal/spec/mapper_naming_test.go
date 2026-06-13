@@ -1334,6 +1334,54 @@ func TestEnsureAllPathParams(t *testing.T) {
 	assert.True(t, postIDParam.Required)
 }
 
+func TestPathTemplatePlaceholders(t *testing.T) {
+	got := pathTemplatePlaceholders("/users/{id}/posts/{postId}")
+	require.Len(t, got, 2)
+	_, hasID := got["id"]
+	_, hasPostID := got["postId"]
+	assert.True(t, hasID)
+	assert.True(t, hasPostID)
+
+	assert.Empty(t, pathTemplatePlaceholders("/internal/file"), "no placeholders → empty set")
+	assert.Empty(t, pathTemplatePlaceholders(""), "empty path → empty set")
+}
+
+func TestDropPhantomPathParams(t *testing.T) {
+	// A path param that matches a placeholder is kept; one that doesn't (issue
+	// #35: a map-index misread) is dropped; query/header params pass through.
+	params := []Parameter{
+		{Name: "id", In: "path", Required: true, Schema: &Schema{Type: "string"}},
+		{Name: "displayName", In: "path", Required: true, Schema: &Schema{Type: "string"}},
+		{Name: "q", In: "query"},
+		{Name: "X-Token", In: "header"},
+	}
+	got := dropPhantomPathParams("/widgets/{id}", params)
+
+	names := func(ps []Parameter) []string {
+		out := make([]string, 0, len(ps))
+		for _, p := range ps {
+			out = append(out, p.In+":"+p.Name)
+		}
+		return out
+	}
+	assert.Equal(t, []string{"path:id", "query:q", "header:X-Token"}, names(got),
+		"phantom path:displayName dropped; matching path:id and non-path params kept")
+}
+
+func TestDropPhantomPathParams_EdgeCases(t *testing.T) {
+	// Empty input is returned as-is.
+	assert.Nil(t, dropPhantomPathParams("/x", nil))
+
+	// All path params phantom (route has no placeholders) → nil, not empty slice,
+	// so the mapper emits no parameters block.
+	only := []Parameter{{Name: "displayName", In: "path"}}
+	assert.Nil(t, dropPhantomPathParams("/internal/file", only))
+
+	// A non-path param on a placeholder-free route is preserved.
+	q := []Parameter{{Name: "q", In: "query"}}
+	assert.Equal(t, q, dropPhantomPathParams("/internal/file", q))
+}
+
 func TestDefaultAPISpecConfig_Naming(t *testing.T) {
 	cfg := DefaultAPISpecConfig()
 	require.NotNil(t, cfg)
