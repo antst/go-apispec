@@ -45,6 +45,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "echo", inputDir: "../../testdata/echo", configFn: spec.DefaultEchoConfig},
 		{name: "fiber", inputDir: "../../testdata/fiber", configFn: spec.DefaultFiberConfig},
 		{name: "mux", inputDir: "../../testdata/mux", configFn: spec.DefaultMuxConfig},
+		{name: "map_index_path", inputDir: "../../testdata/map_index_path", configFn: spec.DefaultMuxConfig},
 		{name: "response_patterns", inputDir: "../../testdata/response_patterns", configFn: spec.DefaultChiConfig},
 		{name: "nested_http", inputDir: "../../testdata/nested_http", configFn: spec.DefaultHTTPConfig},
 		{name: "error_helpers", inputDir: "../../testdata/error_helpers", configFn: spec.DefaultChiConfig},
@@ -484,6 +485,39 @@ func TestE2E_JSONDtoHelpers_InterproceduralInference(t *testing.T) {
 	require.NotNil(t, resp400Schema)
 	assert.Equal(t, "string", resp400Schema.Type,
 		"400 must remain a plain-text string, not steal the success body schema")
+}
+
+// TestE2E_MapIndexPath_NoPhantomPathParams asserts issue #35: a string-literal
+// index into a plain map (fields["displayName"]) must not become an in:path
+// parameter on a route with no placeholders, while a genuine mux.Vars read that
+// matches a {placeholder} must still be emitted.
+func TestE2E_MapIndexPath_NoPhantomPathParams(t *testing.T) {
+	cfg := newDefaultCfg("../../testdata/map_index_path", spec.DefaultMuxConfig())
+	eng := NewEngine(cfg)
+	result, err := eng.GenerateOpenAPI()
+	require.NoError(t, err)
+
+	// Bug case: no path params on a placeholder-free route.
+	file, ok := result.Paths["/internal/file"]
+	require.True(t, ok, "/internal/file must be present")
+	require.NotNil(t, file.Post)
+	for _, p := range file.Post.Parameters {
+		assert.NotEqualf(t, "path", p.In,
+			"no path parameter expected on /internal/file, got %q (issue #35)", p.Name)
+	}
+
+	// Control: the legitimate {id} path param must survive.
+	widget, ok := result.Paths["/widgets/{id}"]
+	require.True(t, ok, "/widgets/{id} must be present")
+	require.NotNil(t, widget.Get)
+	var pathParams []string
+	for _, p := range widget.Get.Parameters {
+		if p.In == "path" {
+			pathParams = append(pathParams, p.Name)
+		}
+	}
+	assert.Equal(t, []string{"id"}, pathParams,
+		"the {id} placeholder read via mux.Vars must remain a path parameter")
 }
 
 func paramNames(ps []intspec.Parameter) []string {

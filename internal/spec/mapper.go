@@ -443,6 +443,7 @@ func buildPathsFromRoutes(routes []*RouteInfo, cfg *APISpecConfig) map[string]Pa
 		} else {
 			operation.Parameters = nil
 		}
+		operation.Parameters = dropPhantomPathParams(openAPIPath, operation.Parameters)
 		operation.Parameters = ensureAllPathParams(openAPIPath, operation.Parameters)
 
 		// Attach security scheme + drop the now-redundant Authorization
@@ -499,6 +500,45 @@ func dropAuthorizationHeaderParam(params []Parameter) []Parameter {
 	for _, p := range params {
 		if p.In == "header" && strings.EqualFold(p.Name, "Authorization") {
 			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// pathTemplatePlaceholders returns the set of {name} placeholder names declared
+// in an OpenAPI path template (e.g. "/users/{id}/posts/{postId}" yields id and
+// postId). Mirrors the placeholder grammar ensureAllPathParams emits against.
+func pathTemplatePlaceholders(openAPIPath string) map[string]struct{} {
+	re := getCachedMapperRegex(`\{([a-zA-Z_][a-zA-Z0-9_]*)\}`)
+	out := make(map[string]struct{})
+	for _, m := range re.FindAllStringSubmatch(openAPIPath, -1) {
+		out[m[1]] = struct{}{}
+	}
+	return out
+}
+
+// dropPhantomPathParams removes in:path parameters whose name has no matching
+// {placeholder} in the path template. An OpenAPI path parameter must appear in
+// the URL template, so one that doesn't is invalid — and is almost always a
+// static-analysis false positive: a string-literal index on a plain map
+// (`fields["displayName"]`) misread as a router var on a route with no path
+// placeholders (issue #35). Query, header, cookie, and form parameters pass
+// through untouched, as do path params that do match a placeholder.
+func dropPhantomPathParams(openAPIPath string, params []Parameter) []Parameter {
+	if len(params) == 0 {
+		return params
+	}
+	declared := pathTemplatePlaceholders(openAPIPath)
+	out := params[:0]
+	for _, p := range params {
+		if p.In == "path" {
+			if _, ok := declared[p.Name]; !ok {
+				continue
+			}
 		}
 		out = append(out, p)
 	}
