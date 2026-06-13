@@ -50,6 +50,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "error_helpers", inputDir: "../../testdata/error_helpers", configFn: spec.DefaultChiConfig},
 		{name: "form_value_var", inputDir: "../../testdata/form_value_var", configFn: spec.DefaultChiConfig},
 		{name: "json_dto", inputDir: "../../testdata/json_dto", configFn: spec.DefaultChiConfig},
+		{name: "json_dto_helpers", inputDir: "../../testdata/json_dto_helpers", configFn: spec.DefaultChiConfig},
 		{name: "json_patch", inputDir: "../../testdata/json_patch", configFn: spec.DefaultChiConfig},
 		{name: "servemux_methods", inputDir: "../../testdata/servemux_methods", configFn: spec.DefaultHTTPConfig},
 		{name: "security_bearer", inputDir: "../../testdata/security_bearer", configFn: spec.DefaultHTTPConfig},
@@ -430,6 +431,59 @@ func TestE2E_JSONDto_FormatAndRequiredInference(t *testing.T) {
 			assert.Equal(t, w.Format, ps.Format, "%s.%s format", typeName, prop)
 		}
 	}
+}
+
+// TestE2E_JSONDtoHelpers_InterproceduralInference asserts that the same
+// request/response contract as json_dto survives the lint-driven helper
+// extractions in issue #36: the decode boilerplate moved into a helper with an
+// `any` parameter, and uuid.Parse moved into field-passed and struct-passed
+// helpers. Request binding, per-field format: uuid, and the 200/400 split must
+// all match the inline fixture rather than degrading.
+func TestE2E_JSONDtoHelpers_InterproceduralInference(t *testing.T) {
+	cfg := newDefaultCfg("../../testdata/json_dto_helpers", spec.DefaultChiConfig())
+	eng := NewEngine(cfg)
+	result, err := eng.GenerateOpenAPI()
+	require.NoError(t, err)
+
+	pi, ok := result.Paths["/documents/copy"]
+	require.True(t, ok)
+	require.NotNil(t, pi.Post)
+
+	// Repro 2: request body still binds to the concrete type through the
+	// decodeStrictJSON(dst any) helper rather than collapsing to free-form.
+	require.NotNil(t, pi.Post.RequestBody)
+	assert.True(t, pi.Post.RequestBody.Required)
+	require.Contains(t, pi.Post.RequestBody.Content, "application/json")
+	reqSchema := pi.Post.RequestBody.Content["application/json"].Schema
+	require.NotNil(t, reqSchema)
+	assert.Equal(t, "#/components/schemas/json_dto.CopyDocumentRequest", reqSchema.Ref,
+		"request body must $ref the concrete schema, not inline a free-form object")
+
+	// Repro 1: format: uuid propagates from helpers back onto the fields.
+	reqType := result.Components.Schemas["json_dto.CopyDocumentRequest"]
+	require.NotNil(t, reqType)
+	for _, prop := range []string{"sourceId", "destinationBucketId", "authorizationId", "tagsetId", "externalId"} {
+		ps := reqType.Properties[prop]
+		require.NotNil(t, ps, "property %s missing", prop)
+		assert.Equal(t, "uuid", ps.Format, "%s must carry format: uuid", prop)
+	}
+
+	// Response split survives http.Error moving into a helper: 200 carries the
+	// response body, 400 stays a text/plain string (issue #36).
+	resp200, ok := pi.Post.Responses["200"]
+	require.True(t, ok, "200 response must be present")
+	require.Contains(t, resp200.Content, "application/json")
+	resp200Schema := resp200.Content["application/json"].Schema
+	require.NotNil(t, resp200Schema)
+	assert.Equal(t, "#/components/schemas/json_dto.CopyDocumentResponse", resp200Schema.Ref)
+
+	resp400, ok := pi.Post.Responses["400"]
+	require.True(t, ok, "400 response must be present")
+	require.Contains(t, resp400.Content, "text/plain; charset=utf-8")
+	resp400Schema := resp400.Content["text/plain; charset=utf-8"].Schema
+	require.NotNil(t, resp400Schema)
+	assert.Equal(t, "string", resp400Schema.Type,
+		"400 must remain a plain-text string, not steal the success body schema")
 }
 
 func paramNames(ps []intspec.Parameter) []string {
