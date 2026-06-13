@@ -526,6 +526,14 @@ func DefaultChiConfig() *APISpecConfig {
 					TypeArgIndex:  1,
 
 					DefaultContentType: "text/plain; charset=utf-8",
+					// http.Error always writes a text/plain string body. When the
+					// message arg isn't a string literal — e.g. `"invalid "+name`,
+					// the idiom extracted error helpers reach for (issue #36) — the
+					// type can't be read off the arg, leaving BodyType empty. Pin
+					// "string" as the fallback so the response still claims its
+					// status slot instead of reading as a body-less "vacant" slot
+					// that findVacantStatusForBody hands to a later success body.
+					DefaultBodyType: "string",
 				},
 				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
 					// Always 404
@@ -689,6 +697,14 @@ func DefaultEchoConfig() *APISpecConfig {
 					TypeArgIndex:  1,
 
 					DefaultContentType: "text/plain; charset=utf-8",
+					// http.Error always writes a text/plain string body. When the
+					// message arg isn't a string literal — e.g. `"invalid "+name`,
+					// the idiom extracted error helpers reach for (issue #36) — the
+					// type can't be read off the arg, leaving BodyType empty. Pin
+					// "string" as the fallback so the response still claims its
+					// status slot instead of reading as a body-less "vacant" slot
+					// that findVacantStatusForBody hands to a later success body.
+					DefaultBodyType: "string",
 				},
 				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
 					// Always 404
@@ -836,6 +852,14 @@ func DefaultFiberConfig() *APISpecConfig {
 					TypeArgIndex:  1,
 
 					DefaultContentType: "text/plain; charset=utf-8",
+					// http.Error always writes a text/plain string body. When the
+					// message arg isn't a string literal — e.g. `"invalid "+name`,
+					// the idiom extracted error helpers reach for (issue #36) — the
+					// type can't be read off the arg, leaving BodyType empty. Pin
+					// "string" as the fallback so the response still claims its
+					// status slot instead of reading as a body-less "vacant" slot
+					// that findVacantStatusForBody hands to a later success body.
+					DefaultBodyType: "string",
 				},
 				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
 					// Always 404
@@ -1016,6 +1040,14 @@ func DefaultGinConfig() *APISpecConfig {
 					TypeArgIndex:  1,
 
 					DefaultContentType: "text/plain; charset=utf-8",
+					// http.Error always writes a text/plain string body. When the
+					// message arg isn't a string literal — e.g. `"invalid "+name`,
+					// the idiom extracted error helpers reach for (issue #36) — the
+					// type can't be read off the arg, leaving BodyType empty. Pin
+					// "string" as the fallback so the response still claims its
+					// status slot instead of reading as a body-less "vacant" slot
+					// that findVacantStatusForBody hands to a later success body.
+					DefaultBodyType: "string",
 				},
 				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
 					// Always 404
@@ -1205,6 +1237,14 @@ func DefaultMuxConfig() *APISpecConfig {
 					TypeArgIndex:  1,
 
 					DefaultContentType: "text/plain; charset=utf-8",
+					// http.Error always writes a text/plain string body. When the
+					// message arg isn't a string literal — e.g. `"invalid "+name`,
+					// the idiom extracted error helpers reach for (issue #36) — the
+					// type can't be read off the arg, leaving BodyType empty. Pin
+					// "string" as the fallback so the response still claims its
+					// status slot instead of reading as a body-less "vacant" slot
+					// that findVacantStatusForBody hands to a later success body.
+					DefaultBodyType: "string",
 				},
 				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
 					// Always 404
@@ -1332,6 +1372,14 @@ func DefaultHTTPConfig() *APISpecConfig {
 					TypeArgIndex:  1,
 
 					DefaultContentType: "text/plain; charset=utf-8",
+					// http.Error always writes a text/plain string body. When the
+					// message arg isn't a string literal — e.g. `"invalid "+name`,
+					// the idiom extracted error helpers reach for (issue #36) — the
+					// type can't be read off the arg, leaving BodyType empty. Pin
+					// "string" as the fallback so the response still claims its
+					// status slot instead of reading as a body-less "vacant" slot
+					// that findVacantStatusForBody hands to a later success body.
+					DefaultBodyType: "string",
 				},
 				{BasePattern: BasePattern{CallRegex: `^NotFound$`,
 					// Always 404
