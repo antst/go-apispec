@@ -453,6 +453,7 @@ func TestE2E_JSONDtoHelpers_InterproceduralInference(t *testing.T) {
 	// decodeStrictJSON(dst any) helper rather than collapsing to free-form.
 	require.NotNil(t, pi.Post.RequestBody)
 	assert.True(t, pi.Post.RequestBody.Required)
+	require.Contains(t, pi.Post.RequestBody.Content, "application/json")
 	reqSchema := pi.Post.RequestBody.Content["application/json"].Schema
 	require.NotNil(t, reqSchema)
 	assert.Equal(t, "#/components/schemas/json_dto.CopyDocumentRequest", reqSchema.Ref,
@@ -471,11 +472,17 @@ func TestE2E_JSONDtoHelpers_InterproceduralInference(t *testing.T) {
 	// response body, 400 stays a text/plain string (issue #36).
 	resp200, ok := pi.Post.Responses["200"]
 	require.True(t, ok, "200 response must be present")
-	assert.Equal(t, "#/components/schemas/json_dto.CopyDocumentResponse",
-		resp200.Content["application/json"].Schema.Ref)
+	require.Contains(t, resp200.Content, "application/json")
+	resp200Schema := resp200.Content["application/json"].Schema
+	require.NotNil(t, resp200Schema)
+	assert.Equal(t, "#/components/schemas/json_dto.CopyDocumentResponse", resp200Schema.Ref)
+
 	resp400, ok := pi.Post.Responses["400"]
 	require.True(t, ok, "400 response must be present")
-	assert.Equal(t, "string", resp400.Content["text/plain; charset=utf-8"].Schema.Type,
+	require.Contains(t, resp400.Content, "text/plain; charset=utf-8")
+	resp400Schema := resp400.Content["text/plain; charset=utf-8"].Schema
+	require.NotNil(t, resp400Schema)
+	assert.Equal(t, "string", resp400Schema.Type,
 		"400 must remain a plain-text string, not steal the success body schema")
 }
 
