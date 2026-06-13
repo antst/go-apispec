@@ -55,6 +55,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "shared_decode_any", inputDir: "../../testdata/shared_decode_any", configFn: spec.DefaultChiConfig},
 		{name: "shared_decode_generic", inputDir: "../../testdata/shared_decode_generic", configFn: spec.DefaultChiConfig},
 		{name: "shared_decode_methods", inputDir: "../../testdata/shared_decode_methods", configFn: spec.DefaultChiConfig},
+		{name: "shared_decode_router", inputDir: "../../testdata/shared_decode_router", configFn: spec.DefaultChiConfig},
 		{name: "json_patch", inputDir: "../../testdata/json_patch", configFn: spec.DefaultChiConfig},
 		{name: "servemux_methods", inputDir: "../../testdata/servemux_methods", configFn: spec.DefaultHTTPConfig},
 		{name: "security_bearer", inputDir: "../../testdata/security_bearer", configFn: spec.DefaultHTTPConfig},
@@ -563,6 +564,39 @@ func TestE2E_SharedDecodeHelper_PerCallSiteBodyTypes(t *testing.T) {
 			assertUUIDField("json_dto.CopyDocumentRequest", "destinationBucketId")
 			assertUUIDField("json_dto.UpdateDocumentRequest", "storageBucketId")
 		})
+	}
+}
+
+// TestE2E_SharedDecodeRouter_ClosureRegisteredMethods asserts issue #41's
+// residual case: method handlers registered via a deps-struct selector inside an
+// r.Route(...) closure, sharing a free-function any-typed decode helper, must
+// still resolve each endpoint to its own DTO with per-field format: uuid.
+func TestE2E_SharedDecodeRouter_ClosureRegisteredMethods(t *testing.T) {
+	cfg := newDefaultCfg("../../testdata/shared_decode_router", spec.DefaultChiConfig())
+	result, err := NewEngine(cfg).GenerateOpenAPI()
+	require.NoError(t, err)
+
+	refOf := func(path, method string) string {
+		pi, ok := result.Paths[path]
+		require.True(t, ok, "%s missing", path)
+		op := map[string]*intspec.Operation{"POST": pi.Post, "PATCH": pi.Patch}[method]
+		require.NotNil(t, op, "%s %s missing", method, path)
+		require.NotNil(t, op.RequestBody)
+		mt, ok := op.RequestBody.Content["application/json"]
+		require.True(t, ok)
+		require.NotNil(t, mt.Schema)
+		return mt.Schema.Ref
+	}
+	assert.Equal(t, "#/components/schemas/handlers.CopyDocumentRequest", refOf("/internal/file/copy", "POST"))
+	assert.Equal(t, "#/components/schemas/handlers.UpdateDocumentRequest", refOf("/internal/file/{id}", "PATCH"))
+
+	require.NotNil(t, result.Components)
+	copyReq := result.Components.Schemas["handlers.CopyDocumentRequest"]
+	require.NotNil(t, copyReq, "CopyDocumentRequest schema must not be dropped")
+	for _, p := range []string{"sourceId", "destinationBucketId", "authorizationId"} {
+		ps := copyReq.Properties[p]
+		require.NotNil(t, ps, "property %s missing", p)
+		assert.Equal(t, "uuid", ps.Format, "%s format", p)
 	}
 }
 
