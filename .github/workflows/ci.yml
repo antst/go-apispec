@@ -68,6 +68,10 @@ jobs:
         if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.26'
         run: go tool cover -func=coverage.out | tail -1
 
+      - name: Coverage gate (>=95% per package)
+        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.26'
+        run: bash scripts/check-coverage.sh coverage.out
+
   golden:
     name: Golden file regression
     runs-on: ubuntu-latest
