@@ -52,6 +52,8 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "form_value_var", inputDir: "../../testdata/form_value_var", configFn: spec.DefaultChiConfig},
 		{name: "json_dto", inputDir: "../../testdata/json_dto", configFn: spec.DefaultChiConfig},
 		{name: "json_dto_helpers", inputDir: "../../testdata/json_dto_helpers", configFn: spec.DefaultChiConfig},
+		{name: "shared_decode_any", inputDir: "../../testdata/shared_decode_any", configFn: spec.DefaultChiConfig},
+		{name: "shared_decode_generic", inputDir: "../../testdata/shared_decode_generic", configFn: spec.DefaultChiConfig},
 		{name: "json_patch", inputDir: "../../testdata/json_patch", configFn: spec.DefaultChiConfig},
 		{name: "servemux_methods", inputDir: "../../testdata/servemux_methods", configFn: spec.DefaultHTTPConfig},
 		{name: "security_bearer", inputDir: "../../testdata/security_bearer", configFn: spec.DefaultHTTPConfig},
@@ -518,6 +520,49 @@ func TestE2E_MapIndexPath_NoPhantomPathParams(t *testing.T) {
 	}
 	assert.Equal(t, []string{"id"}, pathParams,
 		"the {id} placeholder read via mux.Vars must remain a path parameter")
+}
+
+// TestE2E_SharedDecodeHelper_PerCallSiteBodyTypes asserts issue #39: a decode
+// helper shared by two handlers with different DTOs resolves each endpoint to
+// its own request type and keeps per-field format: uuid — for both the
+// any-typed and the generic helper forms.
+func TestE2E_SharedDecodeHelper_PerCallSiteBodyTypes(t *testing.T) {
+	for _, dir := range []string{"shared_decode_any", "shared_decode_generic"} {
+		t.Run(dir, func(t *testing.T) {
+			cfg := newDefaultCfg("../../testdata/"+dir, spec.DefaultChiConfig())
+			result, err := NewEngine(cfg).GenerateOpenAPI()
+			require.NoError(t, err)
+
+			refOf := func(path string) string {
+				pi, ok := result.Paths[path]
+				require.True(t, ok, "%s missing", path)
+				require.NotNil(t, pi.Post)
+				require.NotNil(t, pi.Post.RequestBody)
+				mt, ok := pi.Post.RequestBody.Content["application/json"]
+				require.True(t, ok, "%s json content missing", path)
+				require.NotNil(t, mt.Schema)
+				return mt.Schema.Ref
+			}
+			assert.Equal(t, "#/components/schemas/json_dto.CopyDocumentRequest", refOf("/copy"),
+				"copy endpoint must keep its own DTO")
+			assert.Equal(t, "#/components/schemas/json_dto.UpdateDocumentRequest", refOf("/update"),
+				"update endpoint must keep its own DTO (not collapse onto copy's)")
+
+			// Both schemas exist and retain their flow-inferred uuid formats.
+			require.NotNil(t, result.Components, "components missing")
+			schemas := result.Components.Schemas
+			assertUUIDField := func(typeName, prop string) {
+				schema := schemas[typeName]
+				require.NotNil(t, schema, "schema %s missing", typeName)
+				ps := schema.Properties[prop]
+				require.NotNil(t, ps, "property %s.%s missing", typeName, prop)
+				assert.Equal(t, "uuid", ps.Format, "%s.%s format", typeName, prop)
+			}
+			assertUUIDField("json_dto.CopyDocumentRequest", "sourceId")
+			assertUUIDField("json_dto.CopyDocumentRequest", "destinationBucketId")
+			assertUUIDField("json_dto.UpdateDocumentRequest", "storageBucketId")
+		})
+	}
 }
 
 func paramNames(ps []intspec.Parameter) []string {

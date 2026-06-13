@@ -336,7 +336,7 @@ func TestResolveBodyTypeThroughCallSite_WalksPastNonMatchingAncestors(t *testing
 	edgeless.Parent = otherNode
 	decodeNode.Parent = edgeless
 
-	bodyType, varName, baseID := resolveBodyTypeThroughCallSite(decodeNode, "dst", cp)
+	bodyType, varName, baseID := resolveBodyTypeThroughCallSite(decodeNode, "dst", noRoute, cp)
 	assert.Equal(t, "pkg.Req", bodyType)
 	assert.Equal(t, "body", varName)
 	assert.Equal(t, callSite.Caller.BaseID(), baseID)
@@ -353,12 +353,63 @@ func TestIsFreeFormBodyType(t *testing.T) {
 	}
 }
 
+// --- edgeCallerIsRouteHandler / concreteTypeFromParamArg --------------------
+
+func TestEdgeCallerIsRouteHandler(t *testing.T) {
+	meta := newTestMeta()
+	edge := makeEdge(meta, "Copy", "pkg", "decodeStrictJSON", "pkg", nil)
+
+	// Bare function name + matching package.
+	assert.True(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: "Copy", Package: "pkg"}))
+	// Bare name with no package recorded on the route still matches.
+	assert.True(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: "Copy"}))
+	// Package-qualified function name.
+	assert.True(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: "pkg.Copy"}))
+	// Bare name but wrong package → no match.
+	assert.False(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: "Copy", Package: "other"}))
+	// Different handler.
+	assert.False(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: "Update", Package: "pkg"}))
+	// Guards.
+	assert.False(t, edgeCallerIsRouteHandler(&edge, nil))
+	assert.False(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{}))
+	// Caller with an empty name never matches.
+	nameless := makeEdge(meta, "", "pkg", "h", "pkg", nil)
+	assert.False(t, edgeCallerIsRouteHandler(&nameless, &RouteInfo{Metadata: meta, Function: ""}))
+}
+
+func TestConcreteTypeFromParamArg(t *testing.T) {
+	meta := newTestMeta()
+	cp := NewContextProvider(meta)
+	edge := makeEdge(meta, "Copy", "pkg", "decodeStrictJSON", "pkg", nil)
+	setParamArg(&edge, "dst", wrapUnary(meta, makeIdentArg(meta, "body", "pkg.Req"), "&"))
+
+	bt, vn := concreteTypeFromParamArg(&edge, "dst", cp)
+	assert.Equal(t, "pkg.Req", bt)
+	assert.Equal(t, "body", vn)
+
+	// Missing param mapping → empty.
+	bt, _ = concreteTypeFromParamArg(&edge, "missing", cp)
+	assert.Empty(t, bt)
+
+	// Non-ident argument (call expr) → empty.
+	other := makeEdge(meta, "Copy", "pkg", "h", "pkg", nil)
+	call := makeCallArg(meta)
+	call.SetKind(metadata.KindCall)
+	setParamArg(&other, "dst", call)
+	bt, _ = concreteTypeFromParamArg(&other, "dst", cp)
+	assert.Empty(t, bt)
+}
+
 // --- resolveBodyTypeThroughCallSite -----------------------------------------
 
-// TestResolveBodyTypeThroughCallSite covers issue #36 Repro 2: the decode lives
-// in decodeStrictJSON(dst any); walking up to the call site recovers the
-// concrete &body argument and its type.
-func TestResolveBodyTypeThroughCallSite(t *testing.T) {
+// noRoute forces the tracker-tree fallback by exposing no route metadata, so
+// the route-handler disambiguation path is skipped.
+var noRoute *RouteInfo
+
+// TestResolveBodyTypeThroughCallSite_TreeWalk covers issue #36 Repro 2: the
+// decode lives in decodeStrictJSON(dst any); walking up the tree to the call
+// site recovers the concrete &body argument and its type.
+func TestResolveBodyTypeThroughCallSite_TreeWalk(t *testing.T) {
 	meta := newTestMeta()
 	cp := NewContextProvider(meta)
 
@@ -369,14 +420,48 @@ func TestResolveBodyTypeThroughCallSite(t *testing.T) {
 	decodeEdge := makeEdge(meta, "decodeStrictJSON", "pkg", "Decode", "encoding/json",
 		[]*metadata.CallArgument{makeIdentArg(meta, "dst", "any")})
 
-	parent := makeTrackerNode(&callHelper)
 	decodeNode := makeTrackerNode(&decodeEdge)
-	decodeNode.Parent = parent
+	decodeNode.Parent = makeTrackerNode(&callHelper)
 
-	bodyType, varName, baseID := resolveBodyTypeThroughCallSite(decodeNode, "dst", cp)
+	bodyType, varName, baseID := resolveBodyTypeThroughCallSite(decodeNode, "dst", noRoute, cp)
 	assert.Equal(t, "pkg.Req", bodyType, "concrete type recovered from the call site")
 	assert.Equal(t, "body", varName, "re-anchored onto the caller's variable")
 	assert.Equal(t, callHelper.Caller.BaseID(), baseID, "field inference runs in the caller frame")
+}
+
+// TestResolveBodyTypeThroughCallSite_RouteHandler covers issue #39: a strict
+// decode helper shared by two handlers is one tracker-tree node whose parent
+// points at a single caller. Resolution must instead pick the call edge whose
+// caller is the route being extracted.
+func TestResolveBodyTypeThroughCallSite_RouteHandler(t *testing.T) {
+	meta := newTestMeta()
+	cp := NewContextProvider(meta)
+
+	copyEdge := makeEdge(meta, "Copy", "pkg", "decodeStrictJSON", "pkg", nil)
+	setParamArg(&copyEdge, "dst", wrapUnary(meta, makeIdentArg(meta, "body", "pkg.CopyReq"), "&"))
+	updateEdge := makeEdge(meta, "Update", "pkg", "decodeStrictJSON", "pkg", nil)
+	setParamArg(&updateEdge, "dst", wrapUnary(meta, makeIdentArg(meta, "body", "pkg.UpdateReq"), "&"))
+	decodeEdge := makeEdge(meta, "decodeStrictJSON", "pkg", "Decode", "encoding/json",
+		[]*metadata.CallArgument{makeIdentArg(meta, "dst", "any")})
+	meta.Callees = map[string][]*metadata.CallGraphEdge{
+		decodeEdge.Caller.BaseID(): {&copyEdge, &updateEdge},
+	}
+
+	// Tracker-tree parent deliberately points at Update (the shared-node bug).
+	decodeNode := makeTrackerNode(&decodeEdge)
+	decodeNode.Parent = makeTrackerNode(&updateEdge)
+
+	// Copy route → CopyReq (not the tree-parent's UpdateReq).
+	bt, vn, base := resolveBodyTypeThroughCallSite(decodeNode, "dst",
+		&RouteInfo{Metadata: meta, Function: "Copy", Package: "pkg"}, cp)
+	assert.Equal(t, "pkg.CopyReq", bt, "route-handler disambiguation beats the shared tree parent")
+	assert.Equal(t, "body", vn)
+	assert.Equal(t, copyEdge.Caller.BaseID(), base)
+
+	// Update route → UpdateReq.
+	bt, _, _ = resolveBodyTypeThroughCallSite(decodeNode, "dst",
+		&RouteInfo{Metadata: meta, Function: "Update", Package: "pkg"}, cp)
+	assert.Equal(t, "pkg.UpdateReq", bt)
 }
 
 func TestResolveBodyTypeThroughCallSite_Guards(t *testing.T) {
@@ -384,15 +469,15 @@ func TestResolveBodyTypeThroughCallSite_Guards(t *testing.T) {
 	cp := NewContextProvider(meta)
 
 	// Nil node / empty param.
-	bt, _, _ := resolveBodyTypeThroughCallSite(nil, "dst", cp)
+	bt, _, _ := resolveBodyTypeThroughCallSite(nil, "dst", noRoute, cp)
 	assert.Empty(t, bt)
 	decodeEdge := makeEdge(meta, "helper", "pkg", "Decode", "encoding/json", nil)
 	node := makeTrackerNode(&decodeEdge)
-	bt, _, _ = resolveBodyTypeThroughCallSite(node, "", cp)
+	bt, _, _ = resolveBodyTypeThroughCallSite(node, "", noRoute, cp)
 	assert.Empty(t, bt)
 
 	// No ancestor edge invokes the enclosing helper → unresolved.
-	bt, _, _ = resolveBodyTypeThroughCallSite(node, "dst", cp)
+	bt, _, _ = resolveBodyTypeThroughCallSite(node, "dst", noRoute, cp)
 	assert.Empty(t, bt)
 
 	// Ancestor calls the helper but maps the param to a non-ident (call expr) →
@@ -402,53 +487,75 @@ func TestResolveBodyTypeThroughCallSite_Guards(t *testing.T) {
 	complexArg.SetKind(metadata.KindCall)
 	setParamArg(&callHelper, "dst", complexArg)
 	node.Parent = makeTrackerNode(&callHelper)
-	bt, _, _ = resolveBodyTypeThroughCallSite(node, "dst", cp)
+	bt, _, _ = resolveBodyTypeThroughCallSite(node, "dst", noRoute, cp)
 	assert.Empty(t, bt, "non-ident mapped argument is not resolved")
 
 	// Ancestor calls the helper but has no mapping for the param → unresolved.
 	callHelper2 := makeEdge(meta, "Copy", "pkg", "helper", "pkg", nil)
 	node2 := makeTrackerNode(&decodeEdge)
 	node2.Parent = makeTrackerNode(&callHelper2)
-	bt, _, _ = resolveBodyTypeThroughCallSite(node2, "dst", cp)
+	bt, _, _ = resolveBodyTypeThroughCallSite(node2, "dst", noRoute, cp)
 	assert.Empty(t, bt, "missing ParamArgMap entry → unresolved")
 }
 
 // TestRefineBodyTypeThroughHelper exercises the matcher-level wrapper that
-// drives the interprocedural body-type fallback during request extraction.
+// drives interprocedural decode resolution during request extraction.
 func TestRefineBodyTypeThroughHelper(t *testing.T) {
 	meta := newTestMeta()
 	cfg := DefaultChiConfig()
 	matcher := NewRequestPatternMatcher(RequestBodyPattern{}, cfg, NewContextProvider(meta),
 		NewTypeResolver(meta, cfg, NewSchemaMapper(cfg)))
 
-	// Already concrete → returned unchanged, reqInfo untouched.
+	// Nil node or no route metadata → returned unchanged.
 	concrete := &RequestInfo{BodyType: "pkg.Req", DecodeTargetVar: "body"}
-	bt, frame := matcher.refineBodyTypeThroughHelper(nil, concrete, "pkg.Req", "frameA")
+	bt, frame := matcher.refineBodyTypeThroughHelper(nil, concrete, "pkg.Req", "frameA", &RouteInfo{Metadata: meta})
 	assert.Equal(t, "pkg.Req", bt)
 	assert.Equal(t, "frameA", frame)
 	assert.Equal(t, "body", concrete.DecodeTargetVar)
 
-	// Free-form but unresolvable (nil node) → returned unchanged.
-	unresolved := &RequestInfo{BodyType: "any", DecodeTargetVar: "dst"}
-	bt, frame = matcher.refineBodyTypeThroughHelper(nil, unresolved, "any", "frameB")
+	// Node with no edge → returned unchanged.
+	noEdge := &RequestInfo{BodyType: "any", DecodeTargetVar: "dst"}
+	bt, frame = matcher.refineBodyTypeThroughHelper(&TrackerNode{}, noEdge, "any", "frameNoEdge", &RouteInfo{Metadata: meta})
 	assert.Equal(t, "any", bt)
-	assert.Equal(t, "frameB", frame)
-	assert.Equal(t, "any", unresolved.BodyType)
+	assert.Equal(t, "frameNoEdge", frame)
 
-	// Free-form and resolvable through the call site → upgraded in place.
+	// Inline decode (the decode's enclosing func IS the route handler) → no-op.
+	inlineEdge := makeEdge(meta, "Copy", "pkg", "Decode", "encoding/json",
+		[]*metadata.CallArgument{wrapUnary(meta, makeIdentArg(meta, "body", "pkg.Req"), "&")})
+	inlineNode := makeTrackerNode(&inlineEdge)
+	inlineReq := &RequestInfo{BodyType: "pkg.Req", DecodeTargetVar: "body"}
+	bt, frame = matcher.refineBodyTypeThroughHelper(inlineNode, inlineReq, "pkg.Req", "frameInline",
+		&RouteInfo{Metadata: meta, Function: "Copy", Package: "pkg"})
+	assert.Equal(t, "pkg.Req", bt)
+	assert.Equal(t, "frameInline", frame, "inline decode is not re-anchored")
+
+	// Build a shared-helper decode node for the next two cases.
+	copyEdge := makeEdge(meta, "Copy", "pkg", "decodeStrictJSON", "pkg", nil)
+	setParamArg(&copyEdge, "dst", wrapUnary(meta, makeIdentArg(meta, "body", "pkg.CopyReq"), "&"))
 	decodeEdge := makeEdge(meta, "decodeStrictJSON", "pkg", "Decode", "encoding/json",
 		[]*metadata.CallArgument{makeIdentArg(meta, "dst", "any")})
-	callSite := makeEdge(meta, "Copy", "pkg", "decodeStrictJSON", "pkg", nil)
-	setParamArg(&callSite, "dst", wrapUnary(meta, makeIdentArg(meta, "body", "pkg.Req"), "&"))
+	meta.Callees = map[string][]*metadata.CallGraphEdge{
+		decodeEdge.Caller.BaseID(): {&copyEdge},
+	}
 	decodeNode := makeTrackerNode(&decodeEdge)
-	decodeNode.Parent = makeTrackerNode(&callSite)
+	copyRoute := &RouteInfo{Metadata: meta, Function: "Copy", Package: "pkg"}
 
-	upgraded := &RequestInfo{BodyType: "any", DecodeTargetVar: "dst"}
-	bt, frame = matcher.refineBodyTypeThroughHelper(decodeNode, upgraded, "any", "frameC")
-	assert.Equal(t, "pkg.Req", bt)
-	assert.Equal(t, callSite.Caller.BaseID(), frame)
-	assert.Equal(t, "pkg.Req", upgraded.BodyType)
-	assert.Equal(t, "body", upgraded.DecodeTargetVar, "decode target re-anchored to the caller var")
+	// Variant A: free-form `any` → body type overridden AND frame re-anchored.
+	varA := &RequestInfo{BodyType: "any", DecodeTargetVar: "dst"}
+	bt, frame = matcher.refineBodyTypeThroughHelper(decodeNode, varA, "any", "helperFrame", copyRoute)
+	assert.Equal(t, "pkg.CopyReq", bt)
+	assert.Equal(t, "pkg.CopyReq", varA.BodyType, "free-form type upgraded")
+	assert.Equal(t, "body", varA.DecodeTargetVar, "decode target re-anchored to the caller var")
+	assert.Equal(t, copyEdge.Caller.BaseID(), frame, "field inference re-anchored to the handler frame")
+
+	// Variant B: concrete generic type already resolved → type kept, but the
+	// field-inference frame is still re-anchored onto the handler.
+	varB := &RequestInfo{BodyType: "pkg.CopyReq", DecodeTargetVar: "dst"}
+	bt, frame = matcher.refineBodyTypeThroughHelper(decodeNode, varB, "pkg.CopyReq", "helperFrame", copyRoute)
+	assert.Equal(t, "pkg.CopyReq", bt, "concrete generic type is not overridden")
+	assert.Equal(t, "pkg.CopyReq", varB.BodyType)
+	assert.Equal(t, "body", varB.DecodeTargetVar, "frame re-anchored even when type already concrete")
+	assert.Equal(t, copyEdge.Caller.BaseID(), frame)
 }
 
 func TestResolveBodyTypeThroughCallSite_NoEdgeNode(t *testing.T) {
@@ -456,6 +563,6 @@ func TestResolveBodyTypeThroughCallSite_NoEdgeNode(t *testing.T) {
 	cp := NewContextProvider(meta)
 	// A node with no edge returns empty.
 	bare := &TrackerNode{}
-	bt, _, _ := resolveBodyTypeThroughCallSite(bare, "dst", cp)
+	bt, _, _ := resolveBodyTypeThroughCallSite(bare, "dst", noRoute, cp)
 	require.Empty(t, bt)
 }
