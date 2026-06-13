@@ -54,6 +54,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "json_dto_helpers", inputDir: "../../testdata/json_dto_helpers", configFn: spec.DefaultChiConfig},
 		{name: "shared_decode_any", inputDir: "../../testdata/shared_decode_any", configFn: spec.DefaultChiConfig},
 		{name: "shared_decode_generic", inputDir: "../../testdata/shared_decode_generic", configFn: spec.DefaultChiConfig},
+		{name: "shared_decode_methods", inputDir: "../../testdata/shared_decode_methods", configFn: spec.DefaultChiConfig},
 		{name: "json_patch", inputDir: "../../testdata/json_patch", configFn: spec.DefaultChiConfig},
 		{name: "servemux_methods", inputDir: "../../testdata/servemux_methods", configFn: spec.DefaultHTTPConfig},
 		{name: "security_bearer", inputDir: "../../testdata/security_bearer", configFn: spec.DefaultHTTPConfig},
@@ -527,7 +528,7 @@ func TestE2E_MapIndexPath_NoPhantomPathParams(t *testing.T) {
 // its own request type and keeps per-field format: uuid — for both the
 // any-typed and the generic helper forms.
 func TestE2E_SharedDecodeHelper_PerCallSiteBodyTypes(t *testing.T) {
-	for _, dir := range []string{"shared_decode_any", "shared_decode_generic"} {
+	for _, dir := range []string{"shared_decode_any", "shared_decode_generic", "shared_decode_methods"} {
 		t.Run(dir, func(t *testing.T) {
 			cfg := newDefaultCfg("../../testdata/"+dir, spec.DefaultChiConfig())
 			result, err := NewEngine(cfg).GenerateOpenAPI()

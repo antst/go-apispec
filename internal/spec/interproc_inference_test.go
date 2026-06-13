@@ -358,13 +358,17 @@ func TestIsFreeFormBodyType(t *testing.T) {
 func TestEdgeCallerIsRouteHandler(t *testing.T) {
 	meta := newTestMeta()
 	edge := makeEdge(meta, "Copy", "pkg", "decodeStrictJSON", "pkg", nil)
+	callerBase := edge.Caller.BaseID()
 
-	// Bare function name + matching package.
+	// Free-function form: route.Function is the caller's base ID.
+	assert.True(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: callerBase}))
+	// Method form: route.Function is the base ID behind a TypeSep prefix
+	// (e.g. "pkg-->pkg.RecvType.Method") — issue #41. The prefix is stripped.
+	assert.True(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: "pkg" + TypeSep + callerBase}))
+	// Bare function name + matching package (fallback).
 	assert.True(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: "Copy", Package: "pkg"}))
 	// Bare name with no package recorded on the route still matches.
 	assert.True(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: "Copy"}))
-	// Package-qualified function name.
-	assert.True(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: "pkg.Copy"}))
 	// Bare name but wrong package → no match.
 	assert.False(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: "Copy", Package: "other"}))
 	// Different handler.
@@ -372,9 +376,10 @@ func TestEdgeCallerIsRouteHandler(t *testing.T) {
 	// Guards.
 	assert.False(t, edgeCallerIsRouteHandler(&edge, nil))
 	assert.False(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{}))
-	// Caller with an empty name never matches.
+	assert.False(t, edgeCallerIsRouteHandler(&edge, &RouteInfo{Metadata: meta, Function: ""}))
+	// Non-matching Function with an empty caller name exercises the name=="" path.
 	nameless := makeEdge(meta, "", "pkg", "h", "pkg", nil)
-	assert.False(t, edgeCallerIsRouteHandler(&nameless, &RouteInfo{Metadata: meta, Function: ""}))
+	assert.False(t, edgeCallerIsRouteHandler(&nameless, &RouteInfo{Metadata: meta, Function: "zzz"}))
 }
 
 func TestConcreteTypeFromParamArg(t *testing.T) {
