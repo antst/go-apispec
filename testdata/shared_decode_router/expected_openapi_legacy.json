@@ -1,0 +1,129 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    },
+    "license": {
+      "name": ""
+    }
+  },
+  "paths": {
+    "/internal/file/copy": {
+      "post": {
+        "tags": [
+          "/internal"
+        ],
+        "operationId": "shared_decode_router/handlers.shared_decode_router.shared_decode_router.deps.DocumentHandler.Copy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/shared_decode_router_handlers.CopyDocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/internal/file/{id}": {
+      "patch": {
+        "tags": [
+          "/internal"
+        ],
+        "operationId": "shared_decode_router/handlers.shared_decode_router.shared_decode_router.deps.DocumentHandler.Update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/shared_decode_router_handlers.UpdateDocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "shared_decode_router_handlers.CopyDocumentRequest": {
+        "type": "object",
+        "properties": {
+          "authorizationId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "destinationBucketId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sourceId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "sourceId",
+          "destinationBucketId",
+          "authorizationId"
+        ]
+      },
+      "shared_decode_router_handlers.UpdateDocumentRequest": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string"
+          },
+          "storageBucketId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      }
+    }
+  }
+}

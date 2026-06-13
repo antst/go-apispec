@@ -697,11 +697,26 @@ func resolveBodyTypeThroughCallSite(node TrackerNodeInterface, paramName string,
 	// (1) Route-handler disambiguation: among every edge that calls the
 	// enclosing helper, pick the one whose caller is this route's handler.
 	if route != nil && route.Metadata != nil {
-		helperBaseID := edge.Caller.BaseID()
-		for _, e := range route.Metadata.Callees[helperBaseID] {
-			if !edgeCallerIsRouteHandler(e, route) {
+		candidates := route.Metadata.Callees[edge.Caller.BaseID()]
+		// Pass 1 — exact handler identity (free functions and methods registered
+		// directly, e.g. r.Post("/x", h.Copy)).
+		for _, e := range candidates {
+			if !callerMatchesHandlerExact(e, route) {
 				continue
 			}
+			if bt, vn := concreteTypeFromParamArg(e, paramName, cp); bt != "" {
+				return bt, vn, e.Caller.BaseID()
+			}
+		}
+		// Pass 2 — selector-chain registration (issue #41 / file-service):
+		// handlers wired as `deps.DocumentHandler.Copy` inside an r.Route(...)
+		// closure leave route.Function in registration-site form
+		// ("main-->main.deps.DocumentHandler.Copy"), which never equals the
+		// method's own BaseID ("pkg/api.DocumentHandler.Copy"). route.Package
+		// still names the handler's package, so fall back to a (package, method
+		// name) match — accepted only when it resolves to a single candidate so
+		// same-named methods can't mis-bind.
+		if e := uniquePkgNameHandler(candidates, route); e != nil {
 			if bt, vn := concreteTypeFromParamArg(e, paramName, cp); bt != "" {
 				return bt, vn, e.Caller.BaseID()
 			}
@@ -730,17 +745,24 @@ func resolveBodyTypeThroughCallSite(node TrackerNodeInterface, paramName string,
 }
 
 // edgeCallerIsRouteHandler reports whether the edge's caller is the route's
-// handler. RouteInfo.Function carries the handler identity in several forms:
+// handler, by exact identity or a (package, method-name) match. Used to detect
+// an inline decode (the decode call sitting directly in the handler).
+func edgeCallerIsRouteHandler(e *metadata.CallGraphEdge, route *RouteInfo) bool {
+	return callerMatchesHandlerExact(e, route) || callerMatchesHandlerByPkgName(e, route)
+}
+
+// callerMatchesHandlerExact matches the edge's caller against the route's
+// handler by exact identity. RouteInfo.Function carries the handler in several
+// forms:
 //
 //	free function: "pkg.Func"                       (== caller BaseID)
 //	method:        "pkg-->pkg.RecvType.Method"      (TypeSep-prefixed BaseID)
 //	bare:          "Func"                           (with Package set separately)
 //
 // The first two both end in the caller's BaseID, so the primary check compares
-// against e.Caller.BaseID() after stripping any TypeSep prefix — this is what
-// lets method handlers (issue #41) be matched, not just free functions. The
-// bare form is handled as a fallback.
-func edgeCallerIsRouteHandler(e *metadata.CallGraphEdge, route *RouteInfo) bool {
+// against e.Caller.BaseID() after stripping any TypeSep prefix; the bare form
+// is handled as a fallback.
+func callerMatchesHandlerExact(e *metadata.CallGraphEdge, route *RouteInfo) bool {
 	if route == nil || route.Metadata == nil || route.Function == "" {
 		return false
 	}
@@ -757,6 +779,51 @@ func edgeCallerIsRouteHandler(e *metadata.CallGraphEdge, route *RouteInfo) bool 
 	}
 	return route.Function == name &&
 		(route.Package == "" || route.Package == stringFromPool(route.Metadata, e.Caller.Pkg))
+}
+
+// callerMatchesHandlerByPkgName matches the edge's caller against the route's
+// handler by (package, function/method name). This recovers the handler when it
+// is registered through a selector chain (e.g. `deps.DocumentHandler.Copy`
+// inside an r.Route(...) closure), where RouteInfo.Function is the registration
+// expression rather than the method's own identity but RouteInfo.Package still
+// names the handler's defining package. Deliberately ignores the receiver type,
+// which the registration form does not carry reliably (it uses the field name).
+func callerMatchesHandlerByPkgName(e *metadata.CallGraphEdge, route *RouteInfo) bool {
+	if route == nil || route.Metadata == nil || route.Function == "" || route.Package == "" {
+		return false
+	}
+	name := stringFromPool(route.Metadata, e.Caller.Name)
+	if name == "" || route.Package != stringFromPool(route.Metadata, e.Caller.Pkg) {
+		return false
+	}
+	return lastDotSegment(route.Function) == name
+}
+
+// uniquePkgNameHandler returns the single candidate whose caller matches the
+// route handler by (package, name), or nil when zero or more than one match —
+// the uniqueness guard prevents two same-named methods that share a decode
+// helper from binding to the wrong endpoint.
+func uniquePkgNameHandler(candidates []*metadata.CallGraphEdge, route *RouteInfo) *metadata.CallGraphEdge {
+	var match *metadata.CallGraphEdge
+	for _, e := range candidates {
+		if !callerMatchesHandlerByPkgName(e, route) {
+			continue
+		}
+		if match != nil {
+			return nil // ambiguous
+		}
+		match = e
+	}
+	return match
+}
+
+// lastDotSegment returns the substring after the final '.', or s when there is
+// none — i.e. the function/method name from a dotted identifier.
+func lastDotSegment(s string) string {
+	if i := strings.LastIndex(s, "."); i >= 0 {
+		return s[i+1:]
+	}
+	return s
 }
 
 // concreteTypeFromParamArg resolves the concrete body type and caller-frame
