@@ -576,10 +576,11 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		reqInfo.BodyType = preprocessingBodyType(bodyType)
 		reqInfo.DecodeTargetVar = decodeTargetVarName(arg)
 
-		// Interprocedural fallback (issue #36): when the decode lives in an
-		// extracted helper, recover the concrete type from the call site and
-		// re-anchor the decode target + field-inference frame onto the caller.
-		bodyType, fieldFrameBaseID = r.refineBodyTypeThroughHelper(node, reqInfo, bodyType, fieldFrameBaseID)
+		// Interprocedural fallback (issues #36, #39): when the decode lives in an
+		// extracted (possibly shared or generic) helper, recover the concrete
+		// type from the route handler's call site and re-anchor the decode
+		// target + field-inference frame onto the handler.
+		bodyType, fieldFrameBaseID = r.refineBodyTypeThroughHelper(node, reqInfo, bodyType, fieldFrameBaseID, route)
 
 		schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
 		reqInfo.Schema = schema
@@ -611,26 +612,49 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 	return reqInfo
 }
 
-// refineBodyTypeThroughHelper upgrades a free-form decode binding (issue #36):
-// when the decode call lives in an extracted helper — `func decode(dst any)` —
-// the type-arg resolves only to the helper's `any` parameter. It walks up to
-// the call site that invoked the helper, recovers the concrete argument
-// (`&body`), and re-anchors the decode target onto the caller's variable so
-// field inference runs in the handler frame rather than the helper's. reqInfo
-// is mutated in place; the returned (bodyType, fieldFrameBaseID) replace the
-// caller's locals for schema generation and field inference. A no-op when the
-// body type already resolved concretely or no call site could be found.
-func (r *RequestPatternMatcherImpl) refineBodyTypeThroughHelper(node TrackerNodeInterface, reqInfo *RequestInfo, bodyType, fieldFrameBaseID string) (string, string) {
-	if !isFreeFormBodyType(reqInfo.BodyType) {
+// refineBodyTypeThroughHelper resolves a decode that lives in an extracted
+// helper through the route handler's call site (issues #36, #39).
+//
+// When the decode call sits directly in the route handler there is nothing
+// interprocedural to do. Otherwise it resolves the decode target parameter to
+// the concrete argument the handler passed (`&body`) and:
+//
+//   - re-anchors the field-inference frame and decode-target variable onto the
+//     handler — needed even when the body type already resolved concretely via
+//     a generic type parameter (issue #39 Variant B), because the converter
+//     calls (uuid.Parse(body.X)) live in the handler, not the helper; and
+//   - overrides the body type only when the current one is free-form (an `any`
+//     parameter — issue #39 Variant A); a concrete generic instantiation wins.
+//
+// reqInfo is mutated in place; the returned (bodyType, fieldFrameBaseID) replace
+// the caller's locals for schema generation and field inference.
+func (r *RequestPatternMatcherImpl) refineBodyTypeThroughHelper(node TrackerNodeInterface, reqInfo *RequestInfo, bodyType, fieldFrameBaseID string, route *RouteInfo) (string, string) {
+	if node == nil || route == nil || route.Metadata == nil {
 		return bodyType, fieldFrameBaseID
 	}
-	bt, varName, frameBaseID := resolveBodyTypeThroughCallSite(node, reqInfo.DecodeTargetVar, r.contextProvider)
-	if bt == "" || isFreeFormBodyType(bt) {
+	edge := node.GetEdge()
+	if edge == nil {
 		return bodyType, fieldFrameBaseID
 	}
-	reqInfo.BodyType = preprocessingBodyType(bt)
+	// Inline decode: the decode call sits directly in the route handler, so the
+	// frame is already correct — nothing to resolve across a call boundary.
+	if edgeCallerIsRouteHandler(edge, route) {
+		return bodyType, fieldFrameBaseID
+	}
+
+	resolved, varName, frameBaseID := resolveBodyTypeThroughCallSite(node, reqInfo.DecodeTargetVar, route, r.contextProvider)
+	if resolved == "" {
+		return bodyType, fieldFrameBaseID
+	}
+
 	reqInfo.DecodeTargetVar = varName
-	return bt, frameBaseID
+	fieldFrameBaseID = frameBaseID
+
+	if isFreeFormBodyType(reqInfo.BodyType) && !isFreeFormBodyType(resolved) {
+		reqInfo.BodyType = preprocessingBodyType(resolved)
+		bodyType = resolved
+	}
+	return bodyType, fieldFrameBaseID
 }
 
 // maxCallSiteDepth bounds how far up the tracker tree resolveBodyTypeThroughCallSite
@@ -649,15 +673,19 @@ func isFreeFormBodyType(t string) bool {
 	return false
 }
 
-// resolveBodyTypeThroughCallSite handles the interprocedural decode case
-// (issue #36): the matched decode call lives in a helper whose decode target is
-// a parameter (typically typed `any`), so intraprocedural resolution yields no
-// concrete type. It walks up the tracker tree to the nearest ancestor edge that
-// invoked the enclosing helper, maps the decode parameter to the concrete
-// argument passed at that call site, and returns the resolved body type, the
-// caller-frame variable name (so downstream field inference runs in the right
-// frame), and that frame's base ID.
-func resolveBodyTypeThroughCallSite(node TrackerNodeInterface, paramName string, cp ContextProvider) (bodyType, varName, callerBaseID string) {
+// resolveBodyTypeThroughCallSite resolves a decode that lives in an extracted
+// helper to the concrete body type passed at the call site, returning that type
+// plus the caller-frame variable name and base ID (so downstream field
+// inference runs in the right frame).
+//
+// It first disambiguates by the route's own handler (issue #39): a strict-decode
+// helper shared by several handlers is deduplicated to a single tracker-tree
+// node whose parent points at just one caller, so the parent walk alone resolves
+// every route to that one caller's type. Resolving through the call edge whose
+// caller IS this route's handler picks the right one. The tracker-tree walk
+// remains as a fallback for single-caller helpers reached through deeper chains
+// (issue #36).
+func resolveBodyTypeThroughCallSite(node TrackerNodeInterface, paramName string, route *RouteInfo, cp ContextProvider) (bodyType, varName, callerBaseID string) {
 	if node == nil || paramName == "" {
 		return "", "", ""
 	}
@@ -665,11 +693,25 @@ func resolveBodyTypeThroughCallSite(node TrackerNodeInterface, paramName string,
 	if edge == nil {
 		return "", "", ""
 	}
-	// The function enclosing the decode call (e.g. decodeStrictJSON); we look
-	// for the ancestor edge that called it.
+
+	// (1) Route-handler disambiguation: among every edge that calls the
+	// enclosing helper, pick the one whose caller is this route's handler.
+	if route != nil && route.Metadata != nil {
+		helperBaseID := edge.Caller.BaseID()
+		for _, e := range route.Metadata.Callees[helperBaseID] {
+			if !edgeCallerIsRouteHandler(e, route) {
+				continue
+			}
+			if bt, vn := concreteTypeFromParamArg(e, paramName, cp); bt != "" {
+				return bt, vn, e.Caller.BaseID()
+			}
+		}
+	}
+
+	// (2) Fallback: walk the tracker tree to the nearest ancestor edge that
+	// invoked the enclosing helper.
 	enclosingName := edge.Caller.Name
 	enclosingPkg := edge.Caller.Pkg
-
 	for depth, cur := 0, node.GetParent(); cur != nil && depth < maxCallSiteDepth; cur, depth = cur.GetParent(), depth+1 {
 		anc := cur.GetEdge()
 		if anc == nil {
@@ -678,18 +720,48 @@ func resolveBodyTypeThroughCallSite(node TrackerNodeInterface, paramName string,
 		if anc.Callee.Name != enclosingName || anc.Callee.Pkg != enclosingPkg {
 			continue
 		}
-		callArg, ok := anc.ParamArgMap[paramName]
-		if !ok {
+		bt, vn := concreteTypeFromParamArg(anc, paramName, cp)
+		if bt == "" {
 			return "", "", ""
 		}
-		base := unwrapArgRefs(&callArg)
-		if base == nil || base.GetKind() != metadata.KindIdent {
-			return "", "", ""
-		}
-		resolved := strings.TrimPrefix(cp.GetArgumentInfo(base), "*")
-		return resolved, base.GetName(), anc.Caller.BaseID()
+		return bt, vn, anc.Caller.BaseID()
 	}
 	return "", "", ""
+}
+
+// edgeCallerIsRouteHandler reports whether the edge's caller is the route's
+// handler function. RouteInfo.Function may be stored either bare ("Copy") or
+// package-qualified ("json_dto.Copy"), so both forms are accepted; the bare
+// form additionally checks the package to avoid cross-package collisions.
+func edgeCallerIsRouteHandler(e *metadata.CallGraphEdge, route *RouteInfo) bool {
+	if route == nil || route.Metadata == nil {
+		return false
+	}
+	name := stringFromPool(route.Metadata, e.Caller.Name)
+	if name == "" {
+		return false
+	}
+	pkg := stringFromPool(route.Metadata, e.Caller.Pkg)
+	if route.Function == name {
+		return route.Package == "" || route.Package == pkg
+	}
+	return route.Function == pkg+"."+name
+}
+
+// concreteTypeFromParamArg resolves the concrete body type and caller-frame
+// variable name from a call edge's mapping of paramName to the argument the
+// caller passed (e.g. dst -> &body). Returns "","" when that argument isn't a
+// plain identifier, optionally wrapped in a single &/* (covering `&body`).
+func concreteTypeFromParamArg(edge *metadata.CallGraphEdge, paramName string, cp ContextProvider) (bodyType, varName string) {
+	callArg, ok := edge.ParamArgMap[paramName]
+	if !ok {
+		return "", ""
+	}
+	base := unwrapArgRefs(&callArg)
+	if base == nil || base.GetKind() != metadata.KindIdent {
+		return "", ""
+	}
+	return strings.TrimPrefix(cp.GetArgumentInfo(base), "*"), base.GetName()
 }
 
 // decodeTargetVarName returns the local variable name that the decode call's
