@@ -382,6 +382,80 @@ func TestEdgeCallerIsRouteHandler(t *testing.T) {
 	assert.False(t, edgeCallerIsRouteHandler(&nameless, &RouteInfo{Metadata: meta, Function: "zzz"}))
 }
 
+func TestLastDotSegment(t *testing.T) {
+	assert.Equal(t, "Copy", lastDotSegment("main"+TypeSep+"main.deps.DocumentHandler.Copy"))
+	assert.Equal(t, "Copy", lastDotSegment("pkg.Copy"))
+	assert.Equal(t, "Copy", lastDotSegment("Copy"))
+	assert.Equal(t, "", lastDotSegment("pkg."))
+}
+
+func TestCallerMatchesHandlerByPkgName(t *testing.T) {
+	meta := newTestMeta()
+	edge := makeEdge(meta, "Copy", "api", "decodeStrictJSON", "api", nil)
+	closureForm := "main" + TypeSep + "main.deps.DocumentHandler.Copy"
+
+	// Selector-chain registration form: package matches, method name is the last
+	// segment (issue #41).
+	assert.True(t, callerMatchesHandlerByPkgName(&edge, &RouteInfo{Metadata: meta, Function: closureForm, Package: "api"}))
+	// Plain qualified form also matches by (pkg, name).
+	assert.True(t, callerMatchesHandlerByPkgName(&edge, &RouteInfo{Metadata: meta, Function: "api.Copy", Package: "api"}))
+	// Wrong package.
+	assert.False(t, callerMatchesHandlerByPkgName(&edge, &RouteInfo{Metadata: meta, Function: closureForm, Package: "other"}))
+	// Wrong method (last segment).
+	assert.False(t, callerMatchesHandlerByPkgName(&edge, &RouteInfo{Metadata: meta, Function: "main" + TypeSep + "main.deps.DocumentHandler.Update", Package: "api"}))
+	// Requires a package on the route.
+	assert.False(t, callerMatchesHandlerByPkgName(&edge, &RouteInfo{Metadata: meta, Function: "api.Copy"}))
+	// Guards.
+	assert.False(t, callerMatchesHandlerByPkgName(&edge, nil))
+	assert.False(t, callerMatchesHandlerByPkgName(&edge, &RouteInfo{Metadata: meta, Function: "", Package: "api"}))
+	nameless := makeEdge(meta, "", "api", "h", "api", nil)
+	assert.False(t, callerMatchesHandlerByPkgName(&nameless, &RouteInfo{Metadata: meta, Function: "x.Copy", Package: "api"}))
+}
+
+func TestUniquePkgNameHandler(t *testing.T) {
+	meta := newTestMeta()
+	copyE := makeEdge(meta, "Copy", "api", "decodeStrictJSON", "api", nil)
+	updateE := makeEdge(meta, "Update", "api", "decodeStrictJSON", "api", nil)
+	cands := []*metadata.CallGraphEdge{&copyE, &updateE}
+	copyRoute := &RouteInfo{Metadata: meta, Function: "main" + TypeSep + "main.deps.DocumentHandler.Copy", Package: "api"}
+
+	got := uniquePkgNameHandler(cands, copyRoute)
+	require.NotNil(t, got)
+	assert.Equal(t, "Copy", stringFromPool(meta, got.Caller.Name))
+
+	// No candidate matches → nil.
+	assert.Nil(t, uniquePkgNameHandler(cands, &RouteInfo{Metadata: meta, Function: "main" + TypeSep + "x.Delete", Package: "api"}))
+
+	// Two candidates with the same method name → ambiguous → nil (no mis-bind).
+	copy2 := makeEdge(meta, "Copy", "api", "decodeStrictJSON", "api", nil)
+	assert.Nil(t, uniquePkgNameHandler([]*metadata.CallGraphEdge{&copyE, &copy2}, copyRoute))
+}
+
+// TestResolveBodyTypeThroughCallSite_RouteHandlerByPkgName covers the issue #41
+// closure/selector-chain registration: route.Function is the registration-site
+// form (not the method BaseID), so resolution must fall to the (package, name)
+// pass and still pick the right endpoint despite a shared tree parent.
+func TestResolveBodyTypeThroughCallSite_RouteHandlerByPkgName(t *testing.T) {
+	meta := newTestMeta()
+	cp := NewContextProvider(meta)
+	copyEdge := makeEdge(meta, "Copy", "api", "decodeStrictJSON", "api", nil)
+	setParamArg(&copyEdge, "dst", wrapUnary(meta, makeIdentArg(meta, "body", "api.CopyReq"), "&"))
+	updateEdge := makeEdge(meta, "Update", "api", "decodeStrictJSON", "api", nil)
+	setParamArg(&updateEdge, "dst", wrapUnary(meta, makeIdentArg(meta, "body", "api.UpdateReq"), "&"))
+	decodeEdge := makeEdge(meta, "decodeStrictJSON", "api", "Decode", "encoding/json",
+		[]*metadata.CallArgument{makeIdentArg(meta, "dst", "any")})
+	meta.Callees = map[string][]*metadata.CallGraphEdge{
+		decodeEdge.Caller.BaseID(): {&copyEdge, &updateEdge},
+	}
+	decodeNode := makeTrackerNode(&decodeEdge)
+	decodeNode.Parent = makeTrackerNode(&updateEdge) // shared parent points at Update
+
+	bt, vn, _ := resolveBodyTypeThroughCallSite(decodeNode, "dst",
+		&RouteInfo{Metadata: meta, Function: "main" + TypeSep + "main.deps.DocumentHandler.Copy", Package: "api"}, cp)
+	assert.Equal(t, "api.CopyReq", bt, "closure-registered handler resolves to its own DTO")
+	assert.Equal(t, "body", vn)
+}
+
 func TestConcreteTypeFromParamArg(t *testing.T) {
 	meta := newTestMeta()
 	cp := NewContextProvider(meta)
