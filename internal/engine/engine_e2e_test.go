@@ -549,14 +549,18 @@ func TestE2E_SharedDecodeHelper_PerCallSiteBodyTypes(t *testing.T) {
 				"update endpoint must keep its own DTO (not collapse onto copy's)")
 
 			// Both schemas exist and retain their flow-inferred uuid formats.
+			require.NotNil(t, result.Components, "components missing")
 			schemas := result.Components.Schemas
-			copyReq := schemas["json_dto.CopyDocumentRequest"]
-			require.NotNil(t, copyReq)
-			assert.Equal(t, "uuid", copyReq.Properties["sourceId"].Format)
-			assert.Equal(t, "uuid", copyReq.Properties["destinationBucketId"].Format)
-			updateReq := schemas["json_dto.UpdateDocumentRequest"]
-			require.NotNil(t, updateReq)
-			assert.Equal(t, "uuid", updateReq.Properties["storageBucketId"].Format)
+			assertUUIDField := func(typeName, prop string) {
+				schema := schemas[typeName]
+				require.NotNil(t, schema, "schema %s missing", typeName)
+				ps := schema.Properties[prop]
+				require.NotNil(t, ps, "property %s.%s missing", typeName, prop)
+				assert.Equal(t, "uuid", ps.Format, "%s.%s format", typeName, prop)
+			}
+			assertUUIDField("json_dto.CopyDocumentRequest", "sourceId")
+			assertUUIDField("json_dto.CopyDocumentRequest", "destinationBucketId")
+			assertUUIDField("json_dto.UpdateDocumentRequest", "storageBucketId")
 		})
 	}
 }
