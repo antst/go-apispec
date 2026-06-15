@@ -1240,7 +1240,7 @@ func TestExtractResponse_StatusFromCallWithConstantReturn(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 201, resp.StatusCode)
@@ -1286,7 +1286,7 @@ func TestExtractResponse_StatusFromIdentWithAssignment(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 404, resp.StatusCode)
@@ -1334,7 +1334,7 @@ func TestExtractResponse_DefaultBodyType_ByteSlice_TextReader(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 200, resp.StatusCode)
@@ -1374,7 +1374,7 @@ func TestExtractResponse_DefaultBodyType_ByteSlice_BinaryReader(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 200, resp.StatusCode)
@@ -1410,7 +1410,7 @@ func TestExtractResponse_DefaultBodyType_NonByteSlice(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 200, resp.StatusCode)
@@ -1454,7 +1454,7 @@ func TestExtractResponse_BranchContextPropagated(t *testing.T) {
 	}
 
 	route := NewRouteInfo()
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	require.NotNil(t, resp.Branch)
@@ -1990,7 +1990,7 @@ func TestExtractResponse_DefaultBodyType_ReaderArgContainsStrings(t *testing.T) 
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	require.NotNil(t, resp.Schema)
@@ -2165,7 +2165,7 @@ func TestExtractResponse_LeastStatusCodeCalculation(t *testing.T) {
 	route.Response["200"] = &ResponseInfo{StatusCode: 200}
 	route.Response["500"] = &ResponseInfo{StatusCode: 500}
 
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 	require.NotNil(t, resp)
 	// The default status (200) should be used since DefaultStatus is set
 	assert.Equal(t, 200, resp.StatusCode)

@@ -70,3 +70,14 @@ func TestRecoverFromPanic_GenericPanic(t *testing.T) {
 	assert.NotEmpty(t, captured.errs, "panic must surface as an Errorf call")
 	assert.NotEmpty(t, captured.logs, "stack trace must be logged")
 }
+
+// firstResponse returns the first ResponseInfo from the slice ExtractResponse /
+// extractResponseFromNode now return, or nil when empty. It keeps the many
+// single-response assertions concise after the conditional-status fan-out
+// changed those signatures to []*ResponseInfo.
+func firstResponse(resps []*ResponseInfo) *ResponseInfo {
+	if len(resps) == 0 {
+		return nil
+	}
+	return resps[0]
+}

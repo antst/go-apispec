@@ -63,6 +63,8 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "error_switch_minimal", inputDir: "../../testdata/error_switch_minimal", configFn: spec.DefaultChiConfig},
 		{name: "error_switch_file_service", inputDir: "../../testdata/error_switch_file_service", configFn: spec.DefaultChiConfig},
 		{name: "bodyless_status", inputDir: "../../testdata/bodyless_status", configFn: spec.DefaultHTTPConfig},
+		{name: "wrapped_response", inputDir: "../../testdata/wrapped_response", configFn: spec.DefaultHTTPConfig},
+		{name: "echo_handler_factory", inputDir: "../../testdata/echo_handler_factory", configFn: spec.DefaultEchoConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
@@ -614,6 +616,50 @@ func keysOf[V any](m map[string]V) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// TestE2E_EchoHandlerFactory_ClosureInterfaceAndLocalType covers the
+// handler-factory pattern end to end: routes registered as g.POST(p, h.Create())
+// where Create() returns a closure, dispatched through an interface whose
+// implementation lives in a different package, and a request bound to a
+// function-local named type.
+func TestE2E_EchoHandlerFactory_ClosureInterfaceAndLocalType(t *testing.T) {
+	cfg := newDefaultCfg("../../testdata/echo_handler_factory", spec.DefaultEchoConfig())
+	result, err := NewEngine(cfg).GenerateOpenAPI()
+	require.NoError(t, err)
+
+	reqRef := func(path, method string) string {
+		pi, ok := result.Paths[path]
+		require.True(t, ok, "%s missing", path)
+		op := map[string]*intspec.Operation{"POST": pi.Post, "GET": pi.Get}[method]
+		require.NotNil(t, op, "%s %s missing", method, path)
+		require.NotNil(t, op.RequestBody, "%s %s request body missing — closure body not analyzed", method, path)
+		mt, ok := op.RequestBody.Content["application/json"]
+		require.True(t, ok)
+		require.NotNil(t, mt.Schema)
+		return mt.Schema.Ref
+	}
+
+	// Interface dispatch (api.Handlers -> handlers.userHandlers) + factory
+	// closure resolved: the request binds to models.User.
+	assert.Equal(t, "#/components/schemas/models.User", reqRef("/api/v1/users", "POST"))
+
+	// Function-local named type (type Login struct{…} inside the method) is
+	// captured as a real component, not a dangling $ref.
+	assert.Equal(t, "#/components/schemas/handlers.Login", reqRef("/api/v1/login", "POST"))
+	require.NotNil(t, result.Components)
+	login := result.Components.Schemas["handlers.Login"]
+	require.NotNil(t, login, "function-local Login type must be emitted as a component, not left dangling")
+	for _, p := range []string{"email", "password"} {
+		require.NotNil(t, login.Properties[p], "Login.%s property missing", p)
+	}
+
+	// The factory closure's response (c.JSON(200, &models.User{})) is recovered.
+	get := result.Paths["/api/v1/users/{id}"].Get
+	require.NotNil(t, get)
+	ok200, ok := get.Responses["200"]
+	require.True(t, ok, "200 response missing")
+	assert.Equal(t, "#/components/schemas/models.User", ok200.Content["application/json"].Schema.Ref)
 }
 
 // ---------------------------------------------------------------------------

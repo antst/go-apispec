@@ -1423,7 +1423,7 @@ func TestExtractResponse_InvalidTypeSentinel_ClearsBody(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Empty(t, resp.BodyType,

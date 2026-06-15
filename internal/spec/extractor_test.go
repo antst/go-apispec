@@ -312,7 +312,7 @@ func TestExtractResponse_WithLiteralValue(t *testing.T) {
 			}
 
 			// Extract response
-			result := matcher.ExtractResponse(node, &RouteInfo{
+			result := firstResponse(matcher.ExtractResponse(node, &RouteInfo{
 				Path:     "/test",
 				Method:   "POST",
 				Handler:  "testHandler",
@@ -340,7 +340,7 @@ func TestExtractResponse_WithLiteralValue(t *testing.T) {
 				UsedTypes:   make(map[string]*Schema),
 				Metadata:    meta,
 				GroupPrefix: "testGroup",
-			})
+			}))
 
 			// Verify that literal values are handled correctly
 			if result == nil {
@@ -389,11 +389,11 @@ func TestResponsePattern_DefaultStatus(t *testing.T) {
 		},
 	}
 
-	result := matcher.ExtractResponse(&TrackerNode{
+	result := firstResponse(matcher.ExtractResponse(&TrackerNode{
 		CallGraphEdge: &metadata.CallGraphEdge{},
 	}, &RouteInfo{
 		Response: map[string]*ResponseInfo{},
-	})
+	}))
 
 	if result == nil {
 		t.Fatal("expected response info when default status is configured")
