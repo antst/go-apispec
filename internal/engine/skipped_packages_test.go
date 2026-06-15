@@ -88,3 +88,20 @@ func TestFilterValidPackages_RecordsInModuleSkipped(t *testing.T) {
 func TestSkippedPackages_EmptyByDefault(t *testing.T) {
 	assert.Empty(t, NewEngine(nil).SkippedPackages())
 }
+
+// TestSkippedPackages_ReturnsDefensiveCopy ensures callers can't mutate the
+// engine's internal diagnostics state through the returned slice.
+func TestSkippedPackages_ReturnsDefensiveCopy(t *testing.T) {
+	e := NewEngine(nil)
+	e.skipped = []SkippedPackage{{Package: "a/b", Reason: "x"}}
+
+	got := e.SkippedPackages()
+	require.Len(t, got, 1)
+	got[0].Package = "MUTATED"
+	got = append(got, SkippedPackage{Package: "extra"})
+	_ = got
+
+	again := e.SkippedPackages()
+	require.Len(t, again, 1, "append on the returned slice must not grow internal state")
+	assert.Equal(t, "a/b", again[0].Package, "element mutation must not leak into the engine")
+}

@@ -786,7 +786,11 @@ func processTypeSpec(tspec *ast.TypeSpec, info *types.Info, pkgName string, fset
 		return
 	}
 	if local {
-		if _, exists := f.Types[tspec.Name.Name]; exists {
+		// A function-local type must not shadow a package-level type of the same
+		// name. processTypeKind writes into allTypes (package-wide), so the guard
+		// must check allTypes, not just this file's f.Types — otherwise a local
+		// type in one file can overwrite a package type declared in another.
+		if _, exists := allTypes[tspec.Name.Name]; exists {
 			return
 		}
 	}

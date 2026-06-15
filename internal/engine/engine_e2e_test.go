@@ -655,11 +655,15 @@ func TestE2E_EchoHandlerFactory_ClosureInterfaceAndLocalType(t *testing.T) {
 	}
 
 	// The factory closure's response (c.JSON(200, &models.User{})) is recovered.
-	get := result.Paths["/api/v1/users/{id}"].Get
-	require.NotNil(t, get)
-	ok200, ok := get.Responses["200"]
+	pi, ok := result.Paths["/api/v1/users/{id}"]
+	require.True(t, ok, "/api/v1/users/{id} missing")
+	require.NotNil(t, pi.Get)
+	ok200, ok := pi.Get.Responses["200"]
 	require.True(t, ok, "200 response missing")
-	assert.Equal(t, "#/components/schemas/models.User", ok200.Content["application/json"].Schema.Ref)
+	mt, ok := ok200.Content["application/json"]
+	require.True(t, ok, "200 application/json content missing")
+	require.NotNil(t, mt.Schema)
+	assert.Equal(t, "#/components/schemas/models.User", mt.Schema.Ref)
 }
 
 // ---------------------------------------------------------------------------

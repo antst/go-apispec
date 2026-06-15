@@ -755,7 +755,12 @@ func modulePathFromGoMod(data []byte) string {
 // spec is likely incomplete — usually the project doesn't build (e.g. an
 // unresolved/private dependency).
 func (e *Engine) SkippedPackages() []SkippedPackage {
-	return e.skipped
+	if len(e.skipped) == 0 {
+		return nil
+	}
+	out := make([]SkippedPackage, len(e.skipped))
+	copy(out, e.skipped)
+	return out
 }
 
 // matchesPattern checks if a path matches a gitignore-style pattern

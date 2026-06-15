@@ -184,9 +184,20 @@ func TestAttachReturnedClosureBody_AttachesClosureAndDedups(t *testing.T) {
 	tree.attachReturnedClosureBody(meta, arg, "api.Handlers", "Create", "api", map[string]int{}, &assigmentIndexMap{}, hfLimits())
 	require.Len(t, arg.GetChildren(), 1, "closure body attached via interface implementer")
 
-	// A second attach of the same (pkg, method, type) is deduped.
+	// A second attach at the SAME call site is deduped (re-entrancy guard).
 	tree.attachReturnedClosureBody(meta, arg, "api.Handlers", "Create", "api", map[string]int{}, &assigmentIndexMap{}, hfLimits())
-	assert.Len(t, arg.GetChildren(), 1, "closureAttached dedupes a repeated factory body")
+	assert.Len(t, arg.GetChildren(), 1, "closureAttached dedupes a repeated factory body at one site")
+
+	// A DIFFERENT call site registering the same factory still expands — the
+	// dedupe is per call-site, not global (regression for the case where two
+	// routes both register h.Create()). A distinct call site means a distinct
+	// node key, which derives from the callee's position-bearing ID.
+	arg2Edge := buildCallGraphEdge(meta, "RegisterOther", "api", "POST", "echo", nil)
+	arg2Edge.Callee.Position = sp.Get("routes.go:9:9")
+	arg2 := buildTrackerNode(arg2Edge)
+	require.NotEqual(t, arg.Key(), arg2.Key(), "distinct call sites must have distinct keys")
+	tree.attachReturnedClosureBody(meta, arg2, "api.Handlers", "Create", "api", map[string]int{}, &assigmentIndexMap{}, hfLimits())
+	require.Len(t, arg2.GetChildren(), 1, "second route registering the same factory must still get its closure body")
 }
 
 // TestAttachReturnedClosureBody_DepthCap covers the recursion-depth clamp:

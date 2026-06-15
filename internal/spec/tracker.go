@@ -1046,11 +1046,13 @@ func (t *TrackerTree) attachReturnedClosureBody(meta *metadata.Metadata, argNode
 	cands = append(cands, impls...)
 
 	for _, c := range cands {
-		// Expand each concrete method's returned closure at most once per tree.
-		// Without this guard, re-entrant traversal (the closure body itself
-		// containing factory-shaped calls) could fan the same body out
-		// repeatedly and blow up on large interface-heavy graphs.
-		methodKey := c.pkg + "\x00" + method + "\x00" + c.typ
+		// Expand each concrete method's returned closure at most once per
+		// registration site. Keying by call-site (argNode) as well as
+		// (pkg, method, recvType) blocks only re-entrant expansion of the same
+		// site — without it, two routes registering the same factory (e.g. both
+		// h.Create()) would share one key and the second route would be skipped,
+		// dropping its request/response extraction.
+		methodKey := argNode.Key() + "\x00" + c.pkg + "\x00" + method + "\x00" + c.typ
 		if t.closureAttached == nil {
 			t.closureAttached = map[string]bool{}
 		}

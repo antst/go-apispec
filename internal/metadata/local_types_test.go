@@ -126,3 +126,33 @@ func other() {
 	}
 	require.Equal(t, []string{"A"}, fieldNames, "package-level Conf not shadowed by local Conf")
 }
+
+// TestProcessLocalTypes_CrossFileShadow verifies the shadow guard is
+// package-scoped: a function-local type in one file must not overwrite a
+// package-level type of the same name declared in a *different* file (the
+// guard checks allTypes, not just the current file's f.Types).
+func TestProcessLocalTypes_CrossFileShadow(t *testing.T) {
+	meta := metaFromModule(t, map[string]interface{}{
+		// Package-level Dup lives in a.go.
+		"a.go": `package app
+
+type Dup struct{ A string }
+`,
+		// A function-local Dup of the same name lives in b.go.
+		"b.go": `package app
+
+func makeLocal() {
+	type Dup struct{ B int }
+	_ = Dup{}
+}
+`,
+	})
+
+	dup := findType(meta, "app", "Dup")
+	require.NotNil(t, dup)
+	names := make([]string, 0, len(dup.Fields))
+	for _, f := range dup.Fields {
+		names = append(names, meta.StringPool.GetString(f.Name))
+	}
+	require.Equal(t, []string{"A"}, names, "package-level Dup must survive a same-named function-local type in another file")
+}
