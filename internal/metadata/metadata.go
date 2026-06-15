@@ -316,7 +316,15 @@ func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo
 			}
 		}
 
-		// Second pass: process each file
+		// Second pass: process each file. Function-local named types are
+		// deferred to a third pass (below) so every package-level type is
+		// registered before any local type is checked for shadowing.
+		type localTypeUnit struct {
+			file *ast.File
+			info *types.Info
+			f    *File
+		}
+		var localUnits []localTypeUnit
 		for fileName, file := range files {
 			info := fileToInfo[file]
 			fullPath := buildFullPath(importPaths[pkgName], fileName)
@@ -352,6 +360,15 @@ func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo
 
 			pkg.Types = allTypes
 			pkg.Files[fullPath] = f
+			localUnits = append(localUnits, localTypeUnit{file: file, info: info, f: f})
+		}
+
+		// Third pass: capture function-local named types now that all
+		// package-level types across every file are in allTypes. This makes the
+		// shadow guard order-independent — a local type never overwrites a
+		// package-level type of the same name declared in another file.
+		for _, u := range localUnits {
+			processLocalTypes(u.file, u.info, pkgName, fset, u.f, allTypeMethods, allTypes, metadata)
 		}
 
 		metadata.Packages[pkgName] = pkg
@@ -763,37 +780,76 @@ func processTypes(file *ast.File, info *types.Info, pkgName string, fset *token.
 		}
 
 		for _, spec := range genDecl.Specs {
-			tspec, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
+			if tspec, ok := spec.(*ast.TypeSpec); ok {
+				processTypeSpec(tspec, info, pkgName, fset, f, allTypeMethods, allTypes, metadata, false)
 			}
-
-			// Skip mock/fake/stub types
-			if isMockName(tspec.Name.Name) {
-				continue
-			}
-
-			t := &Type{
-				Name:  metadata.StringPool.Get(tspec.Name.Name),
-				Pkg:   metadata.StringPool.Get(pkgName),
-				Scope: metadata.StringPool.Get(getScope(tspec.Name.Name)),
-			}
-
-			// Extract comments
-			t.Comments = metadata.StringPool.Get(getComments(tspec))
-
-			// Process type kind
-			processTypeKind(tspec, info, pkgName, fset, t, allTypes, metadata)
-
-			// Add methods for non-interface types
-			if t.Kind != metadata.StringPool.Get("interface") {
-				specName := getTypeName(tspec, info)
-				t.Methods = allTypeMethods[specName]
-				t.Methods = append(t.Methods, allTypeMethods["*"+specName]...)
-			}
-
-			f.Types[tspec.Name.Name] = t
 		}
+	}
+	// Function-local named types are captured in a separate pass
+	// (processLocalTypes) once every file's package-level types are registered —
+	// see GenerateMetadataWithLogger — so the shadow guard is order-independent.
+}
+
+// processTypeSpec records a single type declaration into the file's type table.
+// When local is true the spec came from inside a function body; such a type is
+// only added if its name isn't already taken by a package-level type in this
+// file, so a real package type is never shadowed by a function-local one.
+func processTypeSpec(tspec *ast.TypeSpec, info *types.Info, pkgName string, fset *token.FileSet, f *File, allTypeMethods map[string][]Method, allTypes map[string]*Type, metadata *Metadata, local bool) {
+	// Skip mock/fake/stub types
+	if isMockName(tspec.Name.Name) {
+		return
+	}
+	if local {
+		// A function-local type must not shadow a package-level type of the same
+		// name. processTypeKind writes into allTypes (package-wide), so the guard
+		// must check allTypes, not just this file's f.Types — otherwise a local
+		// type in one file can overwrite a package type declared in another.
+		if _, exists := allTypes[tspec.Name.Name]; exists {
+			return
+		}
+	}
+
+	t := &Type{
+		Name:  metadata.StringPool.Get(tspec.Name.Name),
+		Pkg:   metadata.StringPool.Get(pkgName),
+		Scope: metadata.StringPool.Get(getScope(tspec.Name.Name)),
+	}
+
+	// Extract comments
+	t.Comments = metadata.StringPool.Get(getComments(tspec))
+
+	// Process type kind
+	processTypeKind(tspec, info, pkgName, fset, t, allTypes, metadata)
+
+	// Add methods for non-interface types
+	if t.Kind != metadata.StringPool.Get("interface") {
+		specName := getTypeName(tspec, info)
+		t.Methods = allTypeMethods[specName]
+		t.Methods = append(t.Methods, allTypeMethods["*"+specName]...)
+	}
+
+	f.Types[tspec.Name.Name] = t
+}
+
+// processLocalTypes captures named type declarations inside function bodies.
+func processLocalTypes(file *ast.File, info *types.Info, pkgName string, fset *token.FileSet, f *File, allTypeMethods map[string][]Method, allTypes map[string]*Type, metadata *Metadata) {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			gd, ok := n.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				return true
+			}
+			for _, spec := range gd.Specs {
+				if tspec, ok := spec.(*ast.TypeSpec); ok {
+					processTypeSpec(tspec, info, pkgName, fset, f, allTypeMethods, allTypes, metadata, true)
+				}
+			}
+			return true
+		})
 	}
 }
 

@@ -195,7 +195,7 @@ func TestExtractResponse_StatusFromArg(t *testing.T) {
 	}
 
 	route := NewRouteInfo()
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 200, resp.StatusCode)
@@ -234,7 +234,7 @@ func TestExtractResponse_DefaultStatus(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 201, resp.StatusCode)
@@ -272,7 +272,7 @@ func TestExtractResponse_TypeFromArg_IdentType(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 200, resp.StatusCode)
@@ -311,7 +311,7 @@ func TestExtractResponse_ByteSliceBody_ProducesBinarySchema(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 200, resp.StatusCode)
@@ -349,7 +349,7 @@ func TestExtractResponse_NoStatusNoBody_ReturnsNil(t *testing.T) {
 	}
 
 	route := NewRouteInfo()
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	assert.Nil(t, resp)
 }
@@ -382,7 +382,7 @@ func TestExtractResponse_DefaultContentTypeOverride(t *testing.T) {
 	}
 
 	route := NewRouteInfo()
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, "text/plain", resp.ContentType)
@@ -422,7 +422,7 @@ func TestExtractResponse_TypeFromArg_SkipsBodylessCodes(t *testing.T) {
 	route.Response["204"] = &ResponseInfo{StatusCode: 204, BodyType: ""}
 	route.Response["200"] = &ResponseInfo{StatusCode: 200, BodyType: ""}
 
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 	require.NotNil(t, resp)
 	// Should pick 200 because 204 is bodyless
 	assert.Equal(t, 200, resp.StatusCode)
@@ -457,7 +457,7 @@ func TestExtractResponse_StatusFromArg_HttpConst(t *testing.T) {
 	}
 
 	route := NewRouteInfo()
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 201, resp.StatusCode)
@@ -494,7 +494,7 @@ func TestExtractResponse_LiteralBodyType(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	// "42" is an integer literal, so determineLiteralType returns "int"
@@ -531,7 +531,7 @@ func TestExtractResponse_Deref(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	// After deref, the leading * is stripped, then preprocessingBodyType runs
@@ -1322,7 +1322,7 @@ func TestExtractResponse_TypeConversionArg(t *testing.T) {
 
 	route := NewRouteInfo()
 	route.Metadata = meta
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	require.NotNil(t, resp)
 	assert.Equal(t, 200, resp.StatusCode)
@@ -1348,7 +1348,7 @@ func TestExtractResponseFromNode_NilNode(t *testing.T) {
 
 	visitedEdges := make(map[string]bool)
 	route := NewRouteInfo()
-	resp := extractor.extractResponseFromNode(nil, route, visitedEdges)
+	resp := firstResponse(extractor.extractResponseFromNode(nil, route, visitedEdges))
 	assert.Nil(t, resp)
 }
 
@@ -1367,7 +1367,7 @@ func TestExtractResponseFromNode_NilEdge(t *testing.T) {
 	visitedEdges := make(map[string]bool)
 	route := NewRouteInfo()
 	node := &TrackerNode{} // no edge
-	resp := extractor.extractResponseFromNode(node, route, visitedEdges)
+	resp := firstResponse(extractor.extractResponseFromNode(node, route, visitedEdges))
 	assert.Nil(t, resp)
 }
 
@@ -1514,7 +1514,7 @@ func TestExtractResponse_InvalidStatusArg(t *testing.T) {
 	}
 
 	route := NewRouteInfo()
-	resp := matcher.ExtractResponse(node, route)
+	resp := firstResponse(matcher.ExtractResponse(node, route))
 
 	// Status not resolved, no body type -> nil
 	assert.Nil(t, resp)
@@ -1728,11 +1728,11 @@ func TestExtractor_ExtractResponseFromNode_EdgeDedup(t *testing.T) {
 	visitedEdges := make(map[string]bool)
 
 	// First call -- should return a response
-	resp1 := extractor.extractResponseFromNode(node, route, visitedEdges)
+	resp1 := firstResponse(extractor.extractResponseFromNode(node, route, visitedEdges))
 	require.NotNil(t, resp1)
 
 	// Second call with same edge -- should be deduplicated (nil)
-	resp2 := extractor.extractResponseFromNode(node, route, visitedEdges)
+	resp2 := firstResponse(extractor.extractResponseFromNode(node, route, visitedEdges))
 	assert.Nil(t, resp2)
 }
 

@@ -58,8 +58,10 @@ type RequestPatternMatcher interface {
 type ResponsePatternMatcher interface {
 	PatternMatcher
 
-	// ExtractResponse extracts response information from a matched node
-	ExtractResponse(node TrackerNodeInterface, route *RouteInfo) *ResponseInfo
+	// ExtractResponse extracts response information from a matched node.
+	// Returns a slice because a single call site can yield multiple responses
+	// when conditional status codes apply (see the implementation / issue #39).
+	ExtractResponse(node TrackerNodeInterface, route *RouteInfo) []*ResponseInfo
 }
 
 // ParamPatternMatcher matches parameter patterns
