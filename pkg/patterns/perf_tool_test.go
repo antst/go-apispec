@@ -237,3 +237,29 @@ func TestProfilePatternEdgeCases(t *testing.T) {
 	// Test with zero iterations
 	ProfilePattern("*.go", "main.go", 0)
 }
+
+// TestRatePerformance deterministically covers every rating branch — the
+// branch selection inside ProfilePattern depends on measured wall-clock time,
+// which made that switch's coverage flaky across runs.
+func TestRatePerformance(t *testing.T) {
+	cases := []struct {
+		avgNs int64
+		want  string
+	}{
+		{1_000, "⭐⭐⭐⭐⭐ Excellent"},
+		{4_999, "⭐⭐⭐⭐⭐ Excellent"},
+		{5_000, "⭐⭐⭐⭐ Good"},
+		{9_999, "⭐⭐⭐⭐ Good"},
+		{10_000, "⭐⭐⭐ Fair"},
+		{19_999, "⭐⭐⭐ Fair"},
+		{20_000, "⭐⭐ Poor"},
+		{49_999, "⭐⭐ Poor"},
+		{50_000, "⭐ Very Poor"},
+		{1_000_000, "⭐ Very Poor"},
+	}
+	for _, c := range cases {
+		if got := ratePerformance(c.avgNs); got != c.want {
+			t.Errorf("ratePerformance(%d) = %q, want %q", c.avgNs, got, c.want)
+		}
+	}
+}

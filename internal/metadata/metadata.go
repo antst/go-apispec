@@ -316,7 +316,15 @@ func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo
 			}
 		}
 
-		// Second pass: process each file
+		// Second pass: process each file. Function-local named types are
+		// deferred to a third pass (below) so every package-level type is
+		// registered before any local type is checked for shadowing.
+		type localTypeUnit struct {
+			file *ast.File
+			info *types.Info
+			f    *File
+		}
+		var localUnits []localTypeUnit
 		for fileName, file := range files {
 			info := fileToInfo[file]
 			fullPath := buildFullPath(importPaths[pkgName], fileName)
@@ -352,6 +360,15 @@ func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo
 
 			pkg.Types = allTypes
 			pkg.Files[fullPath] = f
+			localUnits = append(localUnits, localTypeUnit{file: file, info: info, f: f})
+		}
+
+		// Third pass: capture function-local named types now that all
+		// package-level types across every file are in allTypes. This makes the
+		// shadow guard order-independent — a local type never overwrites a
+		// package-level type of the same name declared in another file.
+		for _, u := range localUnits {
+			processLocalTypes(u.file, u.info, pkgName, fset, u.f, allTypeMethods, allTypes, metadata)
 		}
 
 		metadata.Packages[pkgName] = pkg
@@ -768,12 +785,9 @@ func processTypes(file *ast.File, info *types.Info, pkgName string, fset *token.
 			}
 		}
 	}
-
-	// Function-local named types — e.g. `type Login struct{…}` declared inside
-	// a handler — are not in file.Decls (they live in function bodies), so the
-	// loop above misses them. A request/response bound to such a type would
-	// then resolve to a dangling $ref. Walk function bodies to capture them.
-	processLocalTypes(file, info, pkgName, fset, f, allTypeMethods, allTypes, metadata)
+	// Function-local named types are captured in a separate pass
+	// (processLocalTypes) once every file's package-level types are registered —
+	// see GenerateMetadataWithLogger — so the shadow guard is order-independent.
 }
 
 // processTypeSpec records a single type declaration into the file's type table.
