@@ -217,19 +217,24 @@ func ProfilePattern(pattern, path string, iterations int) {
 	fmt.Printf("\n🔧 Generated regex: %s\n", regex)
 
 	// Performance rating
-	avgNs := result.AvgTime.Nanoseconds()
-	var rating string
+	fmt.Printf("\n📈 Performance Rating: %s\n", ratePerformance(result.AvgTime.Nanoseconds()))
+}
+
+// ratePerformance maps an average per-operation duration (nanoseconds) to a
+// human-readable star rating. Extracted from ProfilePattern so the branch
+// selection is deterministically testable — inside ProfilePattern it depends on
+// measured wall-clock time, which makes its coverage flaky across runs.
+func ratePerformance(avgNs int64) string {
 	switch {
 	case avgNs < 5000:
-		rating = "⭐⭐⭐⭐⭐ Excellent"
+		return "⭐⭐⭐⭐⭐ Excellent"
 	case avgNs < 10000:
-		rating = "⭐⭐⭐⭐ Good"
+		return "⭐⭐⭐⭐ Good"
 	case avgNs < 20000:
-		rating = "⭐⭐⭐ Fair"
+		return "⭐⭐⭐ Fair"
 	case avgNs < 50000:
-		rating = "⭐⭐ Poor"
+		return "⭐⭐ Poor"
 	default:
-		rating = "⭐ Very Poor"
+		return "⭐ Very Poor"
 	}
-	fmt.Printf("\n📈 Performance Rating: %s\n", rating)
 }

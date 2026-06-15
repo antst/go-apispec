@@ -19,6 +19,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -551,6 +552,24 @@ func sortYAMLNode(node *yaml.Node) {
 }
 
 // writeOutput writes OpenAPI spec directly to file using streaming encoder (like metadata)
+// warnSkippedPackages writes a warning listing in-module packages that failed
+// to type-check, so a thin or empty spec has a visible explanation instead of
+// silently producing "0 paths". Writing to an explicit io.Writer keeps it
+// testable and lets callers route it to stderr.
+func warnSkippedPackages(w io.Writer, skipped []engine.SkippedPackage) {
+	if len(skipped) == 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "Warning: %d in-module package(s) skipped due to type errors — the spec may be incomplete (ensure the project builds):\n", len(skipped))
+	for _, sp := range skipped {
+		reason := sp.Reason
+		if reason == "" {
+			reason = "type error"
+		}
+		_, _ = fmt.Fprintf(w, "  - %s: %s\n", sp.Package, reason)
+	}
+}
+
 func writeOutput(openAPISpec interface{}, config *CLIConfig, genEngine *engine.Engine) error {
 	// Helper to write YAML with sorted map keys
 	writeYAML := func(w *yaml.Encoder) error {
@@ -562,6 +581,12 @@ func writeOutput(openAPISpec interface{}, config *CLIConfig, genEngine *engine.E
 			return fmt.Errorf("failed to encode sorted YAML: %w", err)
 		}
 		return w.Close()
+	}
+
+	// Warn (on stderr, so stdout output stays clean) about in-module packages
+	// dropped due to type errors — the usual cause of a surprisingly empty spec.
+	if genEngine != nil {
+		warnSkippedPackages(os.Stderr, genEngine.SkippedPackages())
 	}
 
 	// If output is the default (openapi.json) and no explicit output flag was set, output to stdout

@@ -1,0 +1,145 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    },
+    "license": {
+      "name": ""
+    }
+  },
+  "paths": {
+    "/api/v1/login": {
+      "post": {
+        "tags": [
+          "/api/v1"
+        ],
+        "operationId": "github.com/antst/go-apispec/testdata/echo_handler_factory/api.Handlers.Login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_echo_handler_factory_handlers.Login"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_echo_handler_factory_models.User"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users": {
+      "post": {
+        "tags": [
+          "/api/v1"
+        ],
+        "operationId": "github.com/antst/go-apispec/testdata/echo_handler_factory/api.Handlers.Create",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_echo_handler_factory_models.User"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_echo_handler_factory_models.User"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}": {
+      "get": {
+        "tags": [
+          "/api/v1"
+        ],
+        "operationId": "github.com/antst/go-apispec/testdata/echo_handler_factory/api.Handlers.Get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_echo_handler_factory_models.User"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "github.com_antst_go-apispec_testdata_echo_handler_factory_handlers.Login": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_echo_handler_factory_models.User": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "name"
+        ]
+      }
+    }
+  }
+}

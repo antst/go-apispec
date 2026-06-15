@@ -184,6 +184,19 @@ func DefaultEngineConfig() *EngineConfig {
 type Engine struct {
 	config   *EngineConfig
 	metadata *metadata.Metadata
+
+	// skipped records in-module packages dropped during analysis because they
+	// failed to type-check (e.g. an unresolved/private dependency). Surfaced so
+	// callers can warn that the spec may be incomplete — a failure that reaches
+	// main or the router packages can silently produce "0 paths".
+	skipped []SkippedPackage
+}
+
+// SkippedPackage is an in-module package excluded from analysis due to
+// compile/type errors, with a representative reason.
+type SkippedPackage struct {
+	Package string `json:"package"`
+	Reason  string `json:"reason"`
 }
 
 // NewEngine creates a new Engine with the given configuration
@@ -246,12 +259,23 @@ func (e *Engine) filterValidPackages(pkgs []*packages.Package, logger *VerboseLo
 	var validPkgs []*packages.Package
 	var errorCount int
 
+	e.skipped = nil
+	modPath := e.moduleImportPath()
 	for _, pkg := range pkgs {
 		if len(pkg.Errors) > 0 {
 			errorCount++
 			logger.Printf("Warning: Skipping package %s due to errors:\n", pkg.PkgPath)
 			for _, pkgErr := range pkg.Errors {
 				logger.Printf("  - %s\n", pkgErr.Msg)
+			}
+			// Record only in-module packages — third-party type errors are
+			// rarely actionable by the user and would just be noise.
+			if modPath != "" && (pkg.PkgPath == modPath || strings.HasPrefix(pkg.PkgPath, modPath+"/")) {
+				reason := ""
+				if len(pkg.Errors) > 0 {
+					reason = pkg.Errors[0].Msg
+				}
+				e.skipped = append(e.skipped, SkippedPackage{Package: pkg.PkgPath, Reason: reason})
 			}
 			continue
 		}
@@ -688,6 +712,55 @@ func (e *Engine) findModuleRoot(startPath string) (string, error) {
 	}
 
 	return "", fmt.Errorf("no go.mod found in %s or any parent directory", startPath)
+}
+
+// moduleImportPath returns the analyzed module's import path (e.g.
+// "github.com/antst/go-apispec") read from the go.mod at the module root, or
+// "" when it can't be determined. Used to distinguish in-module packages from
+// third-party ones when reporting skipped packages.
+func (e *Engine) moduleImportPath() string {
+	if e.config == nil || e.config.moduleRoot == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(e.config.moduleRoot, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	return modulePathFromGoMod(data)
+}
+
+// modulePathFromGoMod extracts the module path from go.mod contents by scanning
+// for the first `module <path>` directive, skipping comments.
+func modulePathFromGoMod(data []byte) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		rest, ok := strings.CutPrefix(line, "module")
+		if !ok || rest == "" || (rest[0] != ' ' && rest[0] != '\t') {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		if i := strings.Index(rest, "//"); i >= 0 {
+			rest = strings.TrimSpace(rest[:i])
+		}
+		return strings.Trim(rest, "\"`")
+	}
+	return ""
+}
+
+// SkippedPackages returns the in-module packages excluded from the most recent
+// analysis because they failed to type-check. A non-empty result means the
+// spec is likely incomplete — usually the project doesn't build (e.g. an
+// unresolved/private dependency).
+func (e *Engine) SkippedPackages() []SkippedPackage {
+	if len(e.skipped) == 0 {
+		return nil
+	}
+	out := make([]SkippedPackage, len(e.skipped))
+	copy(out, e.skipped)
+	return out
 }
 
 // matchesPattern checks if a path matches a gitignore-style pattern
