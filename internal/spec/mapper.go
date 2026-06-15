@@ -1186,21 +1186,22 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			}
 		}
 
-		// Apply validation constraints to the schema
+		// Required inference composes (issue #48): a field is required by Go
+		// default when its json tag has no omitempty (the zero value is always
+		// serialized), and a `validate:"required"` constraint forces it. A
+		// validate tag *without* required (e.g. `oneof=...`, `min=0`) must add
+		// its constraints without suppressing the omitempty-based inference —
+		// the previous either/else silently dropped such fields from required.
+		fieldTag := getStringFromPool(meta, field.Tag)
+		required := !hasOmitempty(fieldTag)
 		if validationConstraints != nil {
 			applyValidationConstraints(fieldSchema, validationConstraints)
-
-			// Add to required fields if marked as required
 			if validationConstraints.Required {
-				schema.Required = append(schema.Required, fieldName)
+				required = true
 			}
-		} else {
-			// Fields without omitempty and without a "-" json tag are required
-			// by default in Go (zero-value is always serialized).
-			fieldTag := getStringFromPool(meta, field.Tag)
-			if !hasOmitempty(fieldTag) {
-				schema.Required = append(schema.Required, fieldName)
-			}
+		}
+		if required {
+			schema.Required = append(schema.Required, fieldName)
 		}
 
 		// `apispec:"..."` is the user's explicit override — applied last so it
@@ -2331,11 +2332,34 @@ func parseArraySize(sizeStr string) *int {
 // and splits it into summary (first sentence) and description (full text).
 // Returns empty strings if no comment is found.
 // lookupFuncComment searches a package for a function's doc comment.
-func lookupFuncComment(pkg *metadata.Package, funcName string, sp *metadata.StringPool) (string, string) {
+func lookupFuncComment(pkg *metadata.Package, funcName, recvType string, sp *metadata.StringPool) (string, string) {
 	for _, file := range pkg.Files {
+		// Free functions are recorded in file.Functions.
 		if fn, exists := file.Functions[funcName]; exists {
 			if comment := sp.GetString(fn.Comments); comment != "" {
 				return splitDocComment(comment)
+			}
+		}
+		// Method handlers live on their receiver type, not in file.Functions —
+		// resolve the comment via the type's method records. recvType (the
+		// handler's receiver) is matched case-insensitively because the function
+		// path renders it lower-cased ("handler"), while the type is "Handler";
+		// an empty recvType (free-function route) matches no type, so the scan
+		// is a no-op there.
+		if recvType == "" {
+			continue
+		}
+		for _, typ := range file.Types {
+			if !strings.EqualFold(sp.GetString(typ.Name), recvType) {
+				continue
+			}
+			for i := range typ.Methods {
+				if sp.GetString(typ.Methods[i].Name) != funcName {
+					continue
+				}
+				if comment := sp.GetString(typ.Methods[i].Comments); comment != "" {
+					return splitDocComment(comment)
+				}
 			}
 		}
 	}
@@ -2365,10 +2389,24 @@ func extractDocComment(route *RouteInfo) (summary, description string) {
 	funcName, pkgPrefix := parseFuncNameAndPackage(route.Function)
 	sp := route.Metadata.StringPool
 
+	// For a method handler the receiver type follows the TypeSep in the
+	// function path (e.g. ".../echo-->handler.GetUsers" -> "handler"); used to
+	// resolve the method's doc comment off its type. The package path itself
+	// contains dots, so split on TypeSep first, then take the final dot-segment
+	// (handles "...-->main.deps.DocumentHandler").
+	recvType := pkgPrefix
+	if i := strings.LastIndex(recvType, TypeSep); i >= 0 {
+		recvType = recvType[i+len(TypeSep):]
+	}
+	if i := strings.LastIndex(recvType, "."); i >= 0 {
+		recvType = recvType[i+1:]
+	}
+	recvType = strings.TrimPrefix(recvType, "*")
+
 	// First pass: use route.Package if available (most precise).
 	if route.Package != "" {
 		if pkg, ok := route.Metadata.Packages[route.Package]; ok {
-			if s, d := lookupFuncComment(pkg, funcName, sp); s != "" || d != "" {
+			if s, d := lookupFuncComment(pkg, funcName, recvType, sp); s != "" || d != "" {
 				return s, d
 			}
 		}
@@ -2381,7 +2419,7 @@ func extractDocComment(route *RouteInfo) (summary, description string) {
 			if !strings.HasSuffix(pkgPrefix, pkgName) && !strings.HasSuffix(pkgName, pkgPrefix) {
 				continue
 			}
-			if s, d := lookupFuncComment(pkg, funcName, sp); s != "" || d != "" {
+			if s, d := lookupFuncComment(pkg, funcName, recvType, sp); s != "" || d != "" {
 				return s, d
 			}
 		}
@@ -2389,7 +2427,7 @@ func extractDocComment(route *RouteInfo) (summary, description string) {
 
 	// Fallback: search all packages (for cases where package prefix doesn't match)
 	for _, pkg := range route.Metadata.Packages {
-		if s, d := lookupFuncComment(pkg, funcName, sp); s != "" || d != "" {
+		if s, d := lookupFuncComment(pkg, funcName, recvType, sp); s != "" || d != "" {
 			return s, d
 		}
 	}

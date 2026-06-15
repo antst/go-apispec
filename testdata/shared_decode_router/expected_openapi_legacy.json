@@ -7,9 +7,6 @@
       "name": "Anton Starikov",
       "url": "https://github.com/antst/go-apispec",
       "email": "antst@gmail.com"
-    },
-    "license": {
-      "name": ""
     }
   },
   "paths": {
@@ -18,6 +15,7 @@
         "tags": [
           "/internal"
         ],
+        "summary": "Copy handles POST /internal/file/copy.",
         "operationId": "shared_decode_router/handlers.shared_decode_router.shared_decode_router.deps.DocumentHandler.Copy",
         "requestBody": {
           "content": {
@@ -50,6 +48,7 @@
         "tags": [
           "/internal"
         ],
+        "summary": "Update handles PATCH /internal/file/{id}.",
         "operationId": "shared_decode_router/handlers.shared_decode_router.shared_decode_router.deps.DocumentHandler.Update",
         "parameters": [
           {

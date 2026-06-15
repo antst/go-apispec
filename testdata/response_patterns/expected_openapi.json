@@ -7,9 +7,6 @@
       "name": "Anton Starikov",
       "url": "https://github.com/antst/go-apispec",
       "email": "antst@gmail.com"
-    },
-    "license": {
-      "name": ""
     }
   },
   "paths": {
@@ -794,7 +791,8 @@
         },
         "required": [
           "name",
-          "emails"
+          "emails",
+          "tags"
         ]
       },
       "response_patterns.PaginatedResponse": {
