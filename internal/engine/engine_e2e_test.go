@@ -74,6 +74,10 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "chi_recursive", inputDir: "../../testdata/chi_recursive", configFn: spec.DefaultChiConfig},
 		{name: "datetime_fields", inputDir: "../../testdata/datetime_fields", configFn: spec.DefaultHTTPConfig},
 		{name: "multipart_upload", inputDir: "../../testdata/multipart_upload", configFn: spec.DefaultHTTPConfig},
+		{name: "chi_middleware", inputDir: "../../testdata/chi_middleware", configFn: spec.DefaultChiConfig},
+		{name: "status_codes", inputDir: "../../testdata/status_codes", configFn: spec.DefaultChiConfig},
+		{name: "nested_dto", inputDir: "../../testdata/nested_dto", configFn: spec.DefaultHTTPConfig},
+		{name: "xml_text_response", inputDir: "../../testdata/xml_text_response", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
