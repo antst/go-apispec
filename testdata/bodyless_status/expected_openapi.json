@@ -7,14 +7,13 @@
       "name": "Anton Starikov",
       "url": "https://github.com/antst/go-apispec",
       "email": "antst@gmail.com"
-    },
-    "license": {
-      "name": ""
     }
   },
   "paths": {
     "/document/{id}": {
       "get": {
+        "summary": "GetDocument has four branches landing on four distinct status codes:\n\n\t?slow=1     → 102 Processing                  (bodyless 1xx)\n\t?delete=1   → 204 No Content                  (bodyless)\n\tmatching ETag → 304 Not Modified              (bodyless)\n\tdefault     → 200 OK with octet-stream body   (body-bearing control)\n\nThe default branch also calls Header().Set(\"Content-Type\", ...) to exercise\nthe route-level content-type detection.",
+        "description": "GetDocument has four branches landing on four distinct status codes:\n\n\t?slow=1     → 102 Processing                  (bodyless 1xx)\n\t?delete=1   → 204 No Content                  (bodyless)\n\tmatching ETag → 304 Not Modified              (bodyless)\n\tdefault     → 200 OK with octet-stream body   (body-bearing control)\n\nThe default branch also calls Header().Set(\"Content-Type\", ...) to exercise\nthe route-level content-type detection. Before the issue #33 fix, that\ndetected content-type would leak onto the 1xx/204/304 entries via the\nmapper's unconditional Content emission.",
         "operationId": "Handler.GetDocument",
         "parameters": [
           {

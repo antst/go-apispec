@@ -127,6 +127,30 @@ func other() {
 	require.Equal(t, []string{"A"}, fieldNames, "package-level Conf not shadowed by local Conf")
 }
 
+// TestMethodDocCommentsCaptured covers issue #45: doc comments on method
+// declarations are captured into the type's Method records (previously
+// processFunctions skipped methods, so method handler summaries were empty).
+func TestMethodDocCommentsCaptured(t *testing.T) {
+	meta := metaFromModule(t, map[string]interface{}{
+		"h.go": `package app
+
+type Handler struct{}
+
+// GetUser returns a user by ID.
+func (h *Handler) GetUser() {}
+`,
+	})
+	typ := findType(meta, "app", "Handler")
+	require.NotNil(t, typ)
+	var got string
+	for _, m := range typ.Methods {
+		if meta.StringPool.GetString(m.Name) == "GetUser" {
+			got = meta.StringPool.GetString(m.Comments)
+		}
+	}
+	require.Contains(t, got, "returns a user by ID")
+}
+
 // TestProcessLocalTypes_CrossFileShadow verifies the shadow guard is
 // package-scoped: a function-local type in one file must not overwrite a
 // package-level type of the same name declared in a *different* file (the

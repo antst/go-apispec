@@ -7,9 +7,6 @@
       "name": "Anton Starikov",
       "url": "https://github.com/antst/go-apispec",
       "email": "antst@gmail.com"
-    },
-    "license": {
-      "name": ""
     }
   },
   "paths": {
@@ -60,6 +57,7 @@
         "tags": [
           "/v1/users"
         ],
+        "summary": "GetUsers returns a list of users using the UserService interface.",
         "operationId": "github.com/antst/go-apispec/testdata/echo.handler.GetUsers",
         "responses": {
           "200": {
@@ -81,6 +79,7 @@
         "tags": [
           "/v1/users"
         ],
+        "summary": "CreateUser creates a new user.",
         "operationId": "github.com/antst/go-apispec/testdata/echo.handler.CreateUser",
         "requestBody": {
           "content": {
@@ -137,6 +136,7 @@
         "tags": [
           "/v1/users"
         ],
+        "summary": "GetUser returns a single user by ID.",
         "operationId": "github.com/antst/go-apispec/testdata/echo.handler.GetUser",
         "parameters": [
           {
@@ -188,6 +188,7 @@
         "tags": [
           "/v1/users"
         ],
+        "summary": "UpdateUser updates an existing user.",
         "operationId": "github.com/antst/go-apispec/testdata/echo.handler.UpdateUser",
         "parameters": [
           {
@@ -259,6 +260,7 @@
         "tags": [
           "/v1/users"
         ],
+        "summary": "DeleteUser deletes a user by ID.",
         "operationId": "github.com/antst/go-apispec/testdata/echo.handler.DeleteUser",
         "parameters": [
           {
@@ -326,7 +328,8 @@
           }
         },
         "required": [
-          "name"
+          "name",
+          "age"
         ]
       },
       "github.com_antst_go-apispec_testdata_echo.ErrorResponse": {

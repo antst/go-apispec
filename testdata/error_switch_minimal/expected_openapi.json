@@ -7,14 +7,13 @@
       "name": "Anton Starikov",
       "url": "https://github.com/antst/go-apispec",
       "email": "antst@gmail.com"
-    },
-    "license": {
-      "name": ""
     }
   },
   "paths": {
     "/documents/{id}/content": {
       "put": {
+        "summary": "ReplaceContent is the buggy shape: 422 has both a helper-write AND a\nstruct-method-write.",
+        "description": "ReplaceContent is the buggy shape: 422 has both a helper-write AND a\nstruct-method-write. Pre-fix, RejectedContentResponse leaks to 400.",
         "operationId": "Handler.ReplaceContent",
         "parameters": [
           {

@@ -1992,6 +1992,11 @@ func (o *OverrideApplierImpl) ApplyOverrides(routeInfo *RouteInfo) {
 			if override.Summary != "" {
 				routeInfo.Summary = override.Summary
 			}
+			// Description was parsed from config but never applied (issue #46);
+			// a config override wins over the doc-comment-derived description.
+			if override.Description != "" {
+				routeInfo.Description = override.Description
+			}
 			if res, exists := routeInfo.Response[fmt.Sprintf("%d", override.ResponseStatus)]; exists && override.ResponseStatus != 0 && routeInfo.Response != nil {
 				res.StatusCode = override.ResponseStatus
 			}

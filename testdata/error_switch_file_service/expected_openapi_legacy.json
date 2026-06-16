@@ -7,14 +7,12 @@
       "name": "Anton Starikov",
       "url": "https://github.com/antst/go-apispec",
       "email": "antst@gmail.com"
-    },
-    "license": {
-      "name": ""
     }
   },
   "paths": {
     "/documents/{id}/content": {
       "put": {
+        "summary": "ReplaceContent: PUT /documents/{id}/content — the full file-service shape.",
         "operationId": "github.com/antst/go-apispec/testdata/error_switch_file_service.DocumentHandler.ReplaceContent",
         "parameters": [
           {
