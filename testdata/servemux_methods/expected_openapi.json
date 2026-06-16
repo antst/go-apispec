@@ -7,9 +7,6 @@
       "name": "Anton Starikov",
       "url": "https://github.com/antst/go-apispec",
       "email": "antst@gmail.com"
-    },
-    "license": {
-      "name": ""
     }
   },
   "paths": {
@@ -51,6 +48,8 @@
     },
     "/matrix/check-room": {
       "post": {
+        "summary": "handleCheckRoom decodes the body into dto.CheckRoomHTTPRequest, talks to\nan internal RPC layer (whose Request/Response types share a confusing\n\"CheckRoom\" prefix with the HTTP ones), and writes back the\ndto.CheckRoomHTTPResponse.",
+        "description": "handleCheckRoom decodes the body into dto.CheckRoomHTTPRequest, talks to\nan internal RPC layer (whose Request/Response types share a confusing\n\"CheckRoom\" prefix with the HTTP ones), and writes back the\ndto.CheckRoomHTTPResponse. The bug surfaces when apispec follows the\ntype tracer through the RPC variables and reports CheckRoomResponse as\nthe request body.",
         "operationId": "CheckRoomHandler.handleCheckRoom",
         "requestBody": {
           "content": {
