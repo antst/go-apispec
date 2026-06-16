@@ -1,0 +1,234 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/api/v1/articles/": {
+      "get": {
+        "tags": [
+          "/api/v1/articles"
+        ],
+        "summary": "listArticles returns a paginated, optionally tag-filtered list.",
+        "operationId": "gin_groups.listArticles",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/gin_groups.ArticleList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "/api/v1/articles"
+        ],
+        "summary": "createArticle creates a new article from the JSON body.",
+        "operationId": "gin_groups.createArticle",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/gin_groups.Article"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/gin_groups.Article"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/gin.H"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/articles/{id}": {
+      "get": {
+        "tags": [
+          "/api/v1/articles"
+        ],
+        "summary": "getArticle returns a single article by id.",
+        "operationId": "gin_groups.getArticle",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/gin_groups.Article"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "/api/v1/articles"
+        ],
+        "summary": "deleteArticle removes an article.",
+        "operationId": "gin_groups.deleteArticle",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "Default response (no response found)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "gin.H": {
+        "type": "object"
+      },
+      "gin_groups.Article": {
+        "type": "object",
+        "properties": {
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "featured": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/gin_groups.Tag"
+            }
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "authors",
+          "tags",
+          "featured"
+        ]
+      },
+      "gin_groups.ArticleList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/gin_groups.Article"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "page",
+          "total"
+        ]
+      },
+      "gin_groups.Tag": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ]
+      }
+    }
+  }
+}

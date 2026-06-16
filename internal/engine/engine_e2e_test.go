@@ -65,6 +65,15 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "bodyless_status", inputDir: "../../testdata/bodyless_status", configFn: spec.DefaultHTTPConfig},
 		{name: "wrapped_response", inputDir: "../../testdata/wrapped_response", configFn: spec.DefaultHTTPConfig},
 		{name: "echo_handler_factory", inputDir: "../../testdata/echo_handler_factory", configFn: spec.DefaultEchoConfig},
+		// Corpus-expansion batch: router diversity + uncovered scenarios.
+		{name: "gin_groups", inputDir: "../../testdata/gin_groups", configFn: spec.DefaultGinConfig},
+		{name: "fiber_resource", inputDir: "../../testdata/fiber_resource", configFn: spec.DefaultFiberConfig},
+		{name: "echo_enums", inputDir: "../../testdata/echo_enums", configFn: spec.DefaultEchoConfig},
+		{name: "mux_subrouter", inputDir: "../../testdata/mux_subrouter", configFn: spec.DefaultMuxConfig},
+		{name: "complex_chi_router", inputDir: "../../testdata/complex_chi_router", configFn: spec.DefaultChiConfig},
+		{name: "chi_recursive", inputDir: "../../testdata/chi_recursive", configFn: spec.DefaultChiConfig},
+		{name: "datetime_fields", inputDir: "../../testdata/datetime_fields", configFn: spec.DefaultHTTPConfig},
+		{name: "multipart_upload", inputDir: "../../testdata/multipart_upload", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
