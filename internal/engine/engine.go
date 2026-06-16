@@ -557,10 +557,11 @@ func (e *Engine) applyConfigDefaults(apispecConfig *spec.APISpecConfig) {
 			Email: e.config.ContactEmail,
 		}
 	}
-	// Only emit a license block when one is actually configured — otherwise the
-	// pointer stays nil and omitempty drops it, instead of producing a
-	// meaningless `license: {name: ""}` (issue #47).
-	if apispecConfig.Info.License == nil && (e.config.LicenseName != "" || e.config.LicenseURL != "") {
+	// Only emit a license block when a license NAME is configured (issue #47):
+	// the pointer otherwise stays nil and omitempty drops it. OpenAPI requires
+	// license.name, so a URL without a name can't form a valid block — gate on
+	// the name alone (URL remains an optional addition).
+	if apispecConfig.Info.License == nil && e.config.LicenseName != "" {
 		apispecConfig.Info.License = &intspec.License{
 			Name: e.config.LicenseName,
 			URL:  e.config.LicenseURL,
