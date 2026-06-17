@@ -522,19 +522,11 @@ func (r *RequestPatternMatcherImpl) GetPriority() int {
 
 // ExtractRequest extracts request information from a matched node
 func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, route *RouteInfo) *RequestInfo {
-	// For chained Decode calls (e.g., json.NewDecoder(r.Body).Decode(&user)),
-	// check if the parent call's first argument is r.Body. If not, this isn't
-	// a request body decode and should be skipped.
+	// Reject decode calls that don't actually read the HTTP request body
+	// (wrong decoder source, or an unrelated arg-sourced json.Unmarshal).
 	edge := node.GetEdge()
-	if edge != nil && edge.ChainParent != nil {
-		parentName := r.contextProvider.GetString(edge.ChainParent.Callee.Name)
-		if parentName == "NewDecoder" && len(edge.ChainParent.Args) > 0 {
-			parentArg := r.contextProvider.GetArgumentInfo(edge.ChainParent.Args[0])
-			// Only accept r.Body or request.Body as the decoder source
-			if !strings.Contains(parentArg, "Body") {
-				return nil
-			}
-		}
+	if !r.decodeReadsRequestBody(node, edge) {
+		return nil
 	}
 
 	reqInfo := &RequestInfo{
@@ -610,6 +602,102 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 	}
 
 	return reqInfo
+}
+
+// decodeReadsRequestBody reports whether a matched decode call actually reads
+// the HTTP request body, filtering out two false positives:
+//
+//   - a chained json.NewDecoder(x).Decode(&v) whose decoder source x isn't
+//     r.Body (the parent call's first arg); and
+//   - an arg-sourced decode — json.Unmarshal(data, &v), render.DecodeJSON(r, &v)
+//     — whose data argument doesn't trace to the request. Otherwise an unrelated
+//     json.Unmarshal reachable deep in the handler's call graph (e.g. a DB-column
+//     parse) is misattributed as the request body and, depending on call-graph
+//     map ordering, flaps run-to-run (issue #52).
+func (r *RequestPatternMatcherImpl) decodeReadsRequestBody(node TrackerNodeInterface, edge *metadata.CallGraphEdge) bool {
+	if edge == nil {
+		return true
+	}
+	if edge.ChainParent != nil {
+		parentName := r.contextProvider.GetString(edge.ChainParent.Callee.Name)
+		if parentName == "NewDecoder" && len(edge.ChainParent.Args) > 0 {
+			parentArg := r.contextProvider.GetArgumentInfo(edge.ChainParent.Args[0])
+			if !strings.Contains(parentArg, "Body") {
+				return false
+			}
+		}
+	}
+	if r.pattern.TypeFromArg && r.pattern.TypeArgIndex >= 1 && len(edge.Args) > r.pattern.TypeArgIndex {
+		if !r.decodeSourceTracesToRequest(node, edge.Args[r.pattern.TypeArgIndex-1]) {
+			return false
+		}
+	}
+	return true
+}
+
+// decodeSourceTracesToRequest reports whether a decode call's data-source
+// argument is, or derives from, the HTTP request — directly (r.Body, a
+// *http.Request value), or via a local assignment within the decode's own
+// function (e.g. b := io.ReadAll(r.Body); json.Unmarshal(b, &v)). It rejects
+// decodes of unrelated data — e.g. a DB-column json.Unmarshal reachable deep in
+// the handler's call graph — that would otherwise be misinferred as the request
+// body (issue #52).
+func (r *RequestPatternMatcherImpl) decodeSourceTracesToRequest(node TrackerNodeInterface, src *metadata.CallArgument) bool {
+	if src == nil {
+		return true // nothing to validate
+	}
+	if argReferencesRequest(src) {
+		return true
+	}
+	// The source is a local/param ident: accept when it's assigned from the
+	// request body within the decode's own function.
+	if src.GetKind() != metadata.KindIdent || node == nil {
+		return false
+	}
+	edge := node.GetEdge()
+	if edge == nil {
+		return false
+	}
+	meta := metadataFromContextProvider(r.contextProvider)
+	if meta == nil {
+		return false
+	}
+	fn := findFunction(meta, meta.StringPool.GetString(edge.Caller.Pkg), meta.StringPool.GetString(edge.Caller.Name))
+	if fn == nil {
+		return false
+	}
+	assigns := fn.AssignmentMap[src.GetName()]
+	for i := range assigns {
+		if argReferencesRequest(&assigns[i].Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// argReferencesRequest walks a CallArgument expression tree looking for a
+// reference to the HTTP request or its body: a `.Body` selector (r.Body,
+// request.Body) or a value typed `*http.Request`/`http.Request`. Recurses
+// through call expressions so io.ReadAll(r.Body) and similar are recognised.
+func argReferencesRequest(arg *metadata.CallArgument) bool {
+	if arg == nil {
+		return false
+	}
+	if t := arg.GetType(); strings.Contains(t, "http.Request") {
+		return true
+	}
+	if arg.GetKind() == metadata.KindSelector && arg.Sel != nil && arg.Sel.GetName() == "Body" {
+		return true
+	}
+	if argReferencesRequest(arg.X) || argReferencesRequest(arg.Fun) || argReferencesRequest(arg.Sel) {
+		return true
+	}
+	for _, a := range arg.Args {
+		if argReferencesRequest(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // refineBodyTypeThroughHelper resolves a decode that lives in an extracted

@@ -65,6 +65,9 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "bodyless_status", inputDir: "../../testdata/bodyless_status", configFn: spec.DefaultHTTPConfig},
 		{name: "wrapped_response", inputDir: "../../testdata/wrapped_response", configFn: spec.DefaultHTTPConfig},
 		{name: "echo_handler_factory", inputDir: "../../testdata/echo_handler_factory", configFn: spec.DefaultEchoConfig},
+		// Regression for #52: a multipart handler must not get a request body
+		// inferred from an unrelated json.Unmarshal deep in its call graph.
+		{name: "multipart_overreach", inputDir: "../../testdata/multipart_overreach", configFn: spec.DefaultChiConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
@@ -1216,6 +1219,47 @@ func TestGolden_AllFrameworks_Legacy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := generateGoldenSpec(t, tc, true)
 			compareGolden(t, tc, true, got)
+		})
+	}
+}
+
+// TestGolden_Deterministic regenerates every fixture's spec several times in a
+// fresh engine and asserts byte-identical output across runs. Go randomises map
+// iteration order on each range, so successive in-process generations exercise
+// different orderings — catching non-deterministic inference (e.g. the
+// map-ordering-dependent request-body attribution of issue #52) that would
+// otherwise silently break the "identical output across runs" guarantee that
+// downstream CI staleness gates depend on. Both the default and legacy snapshots
+// are covered, since both are part of the golden-regression CI contract.
+func TestGolden_Deterministic(t *testing.T) {
+	const runs = 5
+	assertStable := func(t *testing.T, tc frameworkTestCase, legacy bool) {
+		t.Helper()
+		mode := "default"
+		if legacy {
+			mode = "legacy"
+		}
+		first := string(generateGoldenSpec(t, tc, legacy))
+		for i := 2; i <= runs; i++ {
+			got := string(generateGoldenSpec(t, tc, legacy))
+			if got == first {
+				continue
+			}
+			fl := strings.Split(first, "\n")
+			gl := strings.Split(got, "\n")
+			for j := 0; j < len(fl) && j < len(gl); j++ {
+				if fl[j] != gl[j] {
+					t.Fatalf("non-deterministic %s output for %s on run %d, first diff at line %d:\n  run 1: %s\n  run %d: %s",
+						mode, tc.name, i, j+1, fl[j], i, gl[j])
+				}
+			}
+			t.Fatalf("non-deterministic %s output for %s on run %d: %d lines vs %d lines", mode, tc.name, i, len(fl), len(gl))
+		}
+	}
+	for _, tc := range allFrameworks(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			assertStable(t, tc, false)
+			assertStable(t, tc, true)
 		})
 	}
 }
