@@ -1,0 +1,11 @@
+# CodeRabbit configuration.
+#
+# testdata/ holds generated OpenAPI golden files and minimal fixture programs.
+# The goldens are byte-verified by the deterministic golden tests
+# (TestGolden_AllFrameworks / TestGolden_Deterministic), so they don't need an
+# AI review — and at ~150 files they push PRs past CodeRabbit's file limit and
+# cause the whole review to be skipped. Exclude them so CodeRabbit focuses on
+# the analyzer code and tests.
+reviews:
+  path_filters:
+    - "!testdata/**"

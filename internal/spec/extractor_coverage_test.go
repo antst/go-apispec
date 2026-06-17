@@ -787,6 +787,29 @@ func TestDetermineLiteralType(t *testing.T) {
 // 8. convertPathToOpenAPI
 // ---------------------------------------------------------------------------
 
+func TestQualifyElementType(t *testing.T) {
+	tests := []struct {
+		valueType string
+		pkg       string
+		expected  string
+	}{
+		{"Money", "gap.", "gap.Money"},
+		{"[]Money", "gap.", "[]gap.Money"},
+		{"*Money", "gap.", "*gap.Money"},
+		{"[]*Money", "gap.", "[]*gap.Money"},
+		{"[][]Money", "gap.", "[][]gap.Money"}, // nested slice → qualify base
+		{"string", "gap.", "string"},           // primitive untouched
+		{"int", "gap.", "int"},                 // primitive untouched
+		{"[][]int", "gap.", "[][]int"},         // nested slice of primitive untouched
+		{"other.T", "gap.", "other.T"},         // already qualified untouched
+		{"[]string", "gap.", "[]string"},       // slice of primitive untouched
+		{"", "gap.", ""},                       // empty untouched
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.expected, qualifyElementType(tt.valueType, tt.pkg), "valueType=%q", tt.valueType)
+	}
+}
+
 func TestConvertPathToOpenAPI(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -804,6 +827,16 @@ func TestConvertPathToOpenAPI(t *testing.T) {
 		{"", ""},
 		// Param with underscore
 		{"/items/:item_id", "/items/{item_id}"},
+		// gorilla/mux regex constraints — regex stripped, name kept
+		{"/items/{id:[0-9]+}", "/items/{id}"},
+		{"/items/by-slug/{slug:[a-z-]+}", "/items/by-slug/{slug}"},
+		// regex containing brace quantifiers (cut at the first colon)
+		{"/codes/{code:[0-9]{3}}", "/codes/{code}"},
+		// Go 1.22 ServeMux trailing wildcard
+		{"/files/{path...}", "/files/{path}"},
+		// Go 1.22 ServeMux end-of-path anchor — segment dropped
+		{"/exact/{$}", "/exact"},
+		{"/{$}", "/"},
 	}
 
 	for _, tt := range tests {

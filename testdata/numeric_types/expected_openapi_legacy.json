@@ -1,0 +1,84 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/metrics": {
+      "get": {
+        "operationId": "numeric_types.getMetrics",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/numeric_types.Metrics"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "numeric_types.Metrics": {
+        "type": "object",
+        "properties": {
+          "byteVal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "count": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "huge": {
+            "type": "integer"
+          },
+          "large": {
+            "type": "integer"
+          },
+          "medium": {
+            "type": "integer"
+          },
+          "precise": {
+            "type": "number"
+          },
+          "ratio": {
+            "type": "number"
+          },
+          "small": {
+            "type": "integer"
+          },
+          "unsigned": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "count",
+          "small",
+          "medium",
+          "large",
+          "huge",
+          "unsigned",
+          "byteVal",
+          "ratio",
+          "precise",
+          "enabled"
+        ]
+      }
+    }
+  }
+}

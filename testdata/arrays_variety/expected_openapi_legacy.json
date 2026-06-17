@@ -1,0 +1,85 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/dataset": {
+      "get": {
+        "operationId": "arrays_variety.getDataset",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/arrays_variety.Dataset"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "arrays_variety.Dataset": {
+        "type": "object",
+        "properties": {
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ptrTags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/arrays_variety.Tag"
+            }
+          },
+          "scores": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/arrays_variety.Tag"
+            }
+          }
+        },
+        "required": [
+          "names",
+          "scores",
+          "tags",
+          "ptrTags"
+        ]
+      },
+      "arrays_variety.Tag": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ]
+      }
+    }
+  }
+}

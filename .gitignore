@@ -67,3 +67,11 @@ testdata/error_switch_file_service/error_switch_file_service
 testdata/bodyless_status/bodyless_status
 testdata/multipart_overreach/multipart_overreach
 testdata/binary_response_overreach/binary_response_overreach
+testdata/mux_regex_path/mux_regex_path
+testdata/servemux_wildcards/servemux_wildcards
+testdata/chi_validation/chi_validation
+testdata/map_struct_values/map_struct_values
+testdata/nested_arrays/nested_arrays
+testdata/embedded_structs/embedded_structs
+testdata/generic_response_wrapper/generic_response_wrapper
+testdata/mux_queries/mux_queries

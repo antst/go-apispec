@@ -1,0 +1,101 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/points": {
+      "get": {
+        "summary": "listPoints returns an array response.",
+        "operationId": "github.com/antst/go-apispec/testdata/gin_arrays.listPoints",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_gin_arrays.Point"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/points/bulk": {
+      "post": {
+        "summary": "bulkCreate accepts an array body ([]Point) and returns the created array.",
+        "operationId": "github.com/antst/go-apispec/testdata/gin_arrays.bulkCreate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_gin_arrays.Point"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_gin_arrays.Point"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_gin-gonic_gin.H"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "github.com_antst_go-apispec_testdata_gin_arrays.Point": {
+        "type": "object",
+        "properties": {
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ]
+      },
+      "github.com_gin-gonic_gin.H": {
+        "type": "object"
+      }
+    }
+  }
+}

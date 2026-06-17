@@ -1,0 +1,126 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/people": {
+      "post": {
+        "operationId": "nested_dto.createPerson",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/nested_dto.Person"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/nested_dto.Person"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "text/plain; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "nested_dto.Address": {
+        "type": "object",
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "coords": {
+            "$ref": "#/components/schemas/nested_dto.GeoPoint"
+          },
+          "street": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "street",
+          "city",
+          "coords"
+        ]
+      },
+      "nested_dto.Company": {
+        "type": "object",
+        "properties": {
+          "hq": {
+            "$ref": "#/components/schemas/nested_dto.Address"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "hq"
+        ]
+      },
+      "nested_dto.GeoPoint": {
+        "type": "object",
+        "properties": {
+          "lat": {
+            "type": "number"
+          },
+          "lng": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat",
+          "lng"
+        ]
+      },
+      "nested_dto.Person": {
+        "type": "object",
+        "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/nested_dto.Address"
+            }
+          },
+          "employer": {
+            "$ref": "#/components/schemas/nested_dto.Company"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "employer",
+          "addresses"
+        ]
+      }
+    }
+  }
+}

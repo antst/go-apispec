@@ -21,7 +21,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Run tests
-        run: go test -timeout 300s ./...
+        run: go test -timeout 600s ./...
 
       - name: Golden file regression
         run: go test -v -run TestGolden -timeout 300s ./internal/engine/

@@ -1429,6 +1429,11 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 		route.Params = append(route.Params, *param)
 	}
 
+	// Query parameters declared on a gorilla/mux builder chain
+	// (.HandleFunc(...).Queries("q", "{q}")) sit on sibling nodes, not in the
+	// handler body, so extract them from the route registration itself.
+	e.extractMuxQueriesParams(routeNode, route)
+
 	// Look for Authorization-header reads transitively from the handler
 	// function and infer the matching OpenAPI security scheme. Uses the
 	// call-graph caller index directly because the tracker tree's
@@ -1438,6 +1443,65 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 	// now use a securityScheme.
 	if scheme := detectSecuritySchemeFromHandler(route); scheme != nil {
 		route.SecurityScheme = scheme
+	}
+}
+
+// baseTypeName reduces a (possibly pointer-qualified, package-qualified) type
+// string to its bare type name: "github.com/gorilla/mux.*Route" → "Route",
+// "*Router" → "Router". Used for exact receiver-type matching so a substring
+// like "Route" doesn't also match "Router"/"RouterGroup".
+func baseTypeName(typeStr string) string {
+	typeStr = strings.ReplaceAll(typeStr, "*", "")
+	if i := strings.LastIndexAny(typeStr, "./"); i >= 0 {
+		typeStr = typeStr[i+1:]
+	}
+	return typeStr
+}
+
+// extractMuxQueriesParams adds query parameters declared on a gorilla/mux route
+// builder chain — r.HandleFunc(path, h).Queries("q", "{q}", "page", "{page}")
+// registers query params q and page. The .Queries call is a sibling of the
+// route registration node within the same chain (so sibling routes don't leak);
+// its even-indexed args are the parameter keys (odd args are "{var}" value
+// templates). Gated on a *Route receiver so an unrelated method named Queries
+// can't inject phantom params.
+func (e *Extractor) extractMuxQueriesParams(routeNode TrackerNodeInterface, route *RouteInfo) {
+	if routeNode == nil {
+		return
+	}
+	parent := routeNode.GetParent()
+	if parent == nil {
+		return
+	}
+	existing := map[string]bool{}
+	for _, p := range route.Params {
+		if p.In == "query" {
+			existing[p.Name] = true
+		}
+	}
+	for _, sib := range parent.GetChildren() {
+		edge := sib.GetEdge()
+		if edge == nil || e.contextProvider.GetString(edge.Callee.Name) != "Queries" {
+			continue
+		}
+		if baseTypeName(e.contextProvider.GetString(edge.Callee.RecvType)) != "Route" {
+			continue
+		}
+		for i := 0; i < len(edge.Args); i += 2 {
+			name := strings.Trim(e.contextProvider.GetArgumentInfo(edge.Args[i]), `"'{} `)
+			if name == "" || existing[name] {
+				continue
+			}
+			existing[name] = true
+			route.Params = append(route.Params, Parameter{
+				Name: name,
+				In:   "query",
+				// A gorilla/mux route with .Queries only matches when the key is
+				// present, so the parameter is required.
+				Required: true,
+				Schema:   &Schema{Type: "string"},
+			})
+		}
 	}
 }
 
@@ -1743,12 +1807,18 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 			bodyType = conversionTargetType
 		}
 
-		// Preserve generic type from the argument's raw type info.
-		// When the arg type is a generic instantiation (e.g., "APIResponse[pkg.User]"),
-		// use it instead of the resolved type which may lose the wrapper.
+		// Preserve generic type from the argument's raw type info. When the arg
+		// type is a generic instantiation (e.g. "APIResponse[pkg.User]") it
+		// carries the wrapper the resolved type may have lost. But for a generic
+		// composite literal (APIResponse[User]{…}), GetArgumentInfo already
+		// reconstructed the *bound* form while arg.Type is still the unbound
+		// declaration "APIResponse[T any]" — so only fall back to rawArgType when
+		// bodyType isn't already a bound (concrete-arg) generic instantiation.
 		rawArgType := r.contextProvider.GetString(arg.Type)
 		if strings.Contains(rawArgType, "[") && !strings.HasPrefix(rawArgType, "[]") && !strings.HasPrefix(rawArgType, "map[") {
-			bodyType = rawArgType
+			if !genericArgsAreConcrete(bodyType) {
+				bodyType = rawArgType
+			}
 		}
 
 		// Check if this is a literal value - if so, determine appropriate type
