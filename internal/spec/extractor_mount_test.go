@@ -2660,6 +2660,56 @@ func TestGenerateStructSchema_BasicStruct(t *testing.T) {
 	_ = schemas
 }
 
+func TestExtractMuxQueriesParams(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+	e := &Extractor{contextProvider: NewContextProvider(meta)}
+
+	queriesEdge := makeEdge(meta, "main", "app", "Queries", "mux", []*metadata.CallArgument{
+		makeLiteralArg(meta, "q"), makeLiteralArg(meta, "{q}"),
+		makeLiteralArg(meta, "page"), makeLiteralArg(meta, "{page}"),
+	})
+	queriesEdge.Callee.RecvType = sp.Get("*Route")
+	handleEdge := makeEdge(meta, "main", "app", "HandleFunc", "mux", nil)
+
+	parent := &TrackerNode{}
+	routeNode := &TrackerNode{CallGraphEdge: &handleEdge, Parent: parent}
+	queriesNode := &TrackerNode{CallGraphEdge: &queriesEdge, Parent: parent}
+	parent.Children = []*TrackerNode{routeNode, queriesNode}
+
+	route := NewRouteInfo()
+	e.extractMuxQueriesParams(routeNode, route)
+
+	names := make([]string, 0, len(route.Params))
+	for _, p := range route.Params {
+		assert.Equal(t, "query", p.In)
+		assert.True(t, p.Required)
+		names = append(names, p.Name)
+	}
+	assert.ElementsMatch(t, []string{"q", "page"}, names)
+
+	// Re-running dedupes (existing query params aren't duplicated).
+	e.extractMuxQueriesParams(routeNode, route)
+	assert.Len(t, route.Params, 2)
+
+	// nil node and a parent-less node are no-ops.
+	e.extractMuxQueriesParams(nil, NewRouteInfo())
+	e.extractMuxQueriesParams(&TrackerNode{CallGraphEdge: &handleEdge}, NewRouteInfo())
+
+	// A .Queries on a non-Route receiver is ignored.
+	otherEdge := makeEdge(meta, "main", "app", "Queries", "other", []*metadata.CallArgument{
+		makeLiteralArg(meta, "x"), makeLiteralArg(meta, "{x}"),
+	})
+	otherEdge.Callee.RecvType = sp.Get("*Something")
+	p2 := &TrackerNode{}
+	rn2 := &TrackerNode{CallGraphEdge: &handleEdge, Parent: p2}
+	qn2 := &TrackerNode{CallGraphEdge: &otherEdge, Parent: p2}
+	p2.Children = []*TrackerNode{rn2, qn2}
+	r2 := NewRouteInfo()
+	e.extractMuxQueriesParams(rn2, r2)
+	assert.Empty(t, r2.Params)
+}
+
 func TestPromoteEmbeddedFields(t *testing.T) {
 	meta := newTestMeta()
 	sp := meta.StringPool

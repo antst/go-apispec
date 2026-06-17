@@ -74,3 +74,4 @@ testdata/map_struct_values/map_struct_values
 testdata/nested_arrays/nested_arrays
 testdata/embedded_structs/embedded_structs
 testdata/generic_response_wrapper/generic_response_wrapper
+testdata/mux_queries/mux_queries

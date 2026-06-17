@@ -1429,6 +1429,11 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 		route.Params = append(route.Params, *param)
 	}
 
+	// Query parameters declared on a gorilla/mux builder chain
+	// (.HandleFunc(...).Queries("q", "{q}")) sit on sibling nodes, not in the
+	// handler body, so extract them from the route registration itself.
+	e.extractMuxQueriesParams(routeNode, route)
+
 	// Look for Authorization-header reads transitively from the handler
 	// function and infer the matching OpenAPI security scheme. Uses the
 	// call-graph caller index directly because the tracker tree's
@@ -1438,6 +1443,53 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 	// now use a securityScheme.
 	if scheme := detectSecuritySchemeFromHandler(route); scheme != nil {
 		route.SecurityScheme = scheme
+	}
+}
+
+// extractMuxQueriesParams adds query parameters declared on a gorilla/mux route
+// builder chain — r.HandleFunc(path, h).Queries("q", "{q}", "page", "{page}")
+// registers query params q and page. The .Queries call is a sibling of the
+// route registration node within the same chain (so sibling routes don't leak);
+// its even-indexed args are the parameter keys (odd args are "{var}" value
+// templates). Gated on a *Route receiver so an unrelated method named Queries
+// can't inject phantom params.
+func (e *Extractor) extractMuxQueriesParams(routeNode TrackerNodeInterface, route *RouteInfo) {
+	if routeNode == nil {
+		return
+	}
+	parent := routeNode.GetParent()
+	if parent == nil {
+		return
+	}
+	existing := map[string]bool{}
+	for _, p := range route.Params {
+		if p.In == "query" {
+			existing[p.Name] = true
+		}
+	}
+	for _, sib := range parent.GetChildren() {
+		edge := sib.GetEdge()
+		if edge == nil || e.contextProvider.GetString(edge.Callee.Name) != "Queries" {
+			continue
+		}
+		if !strings.Contains(e.contextProvider.GetString(edge.Callee.RecvType), "Route") {
+			continue
+		}
+		for i := 0; i < len(edge.Args); i += 2 {
+			name := strings.Trim(e.contextProvider.GetArgumentInfo(edge.Args[i]), `"'{} `)
+			if name == "" || existing[name] {
+				continue
+			}
+			existing[name] = true
+			route.Params = append(route.Params, Parameter{
+				Name: name,
+				In:   "query",
+				// A gorilla/mux route with .Queries only matches when the key is
+				// present, so the parameter is required.
+				Required: true,
+				Schema:   &Schema{Type: "string"},
+			})
+		}
 	}
 }
 
