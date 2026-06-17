@@ -583,7 +583,9 @@
             "format": "email"
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 50
           }
         },
         "required": [
@@ -618,7 +620,8 @@
             "format": "email"
           },
           "password": {
-            "type": "string"
+            "type": "string",
+            "minLength": 6
           }
         },
         "required": [
@@ -676,10 +679,13 @@
             "format": "email"
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 50
           },
           "password": {
-            "type": "string"
+            "type": "string",
+            "minLength": 6
           }
         },
         "required": [
@@ -701,7 +707,9 @@
             "type": "string"
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 50
           },
           "status": {
             "type": "string",
@@ -735,7 +743,9 @@
             "maxLength": 16
           },
           "name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 50
           },
           "status": {
             "type": "string",

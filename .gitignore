@@ -69,3 +69,4 @@ testdata/multipart_overreach/multipart_overreach
 testdata/binary_response_overreach/binary_response_overreach
 testdata/mux_regex_path/mux_regex_path
 testdata/servemux_wildcards/servemux_wildcards
+testdata/chi_validation/chi_validation

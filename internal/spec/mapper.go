@@ -1502,6 +1502,25 @@ var validationPatternRules = map[string]string{ //nolint:gosec // not credential
 	"cron":        `^(\*|([0-5]?\d)) (\*|([01]?\d|2[0-3])) (\*|([012]?\d|3[01])) (\*|([0]?\d|1[0-2])) (\*|([0-6]))$`,
 }
 
+// applyBoundRule handles the value-bound validator rules min/max/gte/lte,
+// reporting whether rule matched one. The bound is stored numerically; on a
+// string/slice field applyValidationConstraints reinterprets it as a length.
+func applyBoundRule(rule string, constraints *ValidationConstraints) bool {
+	var dst **float64
+	switch {
+	case strings.HasPrefix(rule, "min="), strings.HasPrefix(rule, "gte="):
+		dst = &constraints.Min
+	case strings.HasPrefix(rule, "max="), strings.HasPrefix(rule, "lte="):
+		dst = &constraints.Max
+	default:
+		return false
+	}
+	if val, err := strconv.ParseFloat(rule[strings.IndexByte(rule, '=')+1:], 64); err == nil {
+		*dst = &val
+	}
+	return true
+}
+
 // applyValidationRule applies a single validation rule to constraints
 func applyValidationRule(rule string, constraints *ValidationConstraints) {
 	switch {
@@ -1509,14 +1528,8 @@ func applyValidationRule(rule string, constraints *ValidationConstraints) {
 		constraints.Dive = true
 	case rule == "required":
 		constraints.Required = true
-	case strings.HasPrefix(rule, "min="):
-		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "min=")); err == nil {
-			constraints.Min = &[]float64{float64(val)}[0]
-		}
-	case strings.HasPrefix(rule, "max="):
-		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "max=")); err == nil {
-			constraints.Max = &[]float64{float64(val)}[0]
-		}
+	case applyBoundRule(rule, constraints):
+		// handled: min/max/gte/lte value bounds
 	case strings.HasPrefix(rule, "len="):
 		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "len=")); err == nil {
 			constraints.MinLength = &val
@@ -1654,13 +1667,21 @@ func applyValidationConstraints(schema *Schema, constraints *ValidationConstrain
 		return
 	}
 
-	// Apply string length constraints (only for string types)
+	// Apply string length constraints (only for string types). On a string
+	// field the value bounds min/max/gte/lte denote *length*, so fall back to
+	// Min/Max when the length-specific minlen/maxlen/len aren't present.
 	if schema.Type == "string" {
-		if constraints.MinLength != nil {
+		switch {
+		case constraints.MinLength != nil:
 			schema.MinLength = *constraints.MinLength
+		case constraints.Min != nil:
+			schema.MinLength = int(*constraints.Min)
 		}
-		if constraints.MaxLength != nil {
+		switch {
+		case constraints.MaxLength != nil:
 			schema.MaxLength = *constraints.MaxLength
+		case constraints.Max != nil:
+			schema.MaxLength = int(*constraints.Max)
 		}
 	}
 

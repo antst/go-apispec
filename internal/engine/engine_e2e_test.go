@@ -103,6 +103,9 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// ServeMux wildcards must reduce to clean {name} placeholders.
 		{name: "mux_regex_path", inputDir: "../../testdata/mux_regex_path", configFn: spec.DefaultMuxConfig},
 		{name: "servemux_wildcards", inputDir: "../../testdata/servemux_wildcards", configFn: spec.DefaultHTTPConfig},
+		// Validation tags: gte/lte → numeric minimum/maximum; min/max/gte/lte on a
+		// string field → minLength/maxLength.
+		{name: "chi_validation", inputDir: "../../testdata/chi_validation", configFn: spec.DefaultChiConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {

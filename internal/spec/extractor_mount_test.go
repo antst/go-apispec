@@ -2365,6 +2365,43 @@ func TestExtractValidationConstraints_MinMax(t *testing.T) {
 	assert.Equal(t, 100.0, *constraints.Max)
 }
 
+func TestApplyValidationRule_GteLte(t *testing.T) {
+	c := &ValidationConstraints{}
+	applyValidationRule("gte=0", c)
+	applyValidationRule("lte=120", c)
+	require.NotNil(t, c.Min)
+	assert.Equal(t, 0.0, *c.Min)
+	require.NotNil(t, c.Max)
+	assert.Equal(t, 120.0, *c.Max)
+}
+
+func TestApplyValidationConstraints_StringValueBoundsAreLength(t *testing.T) {
+	lo, hi := 3.0, 20.0
+	c := &ValidationConstraints{Min: &lo, Max: &hi}
+
+	// On a string field, min/max/gte/lte denote length.
+	s := &Schema{Type: "string"}
+	applyValidationConstraints(s, c)
+	assert.Equal(t, 3, s.MinLength)
+	assert.Equal(t, 20, s.MaxLength)
+
+	// On a numeric field, they denote value bounds.
+	n := &Schema{Type: "integer"}
+	applyValidationConstraints(n, c)
+	require.NotNil(t, n.Minimum)
+	assert.Equal(t, 3.0, *n.Minimum)
+	require.NotNil(t, n.Maximum)
+	assert.Equal(t, 20.0, *n.Maximum)
+
+	// Explicit minlen/maxlen still take precedence on strings.
+	mn, mx := 5, 8
+	c2 := &ValidationConstraints{MinLength: &mn, MaxLength: &mx, Min: &lo, Max: &hi}
+	s2 := &Schema{Type: "string"}
+	applyValidationConstraints(s2, c2)
+	assert.Equal(t, 5, s2.MinLength)
+	assert.Equal(t, 8, s2.MaxLength)
+}
+
 func TestExtractValidationConstraints_Pattern(t *testing.T) {
 	constraints := extractValidationConstraints(`regexp:"^[a-z]+$"`)
 	require.NotNil(t, constraints)
