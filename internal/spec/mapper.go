@@ -724,6 +724,35 @@ func setOperationOnPathItem(item *PathItem, method string, op *Operation) {
 	}
 }
 
+// qualifyMapValueType attaches a package prefix (e.g. "pkg.", already carrying
+// its trailing dot) to a map value type, applying it to the element rather than
+// the []/* wrapper and leaving primitives or already-qualified types untouched.
+//
+//	"Money", "pkg."   → "pkg.Money"
+//	"[]Money", "pkg." → "[]pkg.Money"
+//	"*Money", "pkg."  → "*pkg.Money"
+//	"string", "pkg."  → "string"        (primitive)
+//	"o.T", "pkg."     → "o.T"           (already qualified)
+func qualifyMapValueType(valueType, pkgWithDot string) string {
+	wrapper := ""
+	rest := valueType
+	for {
+		switch {
+		case strings.HasPrefix(rest, "[]"):
+			wrapper += "[]"
+			rest = rest[2:]
+		case strings.HasPrefix(rest, "*"):
+			wrapper += "*"
+			rest = rest[1:]
+		default:
+			if rest == "" || metadata.IsPrimitiveType(rest) || strings.Contains(rest, ".") {
+				return valueType
+			}
+			return wrapper + pkgWithDot + rest
+		}
+	}
+}
+
 // convertPathToOpenAPI converts a router-specific path template to the OpenAPI
 // `{name}` form, per path segment so the different frameworks' syntaxes don't
 // interfere:
@@ -2109,9 +2138,13 @@ func mapGoTypeToOpenAPISchema(usedTypes map[string]*Schema, goType string, meta 
 			keyType := goType[startIdx+4 : endIdx]
 			valueType := strings.TrimSpace(goType[endIdx+1:])
 
-			// add package name to value type
+			// Qualify the value's element type with the map's package prefix
+			// (everything before "map["). The prefix already carries its
+			// trailing dot, so it must not be doubled, and any []/* wrapper
+			// stays outside the qualifier so map[string][]Money becomes
+			// []pkg.Money rather than pkg..[]Money (then pkg.._Money).
 			if startIdx > 0 {
-				valueType = goType[:startIdx] + "." + valueType
+				valueType = qualifyMapValueType(valueType, goType[:startIdx])
 			}
 
 			if keyType == "string" {

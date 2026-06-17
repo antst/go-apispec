@@ -1,0 +1,88 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/wallet": {
+      "get": {
+        "operationId": "testdata/map_struct_values.getWallet",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/testdata_map_struct_values.Wallet"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "testdata_map_struct_values.Money": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "amount",
+          "currency"
+        ]
+      },
+      "testdata_map_struct_values.Wallet": {
+        "type": "object",
+        "properties": {
+          "balances": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/testdata_map_struct_values.Money"
+            }
+          },
+          "history": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/testdata_map_struct_values.Money"
+              }
+            }
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "pending": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/testdata_map_struct_values.Money"
+            }
+          }
+        },
+        "required": [
+          "balances",
+          "history",
+          "pending",
+          "labels"
+        ]
+      }
+    }
+  }
+}

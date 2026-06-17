@@ -106,6 +106,9 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// Validation tags: gte/lte → numeric minimum/maximum; min/max/gte/lte on a
 		// string field → minLength/maxLength.
 		{name: "chi_validation", inputDir: "../../testdata/chi_validation", configFn: spec.DefaultChiConfig},
+		// map value types: map[string]Struct / []Struct / *Struct must ref the
+		// element with a single package separator.
+		{name: "map_struct_values", inputDir: "../../testdata/map_struct_values", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {

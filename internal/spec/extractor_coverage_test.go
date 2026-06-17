@@ -787,6 +787,27 @@ func TestDetermineLiteralType(t *testing.T) {
 // 8. convertPathToOpenAPI
 // ---------------------------------------------------------------------------
 
+func TestQualifyMapValueType(t *testing.T) {
+	tests := []struct {
+		valueType string
+		pkg       string
+		expected  string
+	}{
+		{"Money", "gap.", "gap.Money"},
+		{"[]Money", "gap.", "[]gap.Money"},
+		{"*Money", "gap.", "*gap.Money"},
+		{"[]*Money", "gap.", "[]*gap.Money"},
+		{"string", "gap.", "string"},     // primitive untouched
+		{"int", "gap.", "int"},           // primitive untouched
+		{"other.T", "gap.", "other.T"},   // already qualified untouched
+		{"[]string", "gap.", "[]string"}, // slice of primitive untouched
+		{"", "gap.", ""},                 // empty untouched
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.expected, qualifyMapValueType(tt.valueType, tt.pkg), "valueType=%q", tt.valueType)
+	}
+}
+
 func TestConvertPathToOpenAPI(t *testing.T) {
 	tests := []struct {
 		input    string
