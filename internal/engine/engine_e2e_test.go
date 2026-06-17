@@ -1281,7 +1281,10 @@ func TestGolden_AllFrameworks_Legacy(t *testing.T) {
 // downstream CI staleness gates depend on. Both the default and legacy snapshots
 // are covered, since both are part of the golden-regression CI contract.
 func TestGolden_Deterministic(t *testing.T) {
-	const runs = 5
+	// 3 in-process generations per fixture per mode (6 distinct map orderings)
+	// is enough to catch ordering-dependent flap while keeping the now-61-fixture
+	// suite under the CI -race timeout.
+	const runs = 3
 	assertStable := func(t *testing.T, tc frameworkTestCase, legacy bool) {
 		t.Helper()
 		mode := "default"
