@@ -78,6 +78,21 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "status_codes", inputDir: "../../testdata/status_codes", configFn: spec.DefaultChiConfig},
 		{name: "nested_dto", inputDir: "../../testdata/nested_dto", configFn: spec.DefaultHTTPConfig},
 		{name: "xml_text_response", inputDir: "../../testdata/xml_text_response", configFn: spec.DefaultHTTPConfig},
+		// Batch 3: full CRUD lifecycles, nested groups, and scalar-schema variety.
+		{name: "echo_crud", inputDir: "../../testdata/echo_crud", configFn: spec.DefaultEchoConfig},
+		{name: "fiber_crud", inputDir: "../../testdata/fiber_crud", configFn: spec.DefaultFiberConfig},
+		{name: "gin_nested_groups", inputDir: "../../testdata/gin_nested_groups", configFn: spec.DefaultGinConfig},
+		{name: "numeric_types", inputDir: "../../testdata/numeric_types", configFn: spec.DefaultHTTPConfig},
+		{name: "chi_crud", inputDir: "../../testdata/chi_crud", configFn: spec.DefaultChiConfig},
+		{name: "chi_format_tags", inputDir: "../../testdata/chi_format_tags", configFn: spec.DefaultChiConfig},
+		{name: "mux_crud", inputDir: "../../testdata/mux_crud", configFn: spec.DefaultMuxConfig},
+		{name: "gin_arrays", inputDir: "../../testdata/gin_arrays", configFn: spec.DefaultGinConfig},
+		{name: "fiber_nested", inputDir: "../../testdata/fiber_nested", configFn: spec.DefaultFiberConfig},
+		{name: "echo_subresources", inputDir: "../../testdata/echo_subresources", configFn: spec.DefaultEchoConfig},
+		{name: "maps_variety", inputDir: "../../testdata/maps_variety", configFn: spec.DefaultHTTPConfig},
+		{name: "arrays_variety", inputDir: "../../testdata/arrays_variety", configFn: spec.DefaultHTTPConfig},
+		{name: "pointers_variety", inputDir: "../../testdata/pointers_variety", configFn: spec.DefaultHTTPConfig},
+		{name: "optional_fields", inputDir: "../../testdata/optional_fields", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
