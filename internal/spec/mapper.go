@@ -1298,12 +1298,51 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 		schema.Properties[fieldName] = fieldSchema
 	}
 
+	// Promote anonymously embedded structs' fields (Go field promotion; JSON
+	// marshals them flat). Runs after the own-field loop so own fields shadow
+	// promoted ones, matching Go's selector resolution.
+	promoteEmbeddedFields(schema, typ, meta, cfg, visitedTypes)
+
 	// Struct-level overrides land last so they sit on the fully-built schema
 	// — minProperties is independent of the per-field passes above, and the
 	// anyOf array references property names that are now finalized.
 	applyStructLevelAPISpecTag(schema, structLevelTag)
 
 	return schema, schemas
+}
+
+// promoteEmbeddedFields flattens the fields of a struct's anonymously embedded
+// types into schema, mirroring Go's field promotion and JSON's flat marshaling.
+// Fields already present on schema (own fields, or an earlier embed) win, so
+// shadowing matches Go's selector rules; transitive embedding resolves because
+// the embedded type's own schema is itself promoted.
+//
+// The embedded type's schema is generated in isolation (fresh maps) and only
+// its properties/required are copied out — the embed must NOT be registered as
+// a component schema (Go embedding has no separate JSON object), and isolation
+// keeps the result independent of map-iteration order.
+func promoteEmbeddedFields(schema *Schema, typ *metadata.Type, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) {
+	for _, embedIdx := range typ.Embeds {
+		embedType := strings.TrimPrefix(getStringFromPool(meta, embedIdx), "*")
+		et := typeByName(TypeParts(embedType), meta)
+		if et == nil || getStringFromPool(meta, et.Kind) != "struct" {
+			continue
+		}
+		es, _ := generateStructSchema(map[string]*Schema{}, embedType, et, meta, cfg, visitedTypes)
+		if es == nil {
+			continue
+		}
+		for name, prop := range es.Properties {
+			if _, exists := schema.Properties[name]; !exists {
+				schema.Properties[name] = prop
+			}
+		}
+		for _, req := range es.Required {
+			if schema.Properties[req] != nil && !slices.Contains(schema.Required, req) {
+				schema.Required = append(schema.Required, req)
+			}
+		}
+	}
 }
 
 // generateInterfaceSchema generates a schema for an interface type

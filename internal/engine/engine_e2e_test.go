@@ -111,6 +111,8 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "map_struct_values", inputDir: "../../testdata/map_struct_values", configFn: spec.DefaultHTTPConfig},
 		// Nested slices [][]T must recurse as nested arrays, not a mangled _T ref.
 		{name: "nested_arrays", inputDir: "../../testdata/nested_arrays", configFn: spec.DefaultHTTPConfig},
+		// Embedded structs: anonymous fields (value/pointer/transitive) promote flat.
+		{name: "embedded_structs", inputDir: "../../testdata/embedded_structs", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {

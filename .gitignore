@@ -72,3 +72,4 @@ testdata/servemux_wildcards/servemux_wildcards
 testdata/chi_validation/chi_validation
 testdata/map_struct_values/map_struct_values
 testdata/nested_arrays/nested_arrays
+testdata/embedded_structs/embedded_structs

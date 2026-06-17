@@ -2660,6 +2660,45 @@ func TestGenerateStructSchema_BasicStruct(t *testing.T) {
 	_ = schemas
 }
 
+func TestPromoteEmbeddedFields(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+
+	base := &metadata.Type{
+		Name: sp.Get("Base"), Pkg: sp.Get("myapp"), Kind: sp.Get("struct"),
+		Fields: []metadata.Field{
+			{Name: sp.Get("ID"), Type: sp.Get("string"), Tag: sp.Get(`json:"id"`)},
+			{Name: sp.Get("CreatedAt"), Type: sp.Get("string"), Tag: sp.Get(`json:"createdAt"`)},
+		},
+	}
+	meta.Packages = map[string]*metadata.Package{
+		"myapp": {Files: map[string]*metadata.File{
+			"f.go": {Types: map[string]*metadata.Type{"Base": base}},
+		}},
+	}
+
+	// Document embeds Base (value) and a non-existent Ghost (must be skipped),
+	// and declares its own id field that must shadow Base.ID.
+	doc := &metadata.Type{
+		Name: sp.Get("Document"), Pkg: sp.Get("myapp"), Kind: sp.Get("struct"),
+		Embeds: []int{sp.Get("myapp.Base"), sp.Get("myapp.Ghost")},
+		Fields: []metadata.Field{
+			{Name: sp.Get("id"), Type: sp.Get("integer"), Tag: sp.Get(`json:"id"`)},
+			{Name: sp.Get("Title"), Type: sp.Get("string"), Tag: sp.Get(`json:"title"`)},
+		},
+	}
+	cfg := &APISpecConfig{Defaults: Defaults{ResponseContentType: "application/json"}}
+	schema, _ := generateStructSchema(map[string]*Schema{}, "myapp-->Document", doc, meta, cfg, map[string]bool{})
+
+	require.NotNil(t, schema)
+	// Promoted from Base plus own fields.
+	for _, want := range []string{"id", "createdAt", "title"} {
+		assert.Contains(t, schema.Properties, want)
+	}
+	// Own id shadows the embedded Base.ID (own field type wins).
+	assert.NotEqual(t, "string", schema.Properties["id"].Type)
+}
+
 func TestGenerateStructSchema_WithGenericTypes(t *testing.T) {
 	meta := newTestMeta()
 	sp := meta.StringPool
