@@ -117,6 +117,9 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "generic_response_wrapper", inputDir: "../../testdata/generic_response_wrapper", configFn: spec.DefaultHTTPConfig},
 		// gorilla/mux .Queries(...) query params attach to their own route only.
 		{name: "mux_queries", inputDir: "../../testdata/mux_queries", configFn: spec.DefaultMuxConfig},
+		// Conditional-status fan-out reachability (#50): only statuses whose
+		// assignment reaches the response call site are emitted.
+		{name: "conditional_status_reachability", inputDir: "../../testdata/conditional_status_reachability", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {

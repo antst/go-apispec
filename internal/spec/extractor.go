@@ -1919,13 +1919,15 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 	}
 
 	// Conditional status fan-out (issue #39): if the status arg is a local
-	// variable with multiple branched assignments mapping to *distinct* status
-	// codes, emit one response per status, all sharing the body/schema. Runs
-	// before the no-status-no-body guard so patterns whose status arg is an
-	// opaque ident (e.g. RespondWithError(w, err)) still produce responses when
-	// the branches encode the codes.
+	// variable with branched assignments mapping to distinct status codes, emit
+	// one response per status, all sharing the body/schema. Runs before the
+	// no-status-no-body guard so patterns whose status arg is an opaque ident
+	// (e.g. RespondWithError(w, err)) still produce responses when the branches
+	// encode the codes. The set is filtered to assignments that reach this call
+	// site (issue #50), so a single reachable status yields a single response
+	// rather than falling through to the unresolvable latest-wins path.
 	if r.pattern.StatusFromArg && len(edge.Args) > r.pattern.StatusArgIndex {
-		if statuses := r.expandStatusesFromIdent(edge.Args[r.pattern.StatusArgIndex], edge); len(statuses) > 1 {
+		if statuses := r.expandStatusesFromIdent(edge.Args[r.pattern.StatusArgIndex], edge); len(statuses) >= 1 {
 			out := make([]*ResponseInfo, 0, len(statuses))
 			for _, st := range statuses {
 				out = append(out, &ResponseInfo{
@@ -1976,28 +1978,103 @@ func (r *ResponsePatternMatcherImpl) expandStatusesFromIdent(arg *metadata.CallA
 	if !ok || len(assigns) < 2 {
 		return nil
 	}
-	seen := make(map[int]struct{}, len(assigns))
-	out := make([]int, 0, len(assigns))
+	// Reachability filter (issue #50): keep only the assignments whose value can
+	// reach this response call site, in two steps:
+	//
+	//  1. Drop assignments positioned textually after the call — they cannot
+	//     supply the value at the call.
+	//  2. Among the survivors, an *unconditional* assignment (Branch == nil)
+	//     overwrites every earlier assignment on every path, so it shadows them:
+	//     keep only the assignments from the last unconditional one onward.
+	//     Sibling if/else branch assignments (Branch != nil) don't shadow each
+	//     other, so the intended fan-out — both branches reassigning before one
+	//     trailing RespondWithError — is preserved.
+	//
+	// The shadow boundary is the *index* of the last unconditional survivor, not
+	// its source position: assignments are recorded in source order, so the
+	// index is a reliable boundary even when a position is missing/unparseable
+	// (a position-based boundary could be pinned to an earlier assignment and
+	// leak a shadowed status). Positions are only used — conservatively — for
+	// the textual after-call filter.
+	callPos := meta.StringPool.GetString(edge.Position)
+
+	statuses := make([]int, 0, len(assigns))
+	lastUncond := -1
 	for i := range assigns {
 		if assigns[i].Value.GetKind() != metadata.KindCall {
 			continue
 		}
-		for _, callArg := range assigns[i].Value.Args {
-			if callArg == nil {
-				continue
-			}
-			status, ok := r.schemaMapper.MapStatusCode(r.contextProvider.GetArgumentInfo(callArg))
-			if !ok {
-				continue
-			}
-			if _, dup := seen[status]; !dup {
-				seen[status] = struct{}{}
-				out = append(out, status)
-			}
-			break
+		if positionAfter(meta.StringPool.GetString(assigns[i].Position), callPos) {
+			continue
+		}
+		status, ok := statusFromCallArgs(r, &assigns[i].Value)
+		if !ok {
+			continue
+		}
+		statuses = append(statuses, status)
+		if assigns[i].Branch == nil {
+			lastUncond = len(statuses) - 1
+		}
+	}
+
+	start := 0
+	if lastUncond >= 0 {
+		start = lastUncond
+	}
+	seen := make(map[int]struct{}, len(statuses))
+	out := make([]int, 0, len(statuses))
+	for _, status := range statuses[start:] {
+		if _, dup := seen[status]; !dup {
+			seen[status] = struct{}{}
+			out = append(out, status)
 		}
 	}
 	return out
+}
+
+// statusFromCallArgs returns the first argument of a call that parses as a known
+// HTTP status code (e.g. the http.StatusXxx in NewError(msg, http.StatusXxx)).
+func statusFromCallArgs(r *ResponsePatternMatcherImpl, call *metadata.CallArgument) (int, bool) {
+	for _, callArg := range call.Args {
+		if callArg == nil {
+			continue
+		}
+		if status, ok := r.schemaMapper.MapStatusCode(r.contextProvider.GetArgumentInfo(callArg)); ok {
+			return status, true
+		}
+	}
+	return 0, false
+}
+
+// positionAfter reports whether source position a occurs strictly after b.
+// Positions are "file:line:col"; comparison is by (line, col), using the last
+// two colon-separated fields. Missing/unparseable positions return false so the
+// caller does not over-filter on incomplete data.
+func positionAfter(a, b string) bool {
+	la, ca, oka := positionLineCol(a)
+	lb, cb, okb := positionLineCol(b)
+	if !oka || !okb {
+		return false
+	}
+	if la != lb {
+		return la > lb
+	}
+	return ca > cb
+}
+
+// positionLineCol parses the trailing line and column from a "file:line:col"
+// position string.
+func positionLineCol(pos string) (line, col int, ok bool) {
+	parts := strings.Split(pos, ":")
+	if len(parts) < 2 {
+		return 0, 0, false
+	}
+	col, errC := strconv.Atoi(parts[len(parts)-1])
+	line, errL := strconv.Atoi(parts[len(parts)-2])
+	if errC != nil || errL != nil {
+		return 0, 0, false
+	}
+	return line, col, true
 }
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters

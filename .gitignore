@@ -103,3 +103,4 @@ testdata/optional_fields/optional_fields
 testdata/pointers_variety/pointers_variety
 testdata/status_codes/status_codes
 testdata/xml_text_response/xml_text_response
+testdata/conditional_status_reachability/conditional_status_reachability
