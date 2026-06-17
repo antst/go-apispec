@@ -759,6 +759,64 @@ func (r *ResponsePatternMatcherImpl) resolveParamArgType(node TrackerNodeInterfa
 	return ""
 }
 
+// writeDestTracesToResponseWriter reports whether a free-function write's
+// destination argument is, or derives from, an http.ResponseWriter — directly
+// (its type names http.ResponseWriter), through a local assignment in the
+// write's own function (dst := …), or through the parameter the caller bound it
+// to. It rejects writes to files, buffers and other non-response writers that
+// merely happen to be reachable from a route handler — e.g. file-service's
+// storage adapter io.Copy(dst, src) copying an upload to an *os.File (issue
+// #52). The bias is toward precision: an unresolved destination is rejected, so
+// a phantom binary response is never emitted (and can never flap on map order).
+func (r *ResponsePatternMatcherImpl) writeDestTracesToResponseWriter(node TrackerNodeInterface, dst *metadata.CallArgument) bool {
+	if dst == nil {
+		return false
+	}
+	if argReferencesResponseWriter(dst) {
+		return true
+	}
+	if dst.GetKind() != metadata.KindIdent {
+		return false
+	}
+	// Local assignment within the writing function (dst := <expr>).
+	if edge := node.GetEdge(); edge != nil {
+		if assigns, ok := edge.AssignmentMap[dst.GetName()]; ok {
+			for i := range assigns {
+				if argReferencesResponseWriter(&assigns[i].Value) {
+					return true
+				}
+			}
+		}
+	}
+	// Parameter the caller bound to a response writer (helper(w io.Writer)
+	// invoked with the handler's http.ResponseWriter).
+	if t := r.resolveParamArgType(node, dst.GetName()); strings.Contains(t, "http.ResponseWriter") {
+		return true
+	}
+	return false
+}
+
+// argReferencesResponseWriter walks a CallArgument expression tree looking for a
+// value typed http.ResponseWriter (or *http.ResponseWriter). Recurses through
+// selector/call expressions so c.Response().Writer and similar are recognised.
+func argReferencesResponseWriter(arg *metadata.CallArgument) bool {
+	if arg == nil {
+		return false
+	}
+	if strings.Contains(arg.GetType(), "http.ResponseWriter") {
+		return true
+	}
+	if argReferencesResponseWriter(arg.X) || argReferencesResponseWriter(arg.Fun) || argReferencesResponseWriter(arg.Sel) {
+		return true
+	}
+	for _, a := range arg.Args {
+		if argReferencesResponseWriter(a) {
+			return true
+		}
+	}
+	return false
+}
+
 // isInterfaceHandler checks if the route handler's receiver type is an interface.
 func (e *Extractor) isInterfaceHandler(route *RouteInfo) bool {
 	meta := e.tree.GetMetadata()
@@ -1602,6 +1660,20 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 	}
 
 	edge := node.GetEdge()
+
+	// For free-function writes whose destination is the first argument
+	// (io.Copy(dst, src), io.WriteString(dst, s), fmt.Fprintf(dst, …)), the
+	// destination must be the HTTP response. Otherwise an io.Copy to a file or
+	// buffer reachable deep in the handler's call graph (e.g. file-service's
+	// storage adapter copying an upload to disk) is misinferred as a binary
+	// response body, and — depending on call-graph map ordering — flaps run to
+	// run (issue #52, response-side counterpart of decodeReadsRequestBody).
+	if r.pattern.ValidateWriterDest && edge != nil {
+		if len(edge.Args) == 0 || !r.writeDestTracesToResponseWriter(node, edge.Args[0]) {
+			return nil
+		}
+	}
+
 	if r.pattern.StatusFromArg && len(edge.Args) > r.pattern.StatusArgIndex {
 		arg := edge.Args[r.pattern.StatusArgIndex]
 		statusStr := r.contextProvider.GetArgumentInfo(arg)
