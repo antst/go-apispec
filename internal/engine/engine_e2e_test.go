@@ -99,6 +99,10 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// Regression for #52 (response side): io.Copy to the response writer is a
 		// binary 200, but io.Copy to a file reachable in the call graph is not.
 		{name: "binary_response_overreach", inputDir: "../../testdata/binary_response_overreach", configFn: spec.DefaultHTTPConfig},
+		// Path-template normalization: gorilla/mux regex constraints and Go 1.22
+		// ServeMux wildcards must reduce to clean {name} placeholders.
+		{name: "mux_regex_path", inputDir: "../../testdata/mux_regex_path", configFn: spec.DefaultMuxConfig},
+		{name: "servemux_wildcards", inputDir: "../../testdata/servemux_wildcards", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {

@@ -724,15 +724,45 @@ func setOperationOnPathItem(item *PathItem, method string, op *Operation) {
 	}
 }
 
-// convertPathToOpenAPI converts a Go path to OpenAPI format
+// convertPathToOpenAPI converts a router-specific path template to the OpenAPI
+// `{name}` form, per path segment so the different frameworks' syntaxes don't
+// interfere:
+//
+//   - gin/echo colon params:            :id          → {id}
+//   - gorilla/mux regex constraints:    {id:[0-9]+}  → {id}  (the pattern may
+//     itself contain braces, e.g. {n:[0-9]{3}}; everything after the first ':'
+//     is dropped, so nested quantifier braces don't matter)
+//   - Go 1.22 ServeMux trailing wildcard {path...}   → {path}
+//   - Go 1.22 ServeMux end-of-path anchor {$}        → (removed; carries no
+//     path segment)
 func convertPathToOpenAPI(path string) string {
-	// Regular expression to match :param format
-	// This matches a colon followed by one or more word characters (letters, digits, underscore)
-	re := getCachedMapperRegex(`:([a-zA-Z_][a-zA-Z0-9_]*)`)
-
-	// Replace all matches with {param} format
-	result := re.ReplaceAllString(path, "{$1}")
-
+	if path == "" {
+		return path
+	}
+	segments := strings.Split(path, "/")
+	out := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		switch {
+		case seg == "{$}":
+			// End-of-path anchor — contributes no path segment.
+			continue
+		case strings.HasPrefix(seg, ":") && len(seg) > 1:
+			out = append(out, "{"+seg[1:]+"}")
+		case strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}"):
+			inner := seg[1 : len(seg)-1]
+			if i := strings.IndexByte(inner, ':'); i >= 0 {
+				inner = inner[:i] // drop a gorilla/mux regex constraint
+			}
+			inner = strings.TrimSuffix(inner, "...") // drop a ServeMux wildcard marker
+			out = append(out, "{"+inner+"}")
+		default:
+			out = append(out, seg)
+		}
+	}
+	result := strings.Join(out, "/")
+	if result == "" {
+		return "/"
+	}
 	return result
 }
 

@@ -804,6 +804,16 @@ func TestConvertPathToOpenAPI(t *testing.T) {
 		{"", ""},
 		// Param with underscore
 		{"/items/:item_id", "/items/{item_id}"},
+		// gorilla/mux regex constraints — regex stripped, name kept
+		{"/items/{id:[0-9]+}", "/items/{id}"},
+		{"/items/by-slug/{slug:[a-z-]+}", "/items/by-slug/{slug}"},
+		// regex containing brace quantifiers (cut at the first colon)
+		{"/codes/{code:[0-9]{3}}", "/codes/{code}"},
+		// Go 1.22 ServeMux trailing wildcard
+		{"/files/{path...}", "/files/{path}"},
+		// Go 1.22 ServeMux end-of-path anchor — segment dropped
+		{"/exact/{$}", "/exact"},
+		{"/{$}", "/"},
 	}
 
 	for _, tt := range tests {
