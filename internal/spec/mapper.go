@@ -724,16 +724,21 @@ func setOperationOnPathItem(item *PathItem, method string, op *Operation) {
 	}
 }
 
-// qualifyMapValueType attaches a package prefix (e.g. "pkg.", already carrying
-// its trailing dot) to a map value type, applying it to the element rather than
-// the []/* wrapper and leaving primitives or already-qualified types untouched.
+// qualifyElementType attaches a package prefix (e.g. "pkg.", already carrying
+// its trailing dot) to a composite type's element — a map value or a struct
+// field — applying it to the base element rather than any []/* wrapper, and
+// leaving primitives or already-qualified types untouched. Nested wrappers are
+// peeled fully, so [][]int stays [][]int (base int is primitive) and [][]Money
+// becomes [][]pkg.Money.
 //
-//	"Money", "pkg."   → "pkg.Money"
-//	"[]Money", "pkg." → "[]pkg.Money"
-//	"*Money", "pkg."  → "*pkg.Money"
-//	"string", "pkg."  → "string"        (primitive)
-//	"o.T", "pkg."     → "o.T"           (already qualified)
-func qualifyMapValueType(valueType, pkgWithDot string) string {
+//	"Money", "pkg."     → "pkg.Money"
+//	"[]Money", "pkg."   → "[]pkg.Money"
+//	"[][]Money", "pkg." → "[][]pkg.Money"
+//	"*Money", "pkg."    → "*pkg.Money"
+//	"[][]int", "pkg."   → "[][]int"        (primitive base)
+//	"string", "pkg."    → "string"         (primitive)
+//	"o.T", "pkg."       → "o.T"            (already qualified)
+func qualifyElementType(valueType, pkgWithDot string) string {
 	wrapper := ""
 	rest := valueType
 	for {
@@ -1213,11 +1218,11 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			isPrimitive := metadata.IsPrimitiveType(fieldType)
 
 			if !isPrimitive && !strings.Contains(fieldType, ".") {
-				re := getCachedMapperRegex(`((\[\])?\*?)(.+)$`)
-				matches := re.FindStringSubmatch(fieldType)
-				if len(matches) >= 4 {
-					fieldType = matches[1] + pkgName + "." + matches[3]
-				}
+				// Qualify the base element with the package, peeling every
+				// []/* wrapper so nested slices like [][]Cell become
+				// [][]pkg.Cell rather than []pkg.[]Cell (then pkg._Cell), and
+				// primitive-based ones like [][]int are left untouched.
+				fieldType = qualifyElementType(fieldType, pkgName+".")
 			}
 
 			derivedFieldType := strings.TrimPrefix(fieldType, "*")
@@ -2144,7 +2149,7 @@ func mapGoTypeToOpenAPISchema(usedTypes map[string]*Schema, goType string, meta 
 			// stays outside the qualifier so map[string][]Money becomes
 			// []pkg.Money rather than pkg..[]Money (then pkg.._Money).
 			if startIdx > 0 {
-				valueType = qualifyMapValueType(valueType, goType[:startIdx])
+				valueType = qualifyElementType(valueType, goType[:startIdx])
 			}
 
 			if keyType == "string" {

@@ -109,6 +109,8 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// map value types: map[string]Struct / []Struct / *Struct must ref the
 		// element with a single package separator.
 		{name: "map_struct_values", inputDir: "../../testdata/map_struct_values", configFn: spec.DefaultHTTPConfig},
+		// Nested slices [][]T must recurse as nested arrays, not a mangled _T ref.
+		{name: "nested_arrays", inputDir: "../../testdata/nested_arrays", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
