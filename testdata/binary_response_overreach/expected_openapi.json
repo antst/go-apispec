@@ -1,0 +1,74 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/file": {
+      "post": {
+        "summary": "Upload is a multipart upload returning 201; its body is never binary.",
+        "operationId": "Handler.Upload",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "form",
+            "schema": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/file/{id}": {
+      "get": {
+        "summary": "Download streams raw bytes to the response writer — a real binary 200.",
+        "operationId": "Handler.Download",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {}
+}

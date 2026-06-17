@@ -65,3 +65,5 @@ testdata/security_bearer/security_bearer
 testdata/error_switch_minimal/error_switch_minimal
 testdata/error_switch_file_service/error_switch_file_service
 testdata/bodyless_status/bodyless_status
+testdata/multipart_overreach/multipart_overreach
+testdata/binary_response_overreach/binary_response_overreach

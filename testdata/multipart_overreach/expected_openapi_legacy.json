@@ -1,0 +1,45 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/internal/file": {
+      "post": {
+        "summary": "Create is a multipart streaming upload — no JSON body, returns 201.",
+        "operationId": "github.com/antst/go-apispec/testdata/multipart_overreach.Handler.Create",
+        "parameters": [
+          {
+            "name": "file",
+            "in": "form",
+            "schema": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {}
+}
