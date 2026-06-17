@@ -2696,18 +2696,45 @@ func TestExtractMuxQueriesParams(t *testing.T) {
 	e.extractMuxQueriesParams(nil, NewRouteInfo())
 	e.extractMuxQueriesParams(&TrackerNode{CallGraphEdge: &handleEdge}, NewRouteInfo())
 
-	// A .Queries on a non-Route receiver is ignored.
-	otherEdge := makeEdge(meta, "main", "app", "Queries", "other", []*metadata.CallArgument{
-		makeLiteralArg(meta, "x"), makeLiteralArg(meta, "{x}"),
-	})
-	otherEdge.Callee.RecvType = sp.Get("*Something")
-	p2 := &TrackerNode{}
-	rn2 := &TrackerNode{CallGraphEdge: &handleEdge, Parent: p2}
-	qn2 := &TrackerNode{CallGraphEdge: &otherEdge, Parent: p2}
-	p2.Children = []*TrackerNode{rn2, qn2}
-	r2 := NewRouteInfo()
-	e.extractMuxQueriesParams(rn2, r2)
-	assert.Empty(t, r2.Params)
+	// A .Queries on a non-Route receiver — including the substring-but-not-equal
+	// *Router — is ignored.
+	for _, recv := range []string{"*Something", "*Router", "github.com/gorilla/mux.*RouterGroup"} {
+		otherEdge := makeEdge(meta, "main", "app", "Queries", "other", []*metadata.CallArgument{
+			makeLiteralArg(meta, "x"), makeLiteralArg(meta, "{x}"),
+		})
+		otherEdge.Callee.RecvType = sp.Get(recv)
+		p2 := &TrackerNode{}
+		rn2 := &TrackerNode{CallGraphEdge: &handleEdge, Parent: p2}
+		qn2 := &TrackerNode{CallGraphEdge: &otherEdge, Parent: p2}
+		p2.Children = []*TrackerNode{rn2, qn2}
+		r2 := NewRouteInfo()
+		e.extractMuxQueriesParams(rn2, r2)
+		assert.Empty(t, r2.Params, "recv=%s", recv)
+	}
+
+	// A fully-qualified *Route receiver is still accepted.
+	q3 := makeEdge(meta, "main", "app", "Queries", "mux", []*metadata.CallArgument{makeLiteralArg(meta, "z"), makeLiteralArg(meta, "{z}")})
+	q3.Callee.RecvType = sp.Get("github.com/gorilla/mux.*Route")
+	p3 := &TrackerNode{}
+	rn3 := &TrackerNode{CallGraphEdge: &handleEdge, Parent: p3}
+	qn3 := &TrackerNode{CallGraphEdge: &q3, Parent: p3}
+	p3.Children = []*TrackerNode{rn3, qn3}
+	r3 := NewRouteInfo()
+	e.extractMuxQueriesParams(rn3, r3)
+	assert.Len(t, r3.Params, 1)
+}
+
+func TestBaseTypeName(t *testing.T) {
+	cases := map[string]string{
+		"github.com/gorilla/mux.*Route": "Route",
+		"*Route":                        "Route",
+		"*Router":                       "Router",
+		"mux.*RouterGroup":              "RouterGroup",
+		"Route":                         "Route",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, baseTypeName(in), in)
+	}
 }
 
 func TestPromoteEmbeddedFields(t *testing.T) {

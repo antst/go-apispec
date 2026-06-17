@@ -1446,6 +1446,18 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 	}
 }
 
+// baseTypeName reduces a (possibly pointer-qualified, package-qualified) type
+// string to its bare type name: "github.com/gorilla/mux.*Route" → "Route",
+// "*Router" → "Router". Used for exact receiver-type matching so a substring
+// like "Route" doesn't also match "Router"/"RouterGroup".
+func baseTypeName(typeStr string) string {
+	typeStr = strings.ReplaceAll(typeStr, "*", "")
+	if i := strings.LastIndexAny(typeStr, "./"); i >= 0 {
+		typeStr = typeStr[i+1:]
+	}
+	return typeStr
+}
+
 // extractMuxQueriesParams adds query parameters declared on a gorilla/mux route
 // builder chain — r.HandleFunc(path, h).Queries("q", "{q}", "page", "{page}")
 // registers query params q and page. The .Queries call is a sibling of the
@@ -1472,7 +1484,7 @@ func (e *Extractor) extractMuxQueriesParams(routeNode TrackerNodeInterface, rout
 		if edge == nil || e.contextProvider.GetString(edge.Callee.Name) != "Queries" {
 			continue
 		}
-		if !strings.Contains(e.contextProvider.GetString(edge.Callee.RecvType), "Route") {
+		if baseTypeName(e.contextProvider.GetString(edge.Callee.RecvType)) != "Route" {
 			continue
 		}
 		for i := 0; i < len(edge.Args); i += 2 {
