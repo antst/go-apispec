@@ -724,15 +724,79 @@ func setOperationOnPathItem(item *PathItem, method string, op *Operation) {
 	}
 }
 
-// convertPathToOpenAPI converts a Go path to OpenAPI format
+// qualifyElementType attaches a package prefix (e.g. "pkg.", already carrying
+// its trailing dot) to a composite type's element — a map value or a struct
+// field — applying it to the base element rather than any []/* wrapper, and
+// leaving primitives or already-qualified types untouched. Nested wrappers are
+// peeled fully, so [][]int stays [][]int (base int is primitive) and [][]Money
+// becomes [][]pkg.Money.
+//
+//	"Money", "pkg."     → "pkg.Money"
+//	"[]Money", "pkg."   → "[]pkg.Money"
+//	"[][]Money", "pkg." → "[][]pkg.Money"
+//	"*Money", "pkg."    → "*pkg.Money"
+//	"[][]int", "pkg."   → "[][]int"        (primitive base)
+//	"string", "pkg."    → "string"         (primitive)
+//	"o.T", "pkg."       → "o.T"            (already qualified)
+func qualifyElementType(valueType, pkgWithDot string) string {
+	wrapper := ""
+	rest := valueType
+	for {
+		switch {
+		case strings.HasPrefix(rest, "[]"):
+			wrapper += "[]"
+			rest = rest[2:]
+		case strings.HasPrefix(rest, "*"):
+			wrapper += "*"
+			rest = rest[1:]
+		default:
+			if rest == "" || metadata.IsPrimitiveType(rest) || strings.Contains(rest, ".") {
+				return valueType
+			}
+			return wrapper + pkgWithDot + rest
+		}
+	}
+}
+
+// convertPathToOpenAPI converts a router-specific path template to the OpenAPI
+// `{name}` form, per path segment so the different frameworks' syntaxes don't
+// interfere:
+//
+//   - gin/echo colon params:            :id          → {id}
+//   - gorilla/mux regex constraints:    {id:[0-9]+}  → {id}  (the pattern may
+//     itself contain braces, e.g. {n:[0-9]{3}}; everything after the first ':'
+//     is dropped, so nested quantifier braces don't matter)
+//   - Go 1.22 ServeMux trailing wildcard {path...}   → {path}
+//   - Go 1.22 ServeMux end-of-path anchor {$}        → (removed; carries no
+//     path segment)
 func convertPathToOpenAPI(path string) string {
-	// Regular expression to match :param format
-	// This matches a colon followed by one or more word characters (letters, digits, underscore)
-	re := getCachedMapperRegex(`:([a-zA-Z_][a-zA-Z0-9_]*)`)
-
-	// Replace all matches with {param} format
-	result := re.ReplaceAllString(path, "{$1}")
-
+	if path == "" {
+		return path
+	}
+	segments := strings.Split(path, "/")
+	out := make([]string, 0, len(segments))
+	for _, seg := range segments {
+		switch {
+		case seg == "{$}":
+			// End-of-path anchor — contributes no path segment.
+			continue
+		case strings.HasPrefix(seg, ":") && len(seg) > 1:
+			out = append(out, "{"+seg[1:]+"}")
+		case strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}"):
+			inner := seg[1 : len(seg)-1]
+			if i := strings.IndexByte(inner, ':'); i >= 0 {
+				inner = inner[:i] // drop a gorilla/mux regex constraint
+			}
+			inner = strings.TrimSuffix(inner, "...") // drop a ServeMux wildcard marker
+			out = append(out, "{"+inner+"}")
+		default:
+			out = append(out, seg)
+		}
+	}
+	result := strings.Join(out, "/")
+	if result == "" {
+		return "/"
+	}
 	return result
 }
 
@@ -1154,11 +1218,11 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			isPrimitive := metadata.IsPrimitiveType(fieldType)
 
 			if !isPrimitive && !strings.Contains(fieldType, ".") {
-				re := getCachedMapperRegex(`((\[\])?\*?)(.+)$`)
-				matches := re.FindStringSubmatch(fieldType)
-				if len(matches) >= 4 {
-					fieldType = matches[1] + pkgName + "." + matches[3]
-				}
+				// Qualify the base element with the package, peeling every
+				// []/* wrapper so nested slices like [][]Cell become
+				// [][]pkg.Cell rather than []pkg.[]Cell (then pkg._Cell), and
+				// primitive-based ones like [][]int are left untouched.
+				fieldType = qualifyElementType(fieldType, pkgName+".")
 			}
 
 			derivedFieldType := strings.TrimPrefix(fieldType, "*")
@@ -1234,12 +1298,51 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 		schema.Properties[fieldName] = fieldSchema
 	}
 
+	// Promote anonymously embedded structs' fields (Go field promotion; JSON
+	// marshals them flat). Runs after the own-field loop so own fields shadow
+	// promoted ones, matching Go's selector resolution.
+	promoteEmbeddedFields(schema, typ, meta, cfg, visitedTypes)
+
 	// Struct-level overrides land last so they sit on the fully-built schema
 	// — minProperties is independent of the per-field passes above, and the
 	// anyOf array references property names that are now finalized.
 	applyStructLevelAPISpecTag(schema, structLevelTag)
 
 	return schema, schemas
+}
+
+// promoteEmbeddedFields flattens the fields of a struct's anonymously embedded
+// types into schema, mirroring Go's field promotion and JSON's flat marshaling.
+// Fields already present on schema (own fields, or an earlier embed) win, so
+// shadowing matches Go's selector rules; transitive embedding resolves because
+// the embedded type's own schema is itself promoted.
+//
+// The embedded type's schema is generated in isolation (fresh maps) and only
+// its properties/required are copied out — the embed must NOT be registered as
+// a component schema (Go embedding has no separate JSON object), and isolation
+// keeps the result independent of map-iteration order.
+func promoteEmbeddedFields(schema *Schema, typ *metadata.Type, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) {
+	for _, embedIdx := range typ.Embeds {
+		embedType := strings.TrimPrefix(getStringFromPool(meta, embedIdx), "*")
+		et := typeByName(TypeParts(embedType), meta)
+		if et == nil || getStringFromPool(meta, et.Kind) != "struct" {
+			continue
+		}
+		es, _ := generateStructSchema(map[string]*Schema{}, embedType, et, meta, cfg, visitedTypes)
+		if es == nil {
+			continue
+		}
+		for name, prop := range es.Properties {
+			if _, exists := schema.Properties[name]; !exists {
+				schema.Properties[name] = prop
+			}
+		}
+		for _, req := range es.Required {
+			if schema.Properties[req] != nil && !slices.Contains(schema.Required, req) {
+				schema.Required = append(schema.Required, req)
+			}
+		}
+	}
 }
 
 // generateInterfaceSchema generates a schema for an interface type
@@ -1472,6 +1575,25 @@ var validationPatternRules = map[string]string{ //nolint:gosec // not credential
 	"cron":        `^(\*|([0-5]?\d)) (\*|([01]?\d|2[0-3])) (\*|([012]?\d|3[01])) (\*|([0]?\d|1[0-2])) (\*|([0-6]))$`,
 }
 
+// applyBoundRule handles the value-bound validator rules min/max/gte/lte,
+// reporting whether rule matched one. The bound is stored numerically; on a
+// string/slice field applyValidationConstraints reinterprets it as a length.
+func applyBoundRule(rule string, constraints *ValidationConstraints) bool {
+	var dst **float64
+	switch {
+	case strings.HasPrefix(rule, "min="), strings.HasPrefix(rule, "gte="):
+		dst = &constraints.Min
+	case strings.HasPrefix(rule, "max="), strings.HasPrefix(rule, "lte="):
+		dst = &constraints.Max
+	default:
+		return false
+	}
+	if val, err := strconv.ParseFloat(rule[strings.IndexByte(rule, '=')+1:], 64); err == nil {
+		*dst = &val
+	}
+	return true
+}
+
 // applyValidationRule applies a single validation rule to constraints
 func applyValidationRule(rule string, constraints *ValidationConstraints) {
 	switch {
@@ -1479,14 +1601,8 @@ func applyValidationRule(rule string, constraints *ValidationConstraints) {
 		constraints.Dive = true
 	case rule == "required":
 		constraints.Required = true
-	case strings.HasPrefix(rule, "min="):
-		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "min=")); err == nil {
-			constraints.Min = &[]float64{float64(val)}[0]
-		}
-	case strings.HasPrefix(rule, "max="):
-		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "max=")); err == nil {
-			constraints.Max = &[]float64{float64(val)}[0]
-		}
+	case applyBoundRule(rule, constraints):
+		// handled: min/max/gte/lte value bounds
 	case strings.HasPrefix(rule, "len="):
 		if val, err := strconv.Atoi(strings.TrimPrefix(rule, "len=")); err == nil {
 			constraints.MinLength = &val
@@ -1624,13 +1740,21 @@ func applyValidationConstraints(schema *Schema, constraints *ValidationConstrain
 		return
 	}
 
-	// Apply string length constraints (only for string types)
+	// Apply string length constraints (only for string types). On a string
+	// field the value bounds min/max/gte/lte denote *length*, so fall back to
+	// Min/Max when the length-specific minlen/maxlen/len aren't present.
 	if schema.Type == "string" {
-		if constraints.MinLength != nil {
+		switch {
+		case constraints.MinLength != nil:
 			schema.MinLength = *constraints.MinLength
+		case constraints.Min != nil:
+			schema.MinLength = int(*constraints.Min)
 		}
-		if constraints.MaxLength != nil {
+		switch {
+		case constraints.MaxLength != nil:
 			schema.MaxLength = *constraints.MaxLength
+		case constraints.Max != nil:
+			schema.MaxLength = int(*constraints.Max)
 		}
 	}
 
@@ -2058,9 +2182,13 @@ func mapGoTypeToOpenAPISchema(usedTypes map[string]*Schema, goType string, meta 
 			keyType := goType[startIdx+4 : endIdx]
 			valueType := strings.TrimSpace(goType[endIdx+1:])
 
-			// add package name to value type
+			// Qualify the value's element type with the map's package prefix
+			// (everything before "map["). The prefix already carries its
+			// trailing dot, so it must not be doubled, and any []/* wrapper
+			// stays outside the qualifier so map[string][]Money becomes
+			// []pkg.Money rather than pkg..[]Money (then pkg.._Money).
 			if startIdx > 0 {
-				valueType = goType[:startIdx] + "." + valueType
+				valueType = qualifyElementType(valueType, goType[:startIdx])
 			}
 
 			if keyType == "string" {

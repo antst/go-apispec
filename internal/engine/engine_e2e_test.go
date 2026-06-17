@@ -65,12 +65,58 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "bodyless_status", inputDir: "../../testdata/bodyless_status", configFn: spec.DefaultHTTPConfig},
 		{name: "wrapped_response", inputDir: "../../testdata/wrapped_response", configFn: spec.DefaultHTTPConfig},
 		{name: "echo_handler_factory", inputDir: "../../testdata/echo_handler_factory", configFn: spec.DefaultEchoConfig},
+		// Corpus-expansion batch: router diversity + uncovered scenarios.
+		{name: "gin_groups", inputDir: "../../testdata/gin_groups", configFn: spec.DefaultGinConfig},
+		{name: "fiber_resource", inputDir: "../../testdata/fiber_resource", configFn: spec.DefaultFiberConfig},
+		{name: "echo_enums", inputDir: "../../testdata/echo_enums", configFn: spec.DefaultEchoConfig},
+		{name: "mux_subrouter", inputDir: "../../testdata/mux_subrouter", configFn: spec.DefaultMuxConfig},
+		{name: "complex_chi_router", inputDir: "../../testdata/complex_chi_router", configFn: spec.DefaultChiConfig},
+		{name: "chi_recursive", inputDir: "../../testdata/chi_recursive", configFn: spec.DefaultChiConfig},
+		{name: "datetime_fields", inputDir: "../../testdata/datetime_fields", configFn: spec.DefaultHTTPConfig},
+		{name: "multipart_upload", inputDir: "../../testdata/multipart_upload", configFn: spec.DefaultHTTPConfig},
+		{name: "chi_middleware", inputDir: "../../testdata/chi_middleware", configFn: spec.DefaultChiConfig},
+		{name: "status_codes", inputDir: "../../testdata/status_codes", configFn: spec.DefaultChiConfig},
+		{name: "nested_dto", inputDir: "../../testdata/nested_dto", configFn: spec.DefaultHTTPConfig},
+		{name: "xml_text_response", inputDir: "../../testdata/xml_text_response", configFn: spec.DefaultHTTPConfig},
+		// Batch 3: full CRUD lifecycles, nested groups, and scalar-schema variety.
+		{name: "echo_crud", inputDir: "../../testdata/echo_crud", configFn: spec.DefaultEchoConfig},
+		{name: "fiber_crud", inputDir: "../../testdata/fiber_crud", configFn: spec.DefaultFiberConfig},
+		{name: "gin_nested_groups", inputDir: "../../testdata/gin_nested_groups", configFn: spec.DefaultGinConfig},
+		{name: "numeric_types", inputDir: "../../testdata/numeric_types", configFn: spec.DefaultHTTPConfig},
+		{name: "chi_crud", inputDir: "../../testdata/chi_crud", configFn: spec.DefaultChiConfig},
+		{name: "chi_format_tags", inputDir: "../../testdata/chi_format_tags", configFn: spec.DefaultChiConfig},
+		{name: "mux_crud", inputDir: "../../testdata/mux_crud", configFn: spec.DefaultMuxConfig},
+		{name: "gin_arrays", inputDir: "../../testdata/gin_arrays", configFn: spec.DefaultGinConfig},
+		{name: "fiber_nested", inputDir: "../../testdata/fiber_nested", configFn: spec.DefaultFiberConfig},
+		{name: "echo_subresources", inputDir: "../../testdata/echo_subresources", configFn: spec.DefaultEchoConfig},
+		{name: "maps_variety", inputDir: "../../testdata/maps_variety", configFn: spec.DefaultHTTPConfig},
+		{name: "arrays_variety", inputDir: "../../testdata/arrays_variety", configFn: spec.DefaultHTTPConfig},
+		{name: "pointers_variety", inputDir: "../../testdata/pointers_variety", configFn: spec.DefaultHTTPConfig},
+		{name: "optional_fields", inputDir: "../../testdata/optional_fields", configFn: spec.DefaultHTTPConfig},
 		// Regression for #52: a multipart handler must not get a request body
 		// inferred from an unrelated json.Unmarshal deep in its call graph.
 		{name: "multipart_overreach", inputDir: "../../testdata/multipart_overreach", configFn: spec.DefaultChiConfig},
 		// Regression for #52 (response side): io.Copy to the response writer is a
 		// binary 200, but io.Copy to a file reachable in the call graph is not.
 		{name: "binary_response_overreach", inputDir: "../../testdata/binary_response_overreach", configFn: spec.DefaultHTTPConfig},
+		// Path-template normalization: gorilla/mux regex constraints and Go 1.22
+		// ServeMux wildcards must reduce to clean {name} placeholders.
+		{name: "mux_regex_path", inputDir: "../../testdata/mux_regex_path", configFn: spec.DefaultMuxConfig},
+		{name: "servemux_wildcards", inputDir: "../../testdata/servemux_wildcards", configFn: spec.DefaultHTTPConfig},
+		// Validation tags: gte/lte → numeric minimum/maximum; min/max/gte/lte on a
+		// string field → minLength/maxLength.
+		{name: "chi_validation", inputDir: "../../testdata/chi_validation", configFn: spec.DefaultChiConfig},
+		// map value types: map[string]Struct / []Struct / *Struct must ref the
+		// element with a single package separator.
+		{name: "map_struct_values", inputDir: "../../testdata/map_struct_values", configFn: spec.DefaultHTTPConfig},
+		// Nested slices [][]T must recurse as nested arrays, not a mangled _T ref.
+		{name: "nested_arrays", inputDir: "../../testdata/nested_arrays", configFn: spec.DefaultHTTPConfig},
+		// Embedded structs: anonymous fields (value/pointer/transitive) promote flat.
+		{name: "embedded_structs", inputDir: "../../testdata/embedded_structs", configFn: spec.DefaultHTTPConfig},
+		// Generic envelope wrapper: APIResponse[T] must bind T per call site.
+		{name: "generic_response_wrapper", inputDir: "../../testdata/generic_response_wrapper", configFn: spec.DefaultHTTPConfig},
+		// gorilla/mux .Queries(...) query params attach to their own route only.
+		{name: "mux_queries", inputDir: "../../testdata/mux_queries", configFn: spec.DefaultMuxConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
@@ -1235,7 +1281,10 @@ func TestGolden_AllFrameworks_Legacy(t *testing.T) {
 // downstream CI staleness gates depend on. Both the default and legacy snapshots
 // are covered, since both are part of the golden-regression CI contract.
 func TestGolden_Deterministic(t *testing.T) {
-	const runs = 5
+	// 3 in-process generations per fixture per mode (6 distinct map orderings)
+	// is enough to catch ordering-dependent flap while keeping the now-61-fixture
+	// suite under the CI -race timeout.
+	const runs = 3
 	assertStable := func(t *testing.T, tc frameworkTestCase, legacy bool) {
 		t.Helper()
 		mode := "default"

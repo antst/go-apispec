@@ -608,3 +608,61 @@ func TestCallArgToString_AllKindBranches(t *testing.T) {
 		t.Error("KindIdent pkg suffix: got empty string")
 	}
 }
+
+func TestGenericArgsAreConcrete(t *testing.T) {
+	cases := map[string]bool{
+		"APIResponse[User]":         true,
+		"pkg.APIResponse[pkg.User]": true,
+		"Pair[string, int]":         true,
+		"APIResponse[T any]":        false,
+		"Pair[K comparable, V any]": false,
+		"User":                      false,
+		"[]User":                    false,
+		"map[string]int":            false,
+	}
+	for in, want := range cases {
+		if got := genericArgsAreConcrete(in); got != want {
+			t.Errorf("genericArgsAreConcrete(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestTypeNameFromExpr_GenericInstantiation(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{StringPool: sp}
+	provider := NewContextProvider(meta)
+	mk := func(kind, name, typ string) *metadata.CallArgument {
+		a := metadata.NewCallArgument(meta)
+		a.SetKind(kind)
+		if name != "" {
+			a.SetName(name)
+		}
+		if typ != "" {
+			a.SetType(typ)
+		}
+		return a
+	}
+
+	// APIResponse[User]{} → composite literal whose type is KindIndex(APIResponse, User).
+	idx := mk(metadata.KindIndex, "", "")
+	idx.X = mk(metadata.KindIdent, "APIResponse", "gap"+TypeSep+"APIResponse[T any]")
+	idx.Fun = mk(metadata.KindIdent, "User", "gap"+TypeSep+"User")
+	cl := mk(metadata.KindCompositeLit, "", "")
+	cl.X = idx
+	if got := provider.callArgToString(cl, nil); got != "gap.APIResponse[gap.User]" {
+		t.Errorf("APIResponse[User]: got %q, want %q", got, "gap.APIResponse[gap.User]")
+	}
+
+	// Pair[string, int]{} → KindIndexList with two concrete args.
+	idxl := mk(metadata.KindIndexList, "", "")
+	idxl.X = mk(metadata.KindIdent, "Pair", "gap"+TypeSep+"Pair[K any, V any]")
+	idxl.Args = []*metadata.CallArgument{
+		mk(metadata.KindIdent, "string", "string"),
+		mk(metadata.KindIdent, "int", "int"),
+	}
+	cl2 := mk(metadata.KindCompositeLit, "", "")
+	cl2.X = idxl
+	if got := provider.callArgToString(cl2, nil); got != "gap.Pair[string,int]" {
+		t.Errorf("Pair[string,int]: got %q, want %q", got, "gap.Pair[string,int]")
+	}
+}

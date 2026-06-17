@@ -2365,6 +2365,43 @@ func TestExtractValidationConstraints_MinMax(t *testing.T) {
 	assert.Equal(t, 100.0, *constraints.Max)
 }
 
+func TestApplyValidationRule_GteLte(t *testing.T) {
+	c := &ValidationConstraints{}
+	applyValidationRule("gte=0", c)
+	applyValidationRule("lte=120", c)
+	require.NotNil(t, c.Min)
+	assert.Equal(t, 0.0, *c.Min)
+	require.NotNil(t, c.Max)
+	assert.Equal(t, 120.0, *c.Max)
+}
+
+func TestApplyValidationConstraints_StringValueBoundsAreLength(t *testing.T) {
+	lo, hi := 3.0, 20.0
+	c := &ValidationConstraints{Min: &lo, Max: &hi}
+
+	// On a string field, min/max/gte/lte denote length.
+	s := &Schema{Type: "string"}
+	applyValidationConstraints(s, c)
+	assert.Equal(t, 3, s.MinLength)
+	assert.Equal(t, 20, s.MaxLength)
+
+	// On a numeric field, they denote value bounds.
+	n := &Schema{Type: "integer"}
+	applyValidationConstraints(n, c)
+	require.NotNil(t, n.Minimum)
+	assert.Equal(t, 3.0, *n.Minimum)
+	require.NotNil(t, n.Maximum)
+	assert.Equal(t, 20.0, *n.Maximum)
+
+	// Explicit minlen/maxlen still take precedence on strings.
+	mn, mx := 5, 8
+	c2 := &ValidationConstraints{MinLength: &mn, MaxLength: &mx, Min: &lo, Max: &hi}
+	s2 := &Schema{Type: "string"}
+	applyValidationConstraints(s2, c2)
+	assert.Equal(t, 5, s2.MinLength)
+	assert.Equal(t, 8, s2.MaxLength)
+}
+
 func TestExtractValidationConstraints_Pattern(t *testing.T) {
 	constraints := extractValidationConstraints(`regexp:"^[a-z]+$"`)
 	require.NotNil(t, constraints)
@@ -2621,6 +2658,122 @@ func TestGenerateStructSchema_BasicStruct(t *testing.T) {
 	assert.Equal(t, "object", schema.Type)
 	assert.NotEmpty(t, schema.Properties)
 	_ = schemas
+}
+
+func TestExtractMuxQueriesParams(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+	e := &Extractor{contextProvider: NewContextProvider(meta)}
+
+	queriesEdge := makeEdge(meta, "main", "app", "Queries", "mux", []*metadata.CallArgument{
+		makeLiteralArg(meta, "q"), makeLiteralArg(meta, "{q}"),
+		makeLiteralArg(meta, "page"), makeLiteralArg(meta, "{page}"),
+	})
+	queriesEdge.Callee.RecvType = sp.Get("*Route")
+	handleEdge := makeEdge(meta, "main", "app", "HandleFunc", "mux", nil)
+
+	parent := &TrackerNode{}
+	routeNode := &TrackerNode{CallGraphEdge: &handleEdge, Parent: parent}
+	queriesNode := &TrackerNode{CallGraphEdge: &queriesEdge, Parent: parent}
+	parent.Children = []*TrackerNode{routeNode, queriesNode}
+
+	route := NewRouteInfo()
+	e.extractMuxQueriesParams(routeNode, route)
+
+	names := make([]string, 0, len(route.Params))
+	for _, p := range route.Params {
+		assert.Equal(t, "query", p.In)
+		assert.True(t, p.Required)
+		names = append(names, p.Name)
+	}
+	assert.ElementsMatch(t, []string{"q", "page"}, names)
+
+	// Re-running dedupes (existing query params aren't duplicated).
+	e.extractMuxQueriesParams(routeNode, route)
+	assert.Len(t, route.Params, 2)
+
+	// nil node and a parent-less node are no-ops.
+	e.extractMuxQueriesParams(nil, NewRouteInfo())
+	e.extractMuxQueriesParams(&TrackerNode{CallGraphEdge: &handleEdge}, NewRouteInfo())
+
+	// A .Queries on a non-Route receiver — including the substring-but-not-equal
+	// *Router — is ignored.
+	for _, recv := range []string{"*Something", "*Router", "github.com/gorilla/mux.*RouterGroup"} {
+		otherEdge := makeEdge(meta, "main", "app", "Queries", "other", []*metadata.CallArgument{
+			makeLiteralArg(meta, "x"), makeLiteralArg(meta, "{x}"),
+		})
+		otherEdge.Callee.RecvType = sp.Get(recv)
+		p2 := &TrackerNode{}
+		rn2 := &TrackerNode{CallGraphEdge: &handleEdge, Parent: p2}
+		qn2 := &TrackerNode{CallGraphEdge: &otherEdge, Parent: p2}
+		p2.Children = []*TrackerNode{rn2, qn2}
+		r2 := NewRouteInfo()
+		e.extractMuxQueriesParams(rn2, r2)
+		assert.Empty(t, r2.Params, "recv=%s", recv)
+	}
+
+	// A fully-qualified *Route receiver is still accepted.
+	q3 := makeEdge(meta, "main", "app", "Queries", "mux", []*metadata.CallArgument{makeLiteralArg(meta, "z"), makeLiteralArg(meta, "{z}")})
+	q3.Callee.RecvType = sp.Get("github.com/gorilla/mux.*Route")
+	p3 := &TrackerNode{}
+	rn3 := &TrackerNode{CallGraphEdge: &handleEdge, Parent: p3}
+	qn3 := &TrackerNode{CallGraphEdge: &q3, Parent: p3}
+	p3.Children = []*TrackerNode{rn3, qn3}
+	r3 := NewRouteInfo()
+	e.extractMuxQueriesParams(rn3, r3)
+	assert.Len(t, r3.Params, 1)
+}
+
+func TestBaseTypeName(t *testing.T) {
+	cases := map[string]string{
+		"github.com/gorilla/mux.*Route": "Route",
+		"*Route":                        "Route",
+		"*Router":                       "Router",
+		"mux.*RouterGroup":              "RouterGroup",
+		"Route":                         "Route",
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, baseTypeName(in), in)
+	}
+}
+
+func TestPromoteEmbeddedFields(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+
+	base := &metadata.Type{
+		Name: sp.Get("Base"), Pkg: sp.Get("myapp"), Kind: sp.Get("struct"),
+		Fields: []metadata.Field{
+			{Name: sp.Get("ID"), Type: sp.Get("string"), Tag: sp.Get(`json:"id"`)},
+			{Name: sp.Get("CreatedAt"), Type: sp.Get("string"), Tag: sp.Get(`json:"createdAt"`)},
+		},
+	}
+	meta.Packages = map[string]*metadata.Package{
+		"myapp": {Files: map[string]*metadata.File{
+			"f.go": {Types: map[string]*metadata.Type{"Base": base}},
+		}},
+	}
+
+	// Document embeds Base (value) and a non-existent Ghost (must be skipped),
+	// and declares its own id field that must shadow Base.ID.
+	doc := &metadata.Type{
+		Name: sp.Get("Document"), Pkg: sp.Get("myapp"), Kind: sp.Get("struct"),
+		Embeds: []int{sp.Get("myapp.Base"), sp.Get("myapp.Ghost")},
+		Fields: []metadata.Field{
+			{Name: sp.Get("id"), Type: sp.Get("integer"), Tag: sp.Get(`json:"id"`)},
+			{Name: sp.Get("Title"), Type: sp.Get("string"), Tag: sp.Get(`json:"title"`)},
+		},
+	}
+	cfg := &APISpecConfig{Defaults: Defaults{ResponseContentType: "application/json"}}
+	schema, _ := generateStructSchema(map[string]*Schema{}, "myapp-->Document", doc, meta, cfg, map[string]bool{})
+
+	require.NotNil(t, schema)
+	// Promoted from Base plus own fields.
+	for _, want := range []string{"id", "createdAt", "title"} {
+		assert.Contains(t, schema.Properties, want)
+	}
+	// Own id shadows the embedded Base.ID (own field type wins).
+	assert.NotEqual(t, "string", schema.Properties["id"].Type)
 }
 
 func TestGenerateStructSchema_WithGenericTypes(t *testing.T) {

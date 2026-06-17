@@ -52,6 +52,58 @@ func (c *ContextProviderImpl) GetCalleeInfo(node TrackerNodeInterface) (name, pk
 }
 
 // GetArgumentInfo gets argument information as a string
+// genericArgsAreConcrete reports whether s is a generic instantiation
+// "Base[args]" whose bracketed type arguments are concrete types rather than a
+// parameter declaration. "APIResponse[User]" and "Pair[string, int]" are
+// concrete; the unbound declaration "APIResponse[T any]" / "Pair[K comparable,
+// V any]" is not (each part is a "<name> <constraint>" pair).
+func genericArgsAreConcrete(s string) bool {
+	start := strings.IndexByte(s, '[')
+	end := strings.LastIndexByte(s, ']')
+	if start < 1 || end <= start || strings.HasPrefix(s, "[]") || strings.HasPrefix(s, "map[") {
+		return false
+	}
+	for _, part := range strings.Split(s[start+1:end], ",") {
+		if len(strings.Fields(part)) >= 2 {
+			return false // "<name> <constraint>" → parameter declaration
+		}
+	}
+	return true
+}
+
+// typeNameFromExpr renders a composite literal's type expression. A generic
+// instantiation — APIResponse[User] (KindIndex) or Pair[K, V] (KindIndexList)
+// — is reconstructed as Base[Arg, …], with the base's own generic-parameter
+// list ([T any]) stripped, so downstream schema generation binds the concrete
+// type arguments instead of falling back to the unbound declaration.
+func (c *ContextProviderImpl) typeNameFromExpr(typeArg *metadata.CallArgument) string {
+	var args []*metadata.CallArgument
+	switch typeArg.GetKind() {
+	case metadata.KindIndex:
+		if typeArg.Fun != nil {
+			args = []*metadata.CallArgument{typeArg.Fun}
+		}
+	case metadata.KindIndexList:
+		args = typeArg.Args
+	default:
+		return c.callArgToString(typeArg, nil)
+	}
+	// TypeParts' bracket-generic parsing keys off the "." separator, so render
+	// the base/args with "." rather than the internal TypeSep.
+	base := strings.ReplaceAll(c.callArgToString(typeArg.X, nil), TypeSep, ".")
+	if i := strings.IndexByte(base, '['); i >= 0 {
+		base = base[:i] // strip the generic declaration's [T any] parameter list
+	}
+	if len(args) == 0 {
+		return base
+	}
+	parts := make([]string, 0, len(args))
+	for _, a := range args {
+		parts = append(parts, strings.ReplaceAll(c.callArgToString(a, nil), TypeSep, "."))
+	}
+	return base + "[" + strings.Join(parts, ",") + "]"
+}
+
 func (c *ContextProviderImpl) GetArgumentInfo(arg *metadata.CallArgument) string {
 	return c.callArgToString(arg, nil)
 }
@@ -111,7 +163,7 @@ func (c *ContextProviderImpl) callArgToString(arg *metadata.CallArgument, sep *s
 		return ""
 	case metadata.KindCompositeLit:
 		if arg.X != nil {
-			return c.callArgToString(arg.X, nil)
+			return c.typeNameFromExpr(arg.X)
 		}
 		return ""
 

@@ -1,0 +1,112 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/product": {
+      "get": {
+        "operationId": "testdata/generic_response_wrapper.getProduct",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/testdata_generic_response_wrapper.APIResponse_testdata_generic_response_wrapper.Product"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user": {
+      "get": {
+        "operationId": "testdata/generic_response_wrapper.getUser",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/testdata_generic_response_wrapper.APIResponse_testdata_generic_response_wrapper.User"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "testdata_generic_response_wrapper.APIResponse_testdata_generic_response_wrapper.Product": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/testdata_generic_response_wrapper.Product"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "message"
+        ]
+      },
+      "testdata_generic_response_wrapper.APIResponse_testdata_generic_response_wrapper.User": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/testdata_generic_response_wrapper.User"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "message"
+        ]
+      },
+      "testdata_generic_response_wrapper.Product": {
+        "type": "object",
+        "properties": {
+          "price": {
+            "type": "integer"
+          },
+          "sku": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sku",
+          "price"
+        ]
+      },
+      "testdata_generic_response_wrapper.User": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      }
+    }
+  }
+}
