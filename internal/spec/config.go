@@ -122,6 +122,16 @@ type ResponsePattern struct {
 	// response but has no type argument to extract (e.g., fmt.Fprintf → "string",
 	// io.Copy → "[]byte"). Used only when TypeFromArg is false.
 	DefaultBodyType string `yaml:"defaultBodyType,omitempty"`
+	// ValidateWriterDest gates patterns whose write target is the FIRST argument
+	// rather than the receiver — the stdlib free functions io.Copy(dst, src),
+	// io.WriteString(dst, s) and fmt.Fprintf(dst, …). Receiver-based response
+	// writes (w.Write, c.JSON, json.NewEncoder(w).Encode) are already constrained
+	// to a response type by RecvTypeRegex; these free functions are not, so any
+	// io.Copy to a file/buffer reachable in a handler's call graph would otherwise
+	// be misinferred as a (binary) response body. When set, the destination arg
+	// must trace to an http.ResponseWriter or the pattern produces no response
+	// (issue #52, response-side counterpart of the request decode-source check).
+	ValidateWriterDest bool `yaml:"validateWriterDest,omitempty"`
 }
 
 // ParamPattern defines how to extract parameter information
@@ -574,13 +584,13 @@ func DefaultChiConfig() *APISpecConfig {
 				},
 				// stdlib write functions that target io.Writer (often ResponseWriter)
 				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
-					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^Copy$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 			},
 			ParamPatterns: []ParamPattern{
@@ -747,13 +757,13 @@ func DefaultEchoConfig() *APISpecConfig {
 				},
 				// stdlib write functions that target io.Writer (often ResponseWriter)
 				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
-					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^Copy$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 			},
 			ParamPatterns: []ParamPattern{
@@ -913,13 +923,13 @@ func DefaultFiberConfig() *APISpecConfig {
 				},
 				// stdlib write functions that target io.Writer (often ResponseWriter)
 				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
-					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^Copy$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 			},
 			ParamPatterns: []ParamPattern{
@@ -1079,13 +1089,13 @@ func DefaultGinConfig() *APISpecConfig {
 				},
 				// stdlib write functions that target io.Writer (often ResponseWriter)
 				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
-					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^Copy$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 			},
 			ParamPatterns: []ParamPattern{
@@ -1273,13 +1283,13 @@ func DefaultMuxConfig() *APISpecConfig {
 				},
 				// stdlib write functions that target io.Writer (often ResponseWriter)
 				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
-					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^Copy$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 			},
 			ParamPatterns: []ParamPattern{
@@ -1411,13 +1421,13 @@ func DefaultHTTPConfig() *APISpecConfig {
 				},
 				// stdlib write functions that target io.Writer (often ResponseWriter)
 				{BasePattern: BasePattern{CallRegex: `^Fprintf$|^Fprint$|^Fprintln$`,
-					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^fmt$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^Copy$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "[]byte", ValidateWriterDest: true,
 				},
 				{BasePattern: BasePattern{CallRegex: `^WriteString$`,
-					RecvTypeRegex: `^io$`}, DefaultBodyType: "string",
+					RecvTypeRegex: `^io$`}, DefaultBodyType: "string", ValidateWriterDest: true,
 				},
 			},
 			ParamPatterns: []ParamPattern{

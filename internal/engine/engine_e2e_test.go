@@ -68,6 +68,9 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// Regression for #52: a multipart handler must not get a request body
 		// inferred from an unrelated json.Unmarshal deep in its call graph.
 		{name: "multipart_overreach", inputDir: "../../testdata/multipart_overreach", configFn: spec.DefaultChiConfig},
+		// Regression for #52 (response side): io.Copy to the response writer is a
+		// binary 200, but io.Copy to a file reachable in the call graph is not.
+		{name: "binary_response_overreach", inputDir: "../../testdata/binary_response_overreach", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {
