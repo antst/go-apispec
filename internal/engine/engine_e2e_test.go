@@ -113,6 +113,8 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "nested_arrays", inputDir: "../../testdata/nested_arrays", configFn: spec.DefaultHTTPConfig},
 		// Embedded structs: anonymous fields (value/pointer/transitive) promote flat.
 		{name: "embedded_structs", inputDir: "../../testdata/embedded_structs", configFn: spec.DefaultHTTPConfig},
+		// Generic envelope wrapper: APIResponse[T] must bind T per call site.
+		{name: "generic_response_wrapper", inputDir: "../../testdata/generic_response_wrapper", configFn: spec.DefaultHTTPConfig},
 	}
 	var available []frameworkTestCase
 	for _, tc := range cases {

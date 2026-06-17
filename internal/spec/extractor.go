@@ -1743,12 +1743,18 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 			bodyType = conversionTargetType
 		}
 
-		// Preserve generic type from the argument's raw type info.
-		// When the arg type is a generic instantiation (e.g., "APIResponse[pkg.User]"),
-		// use it instead of the resolved type which may lose the wrapper.
+		// Preserve generic type from the argument's raw type info. When the arg
+		// type is a generic instantiation (e.g. "APIResponse[pkg.User]") it
+		// carries the wrapper the resolved type may have lost. But for a generic
+		// composite literal (APIResponse[User]{…}), GetArgumentInfo already
+		// reconstructed the *bound* form while arg.Type is still the unbound
+		// declaration "APIResponse[T any]" — so only fall back to rawArgType when
+		// bodyType isn't already a bound (concrete-arg) generic instantiation.
 		rawArgType := r.contextProvider.GetString(arg.Type)
 		if strings.Contains(rawArgType, "[") && !strings.HasPrefix(rawArgType, "[]") && !strings.HasPrefix(rawArgType, "map[") {
-			bodyType = rawArgType
+			if !genericArgsAreConcrete(bodyType) {
+				bodyType = rawArgType
+			}
 		}
 
 		// Check if this is a literal value - if so, determine appropriate type
