@@ -31,10 +31,10 @@ That's it. The tool detects your framework, finds all routes, resolves handler t
 | **Gin** | Full | `c.Param`, `c.Query` | `ShouldBindJSON`, `BindJSON` | `c.JSON`, `c.String`, `c.Data` | `Group` |
 | **Echo** | Full | `c.Param`, `c.QueryParam`, `r.FormValue`, `r.FormFile` | `c.Bind` | `c.JSON`, `c.String`, `c.Blob` | `Group` |
 | **Fiber** | Full | `c.Params`, `c.Query`, `c.FormValue`, `c.FormFile` | `c.BodyParser` | `c.JSON`, `c.Status().JSON` | `Mount`, `Group` |
-| **Gorilla Mux** | Full | Path template `{id}` | `json.Decode` | `json.Encode`, `w.Write` | `PathPrefix`, `Subrouter` |
+| **Gorilla Mux** | Full | Path template `{id}` (regex constraints `{id:[0-9]+}` stripped), `.Queries("q", "{q}")` | `json.Decode` | `json.Encode`, `w.Write` | `PathPrefix`, `Subrouter` |
 | **net/http** | Basic | Path template, `r.FormValue`, `r.FormFile` | `json.Decode` | `json.Encode`, `w.Write`, `http.Error` | Nested `ServeMux` |
 
-Go 1.22+ `ServeMux` method-prefix patterns are supported — `mux.HandleFunc("GET /health/live", h)` produces `get: /health/live`, not a literal `/GET /health/live` key.
+Go 1.22+ `ServeMux` method-prefix patterns are supported — `mux.HandleFunc("GET /health/live", h)` produces `get: /health/live`, not a literal `/GET /health/live` key. Path templates are normalized per router: gorilla/mux regex constraints (`{id:[0-9]+}` → `{id}`), Go 1.22 trailing wildcards (`{path...}` → `{path}`), and the `{$}` end-of-path anchor (dropped) all reduce to clean OpenAPI placeholders, with the path parameters inferred.
 
 Projects using **multiple frameworks** simultaneously are fully supported — all routes from all detected frameworks appear in the spec.
 
@@ -51,17 +51,18 @@ All frameworks also detect `fmt.Fprintf`, `io.Copy`, and `io.WriteString` as res
 - Status code variable resolution: `status := http.StatusCreated; w.WriteHeader(status)` → 201
 - Cross-function status codes: `w.WriteHeader(getStatus())` where `getStatus()` returns a constant
 - Multiple response types for the same status code → `oneOf` schema
-- `[]byte` responses → `type: string, format: binary`
+- `[]byte` responses → `type: string, format: binary`. A free-function write (`io.Copy`, `io.WriteString`, `fmt.Fprintf`) only counts as a response when its **destination is the HTTP response writer** — an `io.Copy(file, src)` or `io.Copy(io.Discard, r)` reachable deep in the call graph is not misread as the endpoint's body
+- Conditional-status fan-out: a status-carrying error variable reassigned across branches (`if … { err = NewError(msg, http.StatusBadRequest) } else { err = NewError(msg, http.StatusNotFound) }`) then passed to one `RespondWithError(w, err)` → one response per status. The set is filtered to the assignments that actually **reach that call site**, so a later/overwritten/early-return-only reassignment doesn't leak an unrelated status
 - Bodyless status codes (1xx, 204, 304) never get body schemas (per RFC 7231)
 - Implicit 200 for handlers that write a body without explicit `WriteHeader`
 
 **Type Resolution**
-- Generic struct instantiation: `APIResponse[User]` → schema with `Data: $ref User`
+- Generic struct instantiation: `APIResponse[User]` → schema with `Data: $ref User`, bound per call site — a handler returning `APIResponse[User]{...}` and another returning `APIResponse[Product]{...}` each get their concrete payload, not an unbound `T`
 - Interface resolution: handlers registered via interface → concrete implementation schemas
 - `interface{}` parameter resolution: `respondJSON(w, 201, user)` where `data` is `interface{}` → resolves to concrete `User` type from the caller's argument
 - Conditional HTTP methods via CFG: `switch r.Method { case "GET": ... case "POST": ... }` → separate operations
 - Route path variables: `path := "/users"; r.GET(path, h)` → resolves variable to literal path
-- Decode receiver tracing: `json.NewDecoder(file).Decode(&cfg)` not misclassified as request body
+- Decode receiver tracing: `json.NewDecoder(file).Decode(&cfg)` not misclassified as request body. The data source is validated for arg-sourced decodes too — `json.Unmarshal(dbColumn, &v)` reachable deep in a handler's call graph is only treated as the request body when its source traces back to `r.Body`
 - io.Copy source tracing: `io.Copy(w, strings.NewReader(...))` → `type: string`; `io.Copy(w, file)` → `format: binary`
 
 **Documentation Extraction**
@@ -73,8 +74,11 @@ All frameworks also detect `fmt.Fprintf`, `io.Copy`, and `io.WriteString` as res
 **Schema Inference**
 - Required fields from `json:",omitempty"` absence and `binding:"required"` tags
 - Validator `dive` tag: `validate:"dive,email"` on `[]string` → items schema has `format: email`
+- Validator bound tags → schema constraints: `gte`/`lte` (and `min`/`max`) on a numeric field → `minimum`/`maximum`; the same tags on a string field → `minLength`/`maxLength` (go-playground/validator treats them as length); `oneof` → `enum`; `len`/`minlen`/`maxlen` → exact/min/max length
+- Embedded struct promotion: anonymously embedded structs (by value, by pointer, and transitively) have their fields flattened onto the outer schema, matching Go's field promotion and flat JSON marshaling
 - `Mux.Vars()` map index expressions → path parameter names
 - Type mappings for `time.Time`, `uuid.UUID`, and custom types
+- Container value types: `map[string]Struct` → `additionalProperties: $ref`, `map[string][]Struct` → `additionalProperties` array of `$ref`; nested slices `[][]T` → nested array schemas (no mangled component names)
 - Converter-typed params: `idStr := c.Param("id"); strconv.Atoi(idStr)` → `integer`; `strconv.ParseBool` → `boolean`; `strconv.ParseFloat` → `number`; `uuid.Parse` → `string/uuid`. Works for both inline (`strconv.Atoi(r.FormValue("x"))`) and var-bound (`if v := r.FormValue("x"); v != "" { strconv.ParseBool(v) }`) idioms, including shadowed variables in separate `if`-init scopes
 - `r.FormFile("upload")` → form parameter with `string`/`binary` schema
 - JSON-DTO field flow inference: when a decoded body's field is later passed to a converter (`uuid.Parse(body.SourceID)`, including pointer-deref `uuid.Parse(*body.TagsetID)`), apispec back-propagates the converter's schema (e.g. `format: uuid`) onto the struct field
@@ -278,9 +282,14 @@ Every `testdata/` directory has `expected_openapi.json` (short names) and `expec
 
 **One code path**: `generateGoldenSpec()` is the single function used by both comparison and generation. Tests never overwrite golden files.
 
+**Determinism is enforced, not assumed**: `TestGolden_Deterministic` regenerates every fixture several times in-process (Go randomizes map iteration each run, exercising different orderings) and asserts byte-identical output across runs — for both the default and legacy snapshots. This is what makes `make openapi` + `git diff --exit-code` a reliable CI staleness gate.
+
 ```bash
 # Compare (runs in CI — fails on mismatch):
 go test ./internal/engine/ -run TestGolden -v
+
+# Verify output is deterministic across runs:
+go test ./internal/engine/ -run TestGolden_Deterministic
 
 # Update after intentional changes (explicit, never automatic):
 go test ./internal/engine/ -run TestUpdateGolden -v
