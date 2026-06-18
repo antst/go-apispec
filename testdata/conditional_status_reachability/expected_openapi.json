@@ -1,0 +1,104 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/fanout": {
+      "get": {
+        "summary": "fanout: both if/else branches reassign code before the single trailing\nWriteHeader, so both statuses reach it — the fan-out emits 400 and 404.",
+        "operationId": "conditional_status_reachability.fanout",
+        "parameters": [
+          {
+            "name": "a",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/mixed": {
+      "get": {
+        "summary": "mixed: an unconditional default (503) followed by a conditional override\n(400); both reach the WriteHeader (503 when the branch is skipped, 400 when\ntaken) — the unconditional default is not shadowed by a conditional.",
+        "description": "mixed: an unconditional default (503) followed by a conditional override\n(400); both reach the WriteHeader (503 when the branch is skipped, 400 when\ntaken) — the unconditional default is not shadowed by a conditional. Route is\n400 and 503.",
+        "operationId": "conditional_status_reachability.mixed",
+        "parameters": [
+          {
+            "name": "a",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/reachable": {
+      "post": {
+        "summary": "reachable: the only response is the 400 in the early-return branch.",
+        "description": "reachable: the only response is the 400 in the early-return branch. The later\ncode = 500 assignment is positioned after that call, so it must NOT appear —\nthe route is 400 only.",
+        "operationId": "conditional_status_reachability.reachable",
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    },
+    "/shadowed": {
+      "get": {
+        "summary": "shadowed: code = 500 is a dead store, overwritten unconditionally by code =\n400 before the only WriteHeader, so only 400 reaches it — the unconditional\nreassignment shadows the earlier one.",
+        "description": "shadowed: code = 500 is a dead store, overwritten unconditionally by code =\n400 before the only WriteHeader, so only 400 reaches it — the unconditional\nreassignment shadows the earlier one. Route is 400 only.",
+        "operationId": "conditional_status_reachability.shadowed",
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {}
+}

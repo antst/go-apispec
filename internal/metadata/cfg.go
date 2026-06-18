@@ -71,19 +71,43 @@ func buildEdgePositionIndex(meta *Metadata, _ *token.FileSet) map[string]*CallGr
 }
 
 // buildAssignmentPositionIndex creates a map from source position string to
-// Assignment pointers across all call graph edges. Mirrors
+// the Assignment pointers at that position. It covers the call-graph edge maps
+// AND the function/method AssignmentMaps — the latter are distinct copies that
+// downstream reachability analysis (expandStatusesFromIdent, issue #50) reads,
+// so they must be annotated too. Several assignments can share a position
+// (an edge copy and a function copy), hence the slice value. Mirrors
 // buildEdgePositionIndex's repoRoot-stripped + raw double-keying.
-func buildAssignmentPositionIndex(meta *Metadata, _ *token.FileSet) map[string]*Assignment {
-	index := make(map[string]*Assignment)
+func buildAssignmentPositionIndex(meta *Metadata, _ *token.FileSet) map[string][]*Assignment {
+	index := make(map[string][]*Assignment)
+	add := func(assigns []Assignment) {
+		for j := range assigns {
+			assign := &assigns[j]
+			pos := meta.StringPool.GetString(assign.Position)
+			if pos == "" {
+				continue
+			}
+			index[pos] = append(index[pos], assign)
+			if repoRoot != "" {
+				index[repoRoot+pos] = append(index[repoRoot+pos], assign)
+			}
+		}
+	}
 	for i := range meta.CallGraph {
 		for varName := range meta.CallGraph[i].AssignmentMap {
-			for j := range meta.CallGraph[i].AssignmentMap[varName] {
-				assign := &meta.CallGraph[i].AssignmentMap[varName][j]
-				pos := meta.StringPool.GetString(assign.Position)
-				if pos != "" {
-					index[pos] = assign
-					if repoRoot != "" {
-						index[repoRoot+pos] = assign
+			add(meta.CallGraph[i].AssignmentMap[varName])
+		}
+	}
+	for _, pkg := range meta.Packages {
+		for _, file := range pkg.Files {
+			for _, fn := range file.Functions {
+				for varName := range fn.AssignmentMap {
+					add(fn.AssignmentMap[varName])
+				}
+			}
+			for _, typ := range file.Types {
+				for m := range typ.Methods {
+					for varName := range typ.Methods[m].AssignmentMap {
+						add(typ.Methods[m].AssignmentMap[varName])
 					}
 				}
 			}
@@ -95,7 +119,7 @@ func buildAssignmentPositionIndex(meta *Metadata, _ *token.FileSet) map[string]*
 // annotateBranches walks the CFG blocks and tags edges/assignments with
 // BranchContext based on the block's Kind and parent statement.
 func annotateBranches(graph *cfg.CFG, fset *token.FileSet, meta *Metadata,
-	edgesByPos map[string]*CallGraphEdge, assignsByPos map[string]*Assignment) {
+	edgesByPos map[string]*CallGraphEdge, assignsByPos map[string][]*Assignment) {
 	for _, block := range graph.Blocks {
 		if !block.Live {
 			continue
@@ -138,7 +162,7 @@ func annotateBranches(graph *cfg.CFG, fset *token.FileSet, meta *Metadata,
 				if edge, ok := edgesByPos[pos]; ok {
 					edge.Branch = ctx
 				}
-				if assign, ok := assignsByPos[pos]; ok {
+				for _, assign := range assignsByPos[pos] {
 					assign.Branch = ctx
 				}
 				return true

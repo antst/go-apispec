@@ -51,7 +51,13 @@ func csMatcher(t *testing.T, branchStatuses []string) (*ResponsePatternMatcherIm
 
 	assigns := make([]metadata.Assignment, 0, len(branchStatuses))
 	for _, name := range branchStatuses {
-		assigns = append(assigns, metadata.Assignment{Value: csNewErrorCall(meta, name)})
+		// These mirror `err = NewError(msg, http.Status…)` in distinct if/else
+		// branches, so each carries a (conditional) BranchContext — sibling
+		// branches don't shadow one another, so the fan-out keeps every status.
+		assigns = append(assigns, metadata.Assignment{
+			Value:  csNewErrorCall(meta, name),
+			Branch: &metadata.BranchContext{BlockKind: "if-else"},
+		})
 	}
 	meta.Packages["app"] = &metadata.Package{
 		Files: map[string]*metadata.File{
@@ -146,4 +152,104 @@ func csAssign(v metadata.CallArgument) metadata.Assignment { return metadata.Ass
 
 func matcherMeta(m *ResponsePatternMatcherImpl) *metadata.Metadata {
 	return metadataFromContextProvider(m.contextProvider)
+}
+
+func TestPositionAfter(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"f.go:20:1", "f.go:10:1", true},  // later line
+		{"f.go:10:5", "f.go:10:2", true},  // same line, later column
+		{"f.go:10:1", "f.go:20:1", false}, // earlier line
+		{"f.go:10:1", "f.go:10:1", false}, // equal
+		{"", "f.go:10:1", false},          // missing a
+		{"f.go:10:1", "", false},          // missing b
+		{"bad", "f.go:10:1", false},       // unparseable a
+		{"f.go:x:1", "f.go:10:1", false},  // non-numeric line
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.want, positionAfter(c.a, c.b), "%q vs %q", c.a, c.b)
+	}
+}
+
+func TestExpandStatusesFromIdent_Reachability(t *testing.T) {
+	// Two assignments (400 then 500); the 500 is positioned AFTER the response
+	// call site, so only 400 reaches it (issue #50).
+	matcher, node := csMatcher(t, []string{"StatusBadRequest", "StatusInternalServerError"})
+	meta := matcherMeta(matcher)
+	sp := meta.StringPool
+	fn := findFunction(meta, "app", "handler")
+	fn.AssignmentMap["err"][0].Position = sp.Get("h.go:10:3") // before the call
+	fn.AssignmentMap["err"][1].Position = sp.Get("h.go:20:3") // after the call
+
+	edge := node.GetEdge()
+	edge.Position = sp.Get("h.go:15:3") // call site between the two assignments
+
+	assert.Equal(t, []int{400}, matcher.expandStatusesFromIdent(edge.Args[1], edge))
+}
+
+func TestExpandStatusesFromIdent_UnconditionalShadow(t *testing.T) {
+	// code=500 (unconditional) then code=400 (unconditional) before the call:
+	// the later unconditional assignment overwrites the earlier on every path,
+	// so only 400 reaches the call (issue #50, the reused-variable case).
+	matcher, node := csMatcher(t, []string{"StatusInternalServerError", "StatusBadRequest"})
+	meta := matcherMeta(matcher)
+	sp := meta.StringPool
+	fn := findFunction(meta, "app", "handler")
+	fn.AssignmentMap["err"][0].Position = sp.Get("h.go:10:3") // 500, earlier
+	fn.AssignmentMap["err"][0].Branch = nil                   // unconditional
+	fn.AssignmentMap["err"][1].Position = sp.Get("h.go:12:3") // 400, later
+	fn.AssignmentMap["err"][1].Branch = nil                   // unconditional (shadows 500)
+	edge := node.GetEdge()
+	edge.Position = sp.Get("h.go:15:3")
+	assert.Equal(t, []int{400}, matcher.expandStatusesFromIdent(edge.Args[1], edge))
+}
+
+func TestExpandStatusesFromIdent_SiblingBranchesNotShadowed(t *testing.T) {
+	// Two conditional (if-then / if-else) assignments before the call don't
+	// shadow each other — both reach, so the intended fan-out is preserved.
+	matcher, node := csMatcher(t, []string{"StatusBadRequest", "StatusNotFound"})
+	meta := matcherMeta(matcher)
+	sp := meta.StringPool
+	fn := findFunction(meta, "app", "handler")
+	fn.AssignmentMap["err"][0].Position = sp.Get("h.go:10:3")
+	fn.AssignmentMap["err"][0].Branch = &metadata.BranchContext{BlockKind: "if-then"}
+	fn.AssignmentMap["err"][1].Position = sp.Get("h.go:12:3")
+	fn.AssignmentMap["err"][1].Branch = &metadata.BranchContext{BlockKind: "if-else"}
+	edge := node.GetEdge()
+	edge.Position = sp.Get("h.go:15:3")
+	got := matcher.expandStatusesFromIdent(edge.Args[1], edge)
+	sort.Ints(got)
+	assert.Equal(t, []int{400, 404}, got)
+}
+
+func TestStatusFromCallArgs_NoStatus(t *testing.T) {
+	meta := pmcTestMeta()
+	matcher := &ResponsePatternMatcherImpl{
+		BasePatternMatcher: &BasePatternMatcher{cfg: pmcTestCfg(), contextProvider: NewContextProvider(meta), schemaMapper: NewSchemaMapper(pmcTestCfg())},
+	}
+	call := metadata.NewCallArgument(meta)
+	call.SetKind(metadata.KindCall)
+	call.Args = []*metadata.CallArgument{nil, buildIdentArg(meta, "notAStatus", "app")}
+	_, ok := statusFromCallArgs(matcher, call)
+	assert.False(t, ok)
+}
+
+func TestExpandStatusesFromIdent_ShadowRobustToUnparseablePosition(t *testing.T) {
+	// Copilot (#57): the LATER unconditional assignment — the real shadow
+	// boundary — has an unparseable position. The index-based boundary must
+	// still shadow the earlier 500, leaving only 400 (a position-based boundary
+	// would have stayed pinned to 500 and leaked it).
+	matcher, node := csMatcher(t, []string{"StatusInternalServerError", "StatusBadRequest"})
+	meta := matcherMeta(matcher)
+	sp := meta.StringPool
+	fn := findFunction(meta, "app", "handler")
+	fn.AssignmentMap["err"][0].Position = sp.Get("h.go:10:3") // 500, parseable
+	fn.AssignmentMap["err"][0].Branch = nil
+	fn.AssignmentMap["err"][1].Position = sp.Get("???") // 400, UNPARSEABLE
+	fn.AssignmentMap["err"][1].Branch = nil
+	edge := node.GetEdge()
+	edge.Position = sp.Get("h.go:15:3")
+	assert.Equal(t, []int{400}, matcher.expandStatusesFromIdent(edge.Args[1], edge))
 }
