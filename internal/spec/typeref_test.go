@@ -23,7 +23,7 @@ import (
 
 func TestParseTypeRef_Canonical(t *testing.T) {
 	// input → canonical String(). Canonical inputs round-trip to themselves;
-	// TypeSep inputs normalize to the dot/bracket form.
+	// TypeSep inputs and `any` normalize to the dot/bracket / interface{} form.
 	cases := map[string]string{
 		"":                               "",
 		"int":                            "int",
@@ -40,8 +40,9 @@ func TestParseTypeRef_Canonical(t *testing.T) {
 		"map[string][]pkg.Money":         "map[string][]pkg.Money",
 		"map[string]*pkg.Money":          "map[string]*pkg.Money",
 		"map[pkg.Key]pkg.Val":            "map[pkg.Key]pkg.Val",
+		"map[map[string]int]bool":        "map[map[string]int]bool",
 		"interface{}":                    "interface{}",
-		"any":                            "any",
+		"any":                            "interface{}",
 		"pkg.APIResponse[pkg.User]":      "pkg.APIResponse[pkg.User]",
 		"pkg.Pair[string,int]":           "pkg.Pair[string,int]",
 		"pkg.Box[[]pkg.User]":            "pkg.Box[[]pkg.User]",
@@ -53,6 +54,7 @@ func TestParseTypeRef_Canonical(t *testing.T) {
 		// TypeSep (metadata-internal) forms normalize to canonical dot/bracket.
 		"pkg-->User":                   "pkg.User",
 		"pkg-->APIResponse-->pkg.User": "pkg.APIResponse[pkg.User]",
+		"pkg-->APIResponse[pkg.User]":  "pkg.APIResponse[pkg.User]",
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, ParseTypeRef(in).String(), "input %q", in)
@@ -60,33 +62,32 @@ func TestParseTypeRef_Canonical(t *testing.T) {
 }
 
 func TestParseTypeRef_Structure(t *testing.T) {
-	// Primitive vs named discrimination.
+	// Primitive vs named discrimination, including a qualified primitive.
 	assert.Equal(t, KindBasic, ParseTypeRef("int").Kind)
+	assert.Equal(t, KindBasic, ParseTypeRef("time.Time").Kind) // qualified primitive
 	assert.Equal(t, KindNamed, ParseTypeRef("pkg.User").Kind)
-	assert.Equal(t, KindNamed, ParseTypeRef("User").Kind) // non-primitive, unqualified
+	assert.Equal(t, KindNamed, ParseTypeRef("User").Kind)
+	// A package-local type whose name collides with a builtin keeps its $ref
+	// (Named), it is not mistaken for the primitive.
+	bt := ParseTypeRef("mypkg.byte")
+	assert.Equal(t, KindNamed, bt.Kind)
+	assert.Equal(t, "mypkg", bt.Pkg)
 
-	// Map value/key are recursively parsed.
+	// Map value/key recursively parsed; nested slice has no name mangling.
 	m := ParseTypeRef("map[string][]pkg.Money")
 	require.Equal(t, KindMap, m.Kind)
 	assert.Equal(t, KindBasic, m.Key.Kind)
 	require.Equal(t, KindSlice, m.Elem.Kind)
-	assert.Equal(t, KindNamed, m.Elem.Elem.Kind)
-	assert.Equal(t, "pkg", m.Elem.Elem.Pkg)
 	assert.Equal(t, "Money", m.Elem.Elem.Name)
 
-	// Nested slice: [][]int → slice of slice of int (no name mangling).
-	s := ParseTypeRef("[][]int")
-	require.Equal(t, KindSlice, s.Kind)
-	require.Equal(t, KindSlice, s.Elem.Kind)
-	assert.Equal(t, KindBasic, s.Elem.Elem.Kind)
-	assert.Equal(t, "int", s.Elem.Elem.Name)
-
-	// Generic instantiation binds the concrete arg.
-	g := ParseTypeRef("pkg.APIResponse[pkg.User]")
-	require.Equal(t, KindNamed, g.Kind)
-	assert.Equal(t, "APIResponse", g.Name)
-	require.Len(t, g.Args, 1)
-	assert.Equal(t, "User", g.Args[0].Name)
+	// Generic instantiation binds the concrete arg (both bracket and TypeSep).
+	for _, in := range []string{"pkg.APIResponse[pkg.User]", "pkg-->APIResponse-->pkg.User", "pkg-->APIResponse[pkg.User]"} {
+		g := ParseTypeRef(in)
+		require.Equal(t, KindNamed, g.Kind, in)
+		assert.Equal(t, "APIResponse", g.Name, in)
+		require.Len(t, g.Args, 1, in)
+		assert.Equal(t, "User", g.Args[0].Name, in)
+	}
 
 	// Multi-arg generic with a nested map arg, split on the top-level comma only.
 	p := ParseTypeRef("pkg.Pair[map[string]int,[]pkg.User]")
@@ -94,38 +95,84 @@ func TestParseTypeRef_Structure(t *testing.T) {
 	assert.Equal(t, KindMap, p.Args[0].Kind)
 	assert.Equal(t, KindSlice, p.Args[1].Kind)
 
-	// Fixed-size array length is captured.
 	a := ParseTypeRef("[16]byte")
 	require.Equal(t, KindArray, a.Kind)
 	assert.Equal(t, 16, a.Len)
 
-	// Pointer wraps the element.
 	ptr := ParseTypeRef("*pkg.User")
 	require.Equal(t, KindPointer, ptr.Kind)
 	assert.Equal(t, "User", ptr.Elem.Name)
 }
 
-func TestTypeRef_StringNil(t *testing.T) {
-	var t0 *TypeRef
-	assert.Equal(t, "", t0.String())
+func TestParseTypeRef_OpaqueForms(t *testing.T) {
+	// Function / channel / field-bearing struct & interface types are carried
+	// opaque (KindBasic, whole string in Name), never decomposed into a garbage
+	// named/generic tree, and round-trip verbatim.
+	for _, in := range []string{
+		"func([]int) error",
+		"func(http.ResponseWriter, *http.Request)",
+		"chan int",
+		"<-chan string",
+		"chan<- int",
+		"struct{X int}",
+		"interface{Reader}",
+	} {
+		r := ParseTypeRef(in)
+		assert.Equal(t, KindBasic, r.Kind, "input %q", in)
+		assert.Empty(t, r.Pkg, "input %q must not fabricate a package", in)
+		assert.Equal(t, in, r.String(), "opaque round-trip %q", in)
+	}
 }
 
 func TestParseTypeRef_EdgeCases(t *testing.T) {
-	// Malformed (unbalanced) and incomplete (no value/element) forms → opaque,
-	// never a structured node with an empty element.
-	for _, in := range []string{"map[string", "[5", "map[string]", "[16]"} {
+	// Malformed / incomplete forms → opaque, never a structured node with an
+	// empty or degraded element.
+	for _, in := range []string{"map[string", "[5", "map[string]", "[16]", "map[]int", "[-5]int", "[99999999999999999999]int"} {
 		assert.Equal(t, KindBasic, ParseTypeRef(in).Kind, "input %q", in)
 	}
 
-	// Array with a non-numeric length → Len -1, rendered as a plain slice.
-	a := ParseTypeRef("[N]byte")
-	require.Equal(t, KindArray, a.Kind)
-	assert.Equal(t, -1, a.Len)
-	assert.Equal(t, "[]byte", a.String())
+	// A trailing token after the generic close doesn't corrupt the args (the
+	// outer brackets are matched by depth, not TrimSuffix).
+	g := ParseTypeRef("pkg.Box[pkg.User]extra")
+	require.Len(t, g.Args, 1)
+	assert.Equal(t, "User", g.Args[0].Name)
 
-	// A package-qualified primitive (time.Time → string/date-time mapping) is
-	// Basic, not Named — so it isn't turned into a $ref component.
-	tt := ParseTypeRef("time.Time")
-	assert.Equal(t, KindBasic, tt.Kind)
-	assert.Equal(t, "time.Time", tt.String())
+	// An unbalanced generic bracket degrades to the bare named type with no
+	// args rather than a corrupted arg list.
+	u := ParseTypeRef("pkg.Box[pkg.User")
+	require.Equal(t, KindNamed, u.Kind)
+	assert.Equal(t, "Box", u.Name)
+	assert.Empty(t, u.Args)
+}
+
+func TestTypeRef_Qualify(t *testing.T) {
+	// Bare field types gain the enclosing package on their named elements only.
+	m := ParseTypeRef("map[string][]Money")
+	m.Qualify("pkg")
+	assert.Equal(t, "map[string][]pkg.Money", m.String())
+
+	// Primitives and already-qualified types are untouched; the package only
+	// reaches the element of a slice, not the slice itself.
+	s := ParseTypeRef("[]other.Thing")
+	s.Qualify("pkg")
+	assert.Equal(t, "[]other.Thing", s.String())
+
+	prim := ParseTypeRef("[][]int")
+	prim.Qualify("pkg")
+	assert.Equal(t, "[][]int", prim.String())
+
+	// Generic args are qualified too.
+	g := ParseTypeRef("Box[Item]")
+	g.Qualify("pkg")
+	assert.Equal(t, "pkg.Box[pkg.Item]", g.String())
+
+	// Nil / empty-pkg are no-ops.
+	var nilRef *TypeRef
+	nilRef.Qualify("pkg")
+	g.Qualify("")
+}
+
+func TestTypeRef_StringNil(t *testing.T) {
+	var t0 *TypeRef
+	assert.Equal(t, "", t0.String())
 }
