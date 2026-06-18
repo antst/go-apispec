@@ -246,11 +246,19 @@ func TestTypeRefFromExpr_NilAndUnrecognized(t *testing.T) {
 	fooAB := &ast.IndexExpr{X: &ast.IndexExpr{X: &ast.Ident{Name: "Foo"}, Index: &ast.Ident{Name: "A"}}, Index: &ast.Ident{Name: "B"}}
 	assert.Nil(t, TypeRefFromExpr(fooAB, nil))
 
-	// An array whose length is a non-constant, non-literal expression and no
-	// type info to resolve it falls back to length 0 (still an array).
+	// An array whose length is a non-constant, non-literal expression with no
+	// type info is unresolved: Len -1, rendered [...] (distinct from a genuine [0]).
 	arr := TypeRefFromExpr(&ast.ArrayType{Len: &ast.Ident{Name: "N"}, Elt: &ast.Ident{Name: "byte"}}, nil)
 	require.Equal(t, RefArray, arr.Kind)
-	assert.Equal(t, 0, arr.Len)
+	assert.Equal(t, -1, arr.Len)
+	assert.Equal(t, "[...]byte", arr.String())
+
+	// An inferred-length array [...]T (only valid in composite literals, so
+	// constructed directly) renders [...]T, not a wrong [0]T.
+	ell := TypeRefFromExpr(&ast.ArrayType{Len: &ast.Ellipsis{}, Elt: &ast.Ident{Name: "int"}}, nil)
+	require.Equal(t, RefArray, ell.Kind)
+	assert.Equal(t, -1, ell.Len)
+	assert.Equal(t, "[...]int", ell.String())
 
 	// A composite whose inner type is unrecognized propagates nil instead of
 	// fabricating a "*" / "[]" / "map[]" shell (the documented contract).

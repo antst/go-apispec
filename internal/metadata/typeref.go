@@ -48,9 +48,9 @@ type TypeRef struct {
 	// Named: generic instantiation arguments, e.g. the User in APIResponse[User]
 	// or the K, V in Pair[K, V] — positional, one per declared type parameter.
 	Args []*TypeRef
-	// Array: the length (>= 0). 0 means either a genuine [0]T or — only when
-	// built without type info — an unresolved length; production always supplies
-	// type info, so the length is accurate there.
+	// Array: the length. >= 0 is a known constant length; -1 means inferred or
+	// not statically resolved — [...]T, or a const-expression length built
+	// without type info — and renders as [...]. A genuine [0]T keeps Len 0.
 	Len int
 }
 
@@ -219,7 +219,8 @@ func selectorParts(t *ast.SelectorExpr, info *types.Info) (pkg, name string) {
 
 // arrayLen evaluates a constant array length, preferring the type-checker's
 // constant value (which resolves named/const-expression lengths) and falling
-// back to a literal integer. Returns 0 when the length cannot be determined.
+// back to a literal integer. Returns -1 when the length is inferred ([...]) or
+// cannot be statically determined.
 func arrayLen(e ast.Expr, info *types.Info) int {
 	if info != nil {
 		if tv, ok := info.Types[e]; ok && tv.Value != nil {
@@ -235,7 +236,7 @@ func arrayLen(e ast.Expr, info *types.Info) int {
 			return int(n)
 		}
 	}
-	return 0
+	return -1 // inferred ([...]T) or not statically resolvable
 }
 
 // fitsLen reports whether a 64-bit array length is a non-negative value that
@@ -281,6 +282,9 @@ func (t *TypeRef) String() string {
 	case RefSlice:
 		return "[]" + t.Elem.String()
 	case RefArray:
+		if t.Len < 0 {
+			return "[...]" + t.Elem.String()
+		}
 		return "[" + strconv.Itoa(t.Len) + "]" + t.Elem.String()
 	case RefMap:
 		return "map[" + t.Key.String() + "]" + t.Elem.String()
