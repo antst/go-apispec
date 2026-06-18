@@ -186,6 +186,40 @@ type S struct {
 	assert.Equal(t, "net/http.Header", f.String())
 }
 
+func TestTypeRefFromExpr_TypeParam(t *testing.T) {
+	exprs, info := fieldExprs(t, `package x
+type Local int
+type Box[T any] struct {
+	V T
+	W []T
+	X Local
+	U Undefined
+}`, true)
+	require.NotNil(t, info)
+
+	// A generic type parameter is its own kind, not a package type — so Qualify
+	// must not turn T into pkg.T.
+	v := TypeRefFromExpr(exprs["V"], info)
+	require.Equal(t, RefParam, v.Kind)
+	assert.Equal(t, "T", v.Name)
+	v.Qualify("pkg")
+	assert.Equal(t, "T", v.String())
+
+	w := TypeRefFromExpr(exprs["W"], info)
+	require.Equal(t, RefSlice, w.Kind)
+	assert.Equal(t, RefParam, w.Elem.Kind)
+	w.Qualify("pkg")
+	assert.Equal(t, "[]T", w.String())
+
+	// A defined non-parameter type and an undefined identifier both classify as
+	// named (exercising isTypeParam's non-param and nil-object branches).
+	assert.Equal(t, RefNamed, TypeRefFromExpr(exprs["X"], info).Kind)
+	assert.Equal(t, RefNamed, TypeRefFromExpr(exprs["U"], info).Kind)
+
+	// Without type info a bare T cannot be told apart from a package-local type.
+	assert.Equal(t, RefNamed, TypeRefFromExpr(exprs["V"], nil).Kind)
+}
+
 func TestTypeRefFromExpr_NilAndUnrecognized(t *testing.T) {
 	assert.Nil(t, TypeRefFromExpr(nil, nil))
 	assert.Nil(t, TypeRefFromExpr(&ast.BasicLit{Kind: token.INT, Value: "1"}, nil)) // not a type expr
@@ -203,6 +237,13 @@ func TestTypeRefFromExpr_NilAndUnrecognized(t *testing.T) {
 	arr := TypeRefFromExpr(&ast.ArrayType{Len: &ast.Ident{Name: "N"}, Elt: &ast.Ident{Name: "byte"}}, nil)
 	require.Equal(t, RefArray, arr.Kind)
 	assert.Equal(t, 0, arr.Len)
+
+	// A composite whose inner type is unrecognized propagates nil instead of
+	// fabricating a "*" / "[]" / "map[]" shell (the documented contract).
+	lit := &ast.BasicLit{Kind: token.INT, Value: "1"}
+	assert.Nil(t, TypeRefFromExpr(&ast.StarExpr{X: lit}, nil))
+	assert.Nil(t, TypeRefFromExpr(&ast.ArrayType{Elt: lit}, nil))
+	assert.Nil(t, TypeRefFromExpr(&ast.MapType{Key: &ast.Ident{Name: "string"}, Value: lit}, nil))
 
 	// A selector whose base is not a plain package ident (a.b.C) has no simple
 	// qualifier; it degrades to the trailing name with no package.

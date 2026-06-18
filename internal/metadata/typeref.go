@@ -48,7 +48,9 @@ type TypeRef struct {
 	// Named: generic instantiation arguments, e.g. the User in APIResponse[User]
 	// or the K, V in Pair[K, V] — positional, one per declared type parameter.
 	Args []*TypeRef
-	// Array: the length (>= 0; 0 when it could not be resolved as a constant).
+	// Array: the length (>= 0). 0 means either a genuine [0]T or — only when
+	// built without type info — an unresolved length; production always supplies
+	// type info, so the length is accurate there.
 	Len int
 }
 
@@ -78,6 +80,9 @@ const (
 	RefStruct
 	// RefChan is a channel type — opaque (no schema).
 	RefChan
+	// RefParam is a generic type-parameter reference (the T in Box[T]). It is not
+	// a package type, so Qualify must leave it alone; detected only with type info.
+	RefParam
 )
 
 // TypeRefFromExpr builds a TypeRef from a type expression. info may be nil; it
@@ -85,6 +90,8 @@ const (
 // array length, both of which degrade gracefully when absent. Unrecognized
 // nodes return nil so callers can detect "no usable type" rather than a
 // fabricated one.
+//
+//nolint:gocyclo // flat type switch over many AST node kinds — low real complexity
 func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 	switch t := e.(type) {
 	case nil:
@@ -92,10 +99,14 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 	case *ast.ParenExpr:
 		return TypeRefFromExpr(t.X, info)
 	case *ast.Ident:
-		if IsPrimitiveType(t.Name) {
+		switch {
+		case IsPrimitiveType(t.Name):
 			return &TypeRef{Kind: RefBasic, Name: t.Name}
+		case isTypeParam(t, info):
+			return &TypeRef{Kind: RefParam, Name: t.Name}
+		default:
+			return &TypeRef{Kind: RefNamed, Name: t.Name}
 		}
-		return &TypeRef{Kind: RefNamed, Name: t.Name}
 	case *ast.SelectorExpr:
 		pkg, name := selectorParts(t, info)
 		full := name
@@ -107,14 +118,22 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 		}
 		return &TypeRef{Kind: RefNamed, Pkg: pkg, Name: name}
 	case *ast.StarExpr:
-		return &TypeRef{Kind: RefPointer, Elem: TypeRefFromExpr(t.X, info)}
+		return wrap(RefPointer, TypeRefFromExpr(t.X, info))
 	case *ast.ArrayType:
-		if t.Len == nil {
-			return &TypeRef{Kind: RefSlice, Elem: TypeRefFromExpr(t.Elt, info)}
+		elem := TypeRefFromExpr(t.Elt, info)
+		if elem == nil {
+			return nil
 		}
-		return &TypeRef{Kind: RefArray, Len: arrayLen(t.Len, info), Elem: TypeRefFromExpr(t.Elt, info)}
+		if t.Len == nil {
+			return &TypeRef{Kind: RefSlice, Elem: elem}
+		}
+		return &TypeRef{Kind: RefArray, Len: arrayLen(t.Len, info), Elem: elem}
 	case *ast.MapType:
-		return &TypeRef{Kind: RefMap, Key: TypeRefFromExpr(t.Key, info), Elem: TypeRefFromExpr(t.Value, info)}
+		key, val := TypeRefFromExpr(t.Key, info), TypeRefFromExpr(t.Value, info)
+		if key == nil || val == nil {
+			return nil
+		}
+		return &TypeRef{Kind: RefMap, Key: key, Elem: val}
 	case *ast.InterfaceType:
 		return &TypeRef{Kind: RefInterface}
 	case *ast.StructType:
@@ -124,7 +143,7 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 	case *ast.ChanType: // opaque (no schema); direction and element carry no schema meaning
 		return &TypeRef{Kind: RefChan}
 	case *ast.Ellipsis: // variadic ...T is a []T (go/types lowers it the same way)
-		return &TypeRef{Kind: RefSlice, Elem: TypeRefFromExpr(t.Elt, info)}
+		return wrap(RefSlice, TypeRefFromExpr(t.Elt, info))
 	case *ast.IndexExpr: // single-arg generic instantiation: Base[Arg]
 		return namedWithArgs(t.X, []ast.Expr{t.Index}, info)
 	case *ast.IndexListExpr: // multi-arg generic instantiation: Base[A, B]
@@ -147,6 +166,31 @@ func namedWithArgs(base ast.Expr, args []ast.Expr, info *types.Info) *TypeRef {
 		ref.Args = append(ref.Args, TypeRefFromExpr(a, info))
 	}
 	return ref
+}
+
+// wrap builds a single-element composite (pointer/slice), propagating a nil
+// element as nil so an unrecognized inner type yields no usable type rather
+// than a fabricated "*"/"[]" shell.
+func wrap(kind RefKind, elem *TypeRef) *TypeRef {
+	if elem == nil {
+		return nil
+	}
+	return &TypeRef{Kind: kind, Elem: elem}
+}
+
+// isTypeParam reports whether id refers to a generic type parameter, which must
+// not be qualified or treated as a package type. Requires type info; without it
+// a bare identifier is indistinguishable from a package-local type.
+func isTypeParam(id *ast.Ident, info *types.Info) bool {
+	if info == nil {
+		return false
+	}
+	obj := info.ObjectOf(id)
+	if obj == nil {
+		return false
+	}
+	_, ok := obj.Type().(*types.TypeParam)
+	return ok
 }
 
 // selectorParts resolves a qualified type "pkg.Name" to its import path and
@@ -216,8 +260,10 @@ func (t *TypeRef) Qualify(pkg string) {
 	}
 }
 
-// String renders the TypeRef in canonical Go form. Opaque kinds render to their
-// bare keyword form (func, struct{}, interface{}, chan Elem).
+// String renders the TypeRef as the project's canonical metadata identifier:
+// dot-separated using the package's full import path, so a qualified type reads
+// "net/http.Header" (an import-path form, not literal Go source). Opaque kinds
+// render to their bare keyword (func, struct{}, interface{}, chan).
 func (t *TypeRef) String() string {
 	if t == nil {
 		return ""
