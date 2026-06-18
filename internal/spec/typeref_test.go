@@ -111,13 +111,21 @@ func TestTypeRef_StringNil(t *testing.T) {
 }
 
 func TestParseTypeRef_EdgeCases(t *testing.T) {
-	// Malformed (unbalanced brackets) → kept opaque, never panics.
-	assert.Equal(t, KindBasic, ParseTypeRef("map[string").Kind)
-	assert.Equal(t, KindBasic, ParseTypeRef("[5").Kind)
+	// Malformed (unbalanced) and incomplete (no value/element) forms → opaque,
+	// never a structured node with an empty element.
+	for _, in := range []string{"map[string", "[5", "map[string]", "[16]"} {
+		assert.Equal(t, KindBasic, ParseTypeRef(in).Kind, "input %q", in)
+	}
 
 	// Array with a non-numeric length → Len -1, rendered as a plain slice.
 	a := ParseTypeRef("[N]byte")
 	require.Equal(t, KindArray, a.Kind)
 	assert.Equal(t, -1, a.Len)
 	assert.Equal(t, "[]byte", a.String())
+
+	// A package-qualified primitive (time.Time → string/date-time mapping) is
+	// Basic, not Named — so it isn't turned into a $ref component.
+	tt := ParseTypeRef("time.Time")
+	assert.Equal(t, KindBasic, tt.Kind)
+	assert.Equal(t, "time.Time", tt.String())
 }

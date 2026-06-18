@@ -113,8 +113,8 @@ func parseMap(s string) *TypeRef {
 			break
 		}
 	}
-	if end < 0 {
-		return &TypeRef{Kind: KindBasic, Name: s} // malformed — keep opaque
+	if end < 0 || strings.TrimSpace(inner[end+1:]) == "" {
+		return &TypeRef{Kind: KindBasic, Name: s} // malformed/incomplete — keep opaque
 	}
 	return &TypeRef{
 		Kind: KindMap,
@@ -127,8 +127,8 @@ func parseMap(s string) *TypeRef {
 // non-numeric length (e.g. a const expr) yields Len == -1.
 func parseArray(s string) *TypeRef {
 	end := strings.IndexByte(s, ']')
-	if end < 0 {
-		return &TypeRef{Kind: KindBasic, Name: s}
+	if end < 0 || strings.TrimSpace(s[end+1:]) == "" {
+		return &TypeRef{Kind: KindBasic, Name: s} // malformed/incomplete — keep opaque
 	}
 	length := -1
 	if n, err := strconv.Atoi(strings.TrimSpace(s[1:end])); err == nil {
@@ -160,9 +160,10 @@ func parseNamed(s string) *TypeRef {
 		}
 		return ref
 	}
-	// Plain pkg.Name or a primitive.
+	// Plain pkg.Name or a primitive. A qualified type can still be primitive —
+	// metadata.IsPrimitiveType("time.Time") is true — so check the full name too.
 	ref := splitPkgName(s)
-	if ref.Pkg == "" && metadata.IsPrimitiveType(ref.Name) {
+	if metadata.IsPrimitiveType(s) || metadata.IsPrimitiveType(ref.Name) {
 		ref.Kind = KindBasic
 	} else {
 		ref.Kind = KindNamed
