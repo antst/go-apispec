@@ -111,6 +111,7 @@ func TestParseTypeRef_OpaqueForms(t *testing.T) {
 	for _, in := range []string{
 		"func([]int) error",
 		"func(http.ResponseWriter, *http.Request)",
+		"func[T any](T) T", // generic function type — '[' must not decompose it
 		"chan int",
 		"<-chan string",
 		"chan<- int",
@@ -122,6 +123,30 @@ func TestParseTypeRef_OpaqueForms(t *testing.T) {
 		assert.Empty(t, r.Pkg, "input %q must not fabricate a package", in)
 		assert.Equal(t, in, r.String(), "opaque round-trip %q", in)
 	}
+}
+
+func TestParseTypeRef_GenericDecl(t *testing.T) {
+	// Unbound generic *declarations* record their type-parameter names in Params,
+	// not as bogus concrete Args — an instantiation would have populated Args.
+	for _, in := range []string{"APIResponse[T any]", "pkg-->APIResponse[T any]"} {
+		d := ParseTypeRef(in)
+		require.Equal(t, KindNamed, d.Kind, in)
+		assert.Equal(t, "APIResponse", d.Name, in)
+		assert.Empty(t, d.Args, in)
+		assert.Equal(t, []string{"T"}, d.Params, in)
+	}
+
+	p := ParseTypeRef("pkg.Pair[K comparable,V any]")
+	assert.Empty(t, p.Args)
+	assert.Equal(t, []string{"K", "V"}, p.Params)
+	assert.Equal(t, "pkg.Pair[K,V]", p.String())
+
+	// A concrete arg that merely contains a space (a func-type instantiation
+	// argument) is NOT mistaken for a parameter declaration.
+	inst := ParseTypeRef("Box[func(int) error]")
+	require.Len(t, inst.Args, 1)
+	assert.Empty(t, inst.Params)
+	assert.Equal(t, KindBasic, inst.Args[0].Kind)
 }
 
 func TestParseTypeRef_EdgeCases(t *testing.T) {

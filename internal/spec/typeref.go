@@ -42,12 +42,16 @@ type TypeRef struct {
 	Elem *TypeRef
 	// Map: the key type.
 	Key *TypeRef
-	// Named: generic type arguments, e.g. the User in APIResponse[User]. These
-	// are positional: Args[i] is the concrete type for the i-th declared type
-	// parameter. Consumers that need the parameter *names* (T/K/V) for field
-	// substitution zip Args against the type's declared TypeParams from metadata
-	// rather than relying on names being present in the type string.
+	// Named: generic type arguments of an *instantiation*, e.g. the User in
+	// APIResponse[User]. These are positional: Args[i] is the concrete type for
+	// the i-th declared type parameter.
 	Args []*TypeRef
+	// Named: type-*parameter* names of an unbound generic *declaration*, e.g. the
+	// T in APIResponse[T any] or the K, V in Pair[K comparable, V any]. A given
+	// TypeRef is one or the other — an instantiation has Args, a declaration has
+	// Params — and field substitution zips an instantiation's Args against the
+	// declaration's Params (or the type's metadata TypeParams) by position.
+	Params []string
 	// Array: the length (always ≥ 0; non-numeric/negative lengths make the whole
 	// form opaque).
 	Len int
@@ -111,7 +115,7 @@ func ParseTypeRef(s string) *TypeRef {
 // fabricate a garbage tree (e.g. "func([]int) error" splitting at the slice's
 // bracket), so they stay opaque.
 func isOpaqueForm(s string) bool {
-	for _, p := range []string{"func(", "func ", "chan ", "chan<-", "<-chan", "struct{", "struct ", "interface{"} {
+	for _, p := range []string{"func(", "func ", "func[", "chan ", "chan<-", "<-chan", "struct{", "struct ", "interface{"} {
 		if strings.HasPrefix(s, p) {
 			return true
 		}
@@ -171,9 +175,7 @@ func parseNamed(s string) *TypeRef {
 	if open := strings.IndexByte(s, '['); open > 0 && !strings.Contains(s[:open], TypeSep) {
 		ref := splitPkgName(s[:open])
 		ref.Kind = KindNamed
-		for _, a := range bracketArgList(s[open:]) {
-			ref.Args = append(ref.Args, ParseTypeRef(a))
-		}
+		ref.addGenericArgs(bracketArgList(s[open:]))
 		return ref
 	}
 	// TypeSep form: pkg-->Name(-->Arg)*.
@@ -184,12 +186,8 @@ func parseNamed(s string) *TypeRef {
 			bracket, name = name[b:], name[:b]
 		}
 		ref := &TypeRef{Kind: KindNamed, Pkg: parts[0], Name: name}
-		for _, a := range parts[2:] {
-			ref.Args = append(ref.Args, ParseTypeRef(a))
-		}
-		for _, a := range bracketArgList(bracket) {
-			ref.Args = append(ref.Args, ParseTypeRef(a))
-		}
+		ref.addGenericArgs(parts[2:])
+		ref.addGenericArgs(bracketArgList(bracket))
 		return ref
 	}
 	// Plain pkg.Name or a primitive. A qualified type can still be primitive —
@@ -228,6 +226,46 @@ func bracketArgList(s string) []string {
 		return nil // unbalanced — no args
 	}
 	return splitTopLevelCommas(s[1:end])
+}
+
+// addGenericArgs distributes a generic bracket's tokens between Args and
+// Params: a type-parameter declaration ("T any") records its name in Params,
+// while a concrete instantiation argument ("pkg.User", "func(int) error") is
+// parsed into Args. The two never mix on a single type — a string is either a
+// declaration or an instantiation — but routing each token independently keeps
+// a malformed mix from corrupting the other slice.
+func (t *TypeRef) addGenericArgs(tokens []string) {
+	for _, tok := range tokens {
+		if name, ok := typeParamDecl(tok); ok {
+			t.Params = append(t.Params, name)
+		} else {
+			t.Args = append(t.Args, ParseTypeRef(tok))
+		}
+	}
+}
+
+// typeParamDecl reports whether tok is a type-*parameter* declaration of the
+// form "<ident> <constraint>" (the "T any" in APIResponse[T any]), returning
+// the parameter name. The head before the first space must be a plain
+// identifier, which distinguishes a declaration from a concrete argument that
+// merely contains a space, such as "func(int) error".
+func typeParamDecl(tok string) (string, bool) {
+	sp := strings.IndexByte(tok, ' ')
+	if sp <= 0 {
+		return "", false
+	}
+	for i := 0; i < sp; i++ {
+		if !isIdentChar(tok[i]) {
+			return "", false
+		}
+	}
+	return tok[:sp], true
+}
+
+// isIdentChar reports whether c may appear in a Go identifier (ASCII subset,
+// sufficient for the type-parameter names go/types emits).
+func isIdentChar(c byte) bool {
+	return c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // splitPkgName splits "github.com/org/pkg.Name" at the last dot into the
@@ -313,13 +351,17 @@ func (t *TypeRef) String() string {
 		if t.Pkg != "" {
 			name = t.Pkg + "." + t.Name
 		}
-		if len(t.Args) == 0 {
+		switch {
+		case len(t.Args) > 0:
+			args := make([]string, len(t.Args))
+			for i, a := range t.Args {
+				args[i] = a.String()
+			}
+			return name + "[" + strings.Join(args, ",") + "]"
+		case len(t.Params) > 0:
+			return name + "[" + strings.Join(t.Params, ",") + "]"
+		default:
 			return name
 		}
-		args := make([]string, len(t.Args))
-		for i, a := range t.Args {
-			args[i] = a.String()
-		}
-		return name + "[" + strings.Join(args, ",") + "]"
 	}
 }
