@@ -86,10 +86,11 @@ const (
 )
 
 // TypeRefFromExpr builds a TypeRef from a type expression. info may be nil; it
-// is used only to resolve a selector's package path and to evaluate a constant
-// array length, both of which degrade gracefully when absent. Unrecognized
-// nodes return nil so callers can detect "no usable type" rather than a
-// fabricated one.
+// is used to resolve a selector's package path, evaluate a constant array
+// length, and distinguish a generic type parameter from a package-local type —
+// all of which degrade gracefully when absent (without info a bare identifier
+// is treated as a named type, never a type parameter). Unrecognized nodes
+// return nil so callers can detect "no usable type" rather than a fabricated one.
 //
 //nolint:gocyclo // flat type switch over many AST node kinds — low real complexity
 func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
@@ -153,15 +154,15 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 	}
 }
 
-// namedWithArgs builds a generic instantiation: the named base type carrying
-// its positional type arguments. A generic's base must be a named type, so a
-// non-named base (a primitive, composite, or type parameter — only reachable
-// from ill-typed source like int[T] or ([]int)[T]) yields no usable type, as
-// does any unrecognized argument; in both cases the result is nil rather than a
-// fabricated "[T]"-style identifier.
+// namedWithArgs builds a generic instantiation: an un-instantiated named base
+// type carrying its positional type arguments. Anything else is reachable only
+// from ill-typed source and yields nil (never a fabricated identifier): a
+// non-named base (int[T], ([]int)[T]), a base that is already instantiated (the
+// nested Foo[A][B], which must not collapse to Foo[A,B]), or an unrecognized
+// argument.
 func namedWithArgs(base ast.Expr, args []ast.Expr, info *types.Info) *TypeRef {
 	ref := TypeRefFromExpr(base, info)
-	if ref == nil || ref.Kind != RefNamed {
+	if ref == nil || ref.Kind != RefNamed || len(ref.Args) > 0 {
 		return nil
 	}
 	for _, a := range args {

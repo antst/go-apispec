@@ -241,6 +241,10 @@ func TestTypeRefFromExpr_NilAndUnrecognized(t *testing.T) {
 	assert.Nil(t, TypeRefFromExpr(&ast.IndexListExpr{X: &ast.StarExpr{X: &ast.Ident{Name: "Foo"}}, Indices: []ast.Expr{tp}}, nil)) // (*Foo)[T]
 	// A named base with an unrecognized argument also yields nil, not an empty arg.
 	assert.Nil(t, TypeRefFromExpr(&ast.IndexExpr{X: &ast.Ident{Name: "Foo"}, Index: &ast.BasicLit{Kind: token.INT, Value: "1"}}, nil))
+	// An already-instantiated base (the ill-typed nested Foo[A][B]) is nil, not a
+	// collapsed Foo[A,B].
+	fooAB := &ast.IndexExpr{X: &ast.IndexExpr{X: &ast.Ident{Name: "Foo"}, Index: &ast.Ident{Name: "A"}}, Index: &ast.Ident{Name: "B"}}
+	assert.Nil(t, TypeRefFromExpr(fooAB, nil))
 
 	// An array whose length is a non-constant, non-literal expression and no
 	// type info to resolve it falls back to length 0 (still an array).
