@@ -232,6 +232,16 @@ func TestTypeRefFromExpr_NilAndUnrecognized(t *testing.T) {
 	// A generic whose base is not a type (here a literal) yields no usable type.
 	assert.Nil(t, TypeRefFromExpr(&ast.IndexExpr{X: &ast.BasicLit{Kind: token.INT, Value: "1"}, Index: &ast.Ident{Name: "T"}}, nil))
 
+	// A generic whose base is recognized but not a NAMED type — a composite,
+	// a primitive, or a type parameter (all ill-typed) — is nil, never a
+	// fabricated "[T]"/"int[T]" identifier.
+	tp := &ast.Ident{Name: "T"}
+	assert.Nil(t, TypeRefFromExpr(&ast.IndexExpr{X: &ast.ArrayType{Elt: &ast.Ident{Name: "int"}}, Index: tp}, nil))                // ([]int)[T]
+	assert.Nil(t, TypeRefFromExpr(&ast.IndexExpr{X: &ast.Ident{Name: "int"}, Index: tp}, nil))                                     // int[T]
+	assert.Nil(t, TypeRefFromExpr(&ast.IndexListExpr{X: &ast.StarExpr{X: &ast.Ident{Name: "Foo"}}, Indices: []ast.Expr{tp}}, nil)) // (*Foo)[T]
+	// A named base with an unrecognized argument also yields nil, not an empty arg.
+	assert.Nil(t, TypeRefFromExpr(&ast.IndexExpr{X: &ast.Ident{Name: "Foo"}, Index: &ast.BasicLit{Kind: token.INT, Value: "1"}}, nil))
+
 	// An array whose length is a non-constant, non-literal expression and no
 	// type info to resolve it falls back to length 0 (still an array).
 	arr := TypeRefFromExpr(&ast.ArrayType{Len: &ast.Ident{Name: "N"}, Elt: &ast.Ident{Name: "byte"}}, nil)

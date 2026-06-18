@@ -153,17 +153,23 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 	}
 }
 
-// namedWithArgs builds a generic instantiation: the base type carrying the
-// positional type arguments. A generic is always a named type, so the base is
-// forced to RefNamed even if its bare name would otherwise look primitive.
+// namedWithArgs builds a generic instantiation: the named base type carrying
+// its positional type arguments. A generic's base must be a named type, so a
+// non-named base (a primitive, composite, or type parameter — only reachable
+// from ill-typed source like int[T] or ([]int)[T]) yields no usable type, as
+// does any unrecognized argument; in both cases the result is nil rather than a
+// fabricated "[T]"-style identifier.
 func namedWithArgs(base ast.Expr, args []ast.Expr, info *types.Info) *TypeRef {
 	ref := TypeRefFromExpr(base, info)
-	if ref == nil {
+	if ref == nil || ref.Kind != RefNamed {
 		return nil
 	}
-	ref.Kind = RefNamed
 	for _, a := range args {
-		ref.Args = append(ref.Args, TypeRefFromExpr(a, info))
+		arg := TypeRefFromExpr(a, info)
+		if arg == nil {
+			return nil
+		}
+		ref.Args = append(ref.Args, arg)
 	}
 	return ref
 }
