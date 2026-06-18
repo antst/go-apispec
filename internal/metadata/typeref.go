@@ -41,7 +41,7 @@ type TypeRef struct {
 	// for a qualified primitive such as time.Time, so String renders it whole).
 	Pkg  string
 	Name string
-	// Slice/Array/Pointer/Chan: the element type. Map: the value type.
+	// Slice/Array/Pointer: the element type. Map: the value type.
 	Elem *TypeRef
 	// Map: the key type.
 	Key *TypeRef
@@ -121,8 +121,10 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 		return &TypeRef{Kind: RefStruct}
 	case *ast.FuncType:
 		return &TypeRef{Kind: RefFunc}
-	case *ast.ChanType:
-		return &TypeRef{Kind: RefChan, Elem: TypeRefFromExpr(t.Value, info)}
+	case *ast.ChanType: // opaque (no schema); direction and element carry no schema meaning
+		return &TypeRef{Kind: RefChan}
+	case *ast.Ellipsis: // variadic ...T is a []T (go/types lowers it the same way)
+		return &TypeRef{Kind: RefSlice, Elem: TypeRefFromExpr(t.Elt, info)}
 	case *ast.IndexExpr: // single-arg generic instantiation: Base[Arg]
 		return namedWithArgs(t.X, []ast.Expr{t.Index}, info)
 	case *ast.IndexListExpr: // multi-arg generic instantiation: Base[A, B]
@@ -170,17 +172,25 @@ func selectorParts(t *ast.SelectorExpr, info *types.Info) (pkg, name string) {
 func arrayLen(e ast.Expr, info *types.Info) int {
 	if info != nil {
 		if tv, ok := info.Types[e]; ok && tv.Value != nil {
-			if n, ok := constant.Int64Val(tv.Value); ok {
+			if n, ok := constant.Int64Val(tv.Value); ok && fitsLen(n) {
 				return int(n)
 			}
 		}
 	}
+	// Fallback without type info: ParseInt(base 0) honors Go's 0x/0o/0b/_ literal
+	// forms, which strconv.Atoi would reject or misread (e.g. "010" as 10).
 	if lit, ok := e.(*ast.BasicLit); ok {
-		if n, err := strconv.Atoi(lit.Value); err == nil {
-			return n
+		if n, err := strconv.ParseInt(lit.Value, 0, 64); err == nil && fitsLen(n) {
+			return int(n)
 		}
 	}
 	return 0
+}
+
+// fitsLen reports whether a 64-bit array length is a non-negative value that
+// survives the int conversion without truncation (relevant on 32-bit builds).
+func fitsLen(n int64) bool {
+	return n >= 0 && int64(int(n)) == n
 }
 
 // Qualify attaches pkg to every unqualified named node in the tree, turning a
@@ -198,7 +208,7 @@ func (t *TypeRef) Qualify(pkg string) {
 		for _, a := range t.Args {
 			a.Qualify(pkg)
 		}
-	case RefSlice, RefArray, RefPointer, RefChan:
+	case RefSlice, RefArray, RefPointer:
 		t.Elem.Qualify(pkg)
 	case RefMap:
 		t.Key.Qualify(pkg)
@@ -228,10 +238,7 @@ func (t *TypeRef) String() string {
 	case RefFunc:
 		return "func"
 	case RefChan:
-		if t.Elem == nil {
-			return "chan"
-		}
-		return "chan " + t.Elem.String()
+		return "chan"
 	default: // RefNamed, RefBasic
 		name := t.Name
 		if t.Pkg != "" {

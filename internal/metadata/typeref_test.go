@@ -84,6 +84,8 @@ type S struct {
 	H struct{ X int }
 	I func(a, b int) (string, error)
 	J chan int
+	Q <-chan int
+	R chan<- Event
 	K Box[User]
 	L Pair[K, V]
 	M [][]int
@@ -107,7 +109,9 @@ type S struct {
 		{"G", RefInterface, "interface{}"}, // non-empty interface still opaque any
 		{"H", RefStruct, "struct{}"},
 		{"I", RefFunc, "func"}, // never a string, so never mis-split on its commas
-		{"J", RefChan, "chan int"},
+		{"J", RefChan, "chan"}, // chan is opaque — direction and element dropped
+		{"Q", RefChan, "chan"}, // <-chan int
+		{"R", RefChan, "chan"}, // chan<- Event
 		{"K", RefNamed, "Box[User]"},
 		{"L", RefNamed, "Pair[K,V]"}, // IndexListExpr — getTypeName produced ""
 		{"M", RefSlice, "[][]int"},
@@ -132,11 +136,20 @@ type S struct {
 	p := TypeRefFromExpr(exprs["P"], nil)
 	assert.Equal(t, "qual", p.Pkg)
 	assert.Equal(t, "Type", p.Name)
+
+	// Variadic ...T (valid only in signatures, so constructed directly) is a
+	// slice, matching how go/types lowers it.
+	va := TypeRefFromExpr(&ast.Ellipsis{Elt: &ast.Ident{Name: "Order"}}, nil)
+	require.Equal(t, RefSlice, va.Kind)
+	assert.Equal(t, "[]Order", va.String())
 }
 
 func TestTypeRefFromExpr_WithInfo(t *testing.T) {
 	src := `package x
-import "time"
+import (
+	"time"
+	"net/http"
+)
 const N = 8
 type S struct {
 	A time.Time
@@ -144,6 +157,7 @@ type S struct {
 	C [N]byte
 	D [4]int
 	E []time.Time
+	F http.Header
 }`
 	exprs, info := fieldExprs(t, src, true)
 	require.NotNil(t, info)
@@ -163,6 +177,13 @@ type S struct {
 	assert.Equal(t, 8, TypeRefFromExpr(exprs["C"], info).Len)
 	assert.Equal(t, 4, TypeRefFromExpr(exprs["D"], info).Len)
 	assert.Equal(t, "[]time.Time", TypeRefFromExpr(exprs["E"], info).String())
+
+	// A multi-segment import path (ident "http" ≠ path "net/http") proves the
+	// package comes from type info, not the source-level qualifier.
+	f := TypeRefFromExpr(exprs["F"], info)
+	assert.Equal(t, RefNamed, f.Kind)
+	assert.Equal(t, "net/http", f.Pkg)
+	assert.Equal(t, "net/http.Header", f.String())
 }
 
 func TestTypeRefFromExpr_NilAndUnrecognized(t *testing.T) {
@@ -223,16 +244,18 @@ type S struct {
 
 	e := TypeRefFromExpr(exprs["E"], nil)
 	e.Qualify("pkg")
-	assert.Equal(t, "chan pkg.Event", e.String())
+	assert.Equal(t, "chan", e.String()) // chan is opaque — not descended into
 
 	var nilRef *TypeRef
 	nilRef.Qualify("pkg") // no panic
-	d.Qualify("")         // empty pkg — no-op
+	before := d.String()
+	d.Qualify("") // empty pkg — no-op
+	assert.Equal(t, before, d.String())
 }
 
 func TestTypeRef_StringNil(t *testing.T) {
 	var t0 *TypeRef
 	assert.Equal(t, "", t0.String())
-	// A bare channel with no element renders without a trailing space.
+	// chan is opaque — it always renders as the bare keyword.
 	assert.Equal(t, "chan", (&TypeRef{Kind: RefChan}).String())
 }
