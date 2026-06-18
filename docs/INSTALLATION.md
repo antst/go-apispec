@@ -4,7 +4,7 @@ This guide covers all the ways to install and use go-apispec.
 
 ## Prerequisites
 
-- **Go 1.24 or later** - [Download from golang.org](https://golang.org/doc/install)
+- **Go 1.25 or later** - [Download from golang.org](https://golang.org/doc/install)
 - **Git** - For cloning the repository
 
 ## Installation Methods
@@ -139,7 +139,7 @@ You should see output like:
 apispec version: v1.0.0
 Commit: abc123
 Build date: 2024-01-01T00:00:00Z
-Go version: go1.21.0
+Go version: go1.25.0
 ```
 
 **When installed via `go install` from latest main:**
@@ -147,7 +147,7 @@ Go version: go1.21.0
 apispec version: v1.0.1-0.20240101120000-abc123def456
 Commit: abc123d
 Build date: 2024-01-01T12:00:00Z
-Go version: go1.21.0
+Go version: go1.25.0
 ```
 
 **When installed via `go install` without VCS info:**
@@ -155,7 +155,7 @@ Go version: go1.21.0
 apispec version: latest (go install)
 Commit: unknown
 Build date: unknown
-Go version: go1.21.0
+Go version: go1.25.0
 ```
 
 > **Note:** Version information depends on how `apispec` was built. When using `go install`, Go automatically embeds VCS information when available, providing accurate version details.
@@ -205,7 +205,7 @@ make uninstall
    - Ensure you have write access to the target directory
 
 3. **Go version compatibility**
-   - Ensure you have Go 1.24 or later
+   - Ensure you have Go 1.25 or later
    - Run `go version` to check
 
 4. **Build failures**
