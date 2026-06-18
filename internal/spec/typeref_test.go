@@ -147,6 +147,13 @@ func TestParseTypeRef_GenericDecl(t *testing.T) {
 	require.Len(t, inst.Args, 1)
 	assert.Empty(t, inst.Params)
 	assert.Equal(t, KindBasic, inst.Args[0].Kind)
+
+	// A func-type arg with a comma inside its parameter list must not be split
+	// into multiple args — splitTopLevelCommas tracks paren depth.
+	multiParam := ParseTypeRef("Box[func(int, error) error]")
+	require.Len(t, multiParam.Args, 1)
+	assert.Equal(t, KindBasic, multiParam.Args[0].Kind)
+	assert.Equal(t, "func(int, error) error", multiParam.Args[0].Name)
 }
 
 func TestParseTypeRef_EdgeCases(t *testing.T) {

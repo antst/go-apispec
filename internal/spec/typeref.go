@@ -34,8 +34,10 @@ import (
 // TypeRef directly from go/types at the metadata boundary.
 type TypeRef struct {
 	Kind TypeKind
-	// Named/Basic: the package qualifier (Named only) and the type name. For an
-	// opaque form (func/chan/struct{…}/interface{Foo}) the whole string is Name.
+	// Named/Basic: the package qualifier and the type name. Pkg is set for
+	// KindNamed and also for KindBasic when the input is a qualified primitive
+	// (e.g. time.Time), so that String() can render it correctly. For an opaque
+	// form (func/chan/struct{…}/interface{Foo}) the whole string is Name.
 	Pkg  string
 	Name string
 	// Slice/Array/Pointer: the element type. Map: the value type.
@@ -84,9 +86,11 @@ const (
 // go/types form (dot-separated, bracket generics — "pkg.APIResponse[pkg.User]")
 // and the metadata-internal TypeSep form ("pkg-->APIResponse-->pkg.User"),
 // normalizing both to the same tree. Forms that don't decompose into the schema
-// model — function, channel, field-bearing struct/interface types, or malformed
-// input — are carried verbatim as an opaque KindBasic, so callers never get a
-// nil or a fabricated tree.
+// model — function, channel, field-bearing struct/interface types — are carried
+// verbatim as an opaque KindBasic. Structurally malformed input is handled on a
+// best-effort basis: unbalanced generic brackets degrade to a bare named type
+// (no Args), while other malformed forms (invalid array lengths, empty map key
+// or value) also become opaque KindBasic. Callers never receive a nil result.
 func ParseTypeRef(s string) *TypeRef {
 	s = strings.TrimSpace(s)
 	switch {
@@ -278,21 +282,28 @@ func splitPkgName(s string) *TypeRef {
 }
 
 // splitTopLevelCommas splits a generic argument list on commas that sit at
-// bracket depth 0, so Pair[map[string]int, []User] yields two arguments. The
-// depth has a floor so a stray ']' can't drive it negative.
+// bracket/paren depth 0, so Pair[map[string]int, []User] yields two arguments
+// and Box[func(int, error) error] yields one. The depths have a floor so stray
+// closing tokens can't drive them negative.
 func splitTopLevelCommas(s string) []string {
 	var out []string
-	depth, start := 0, 0
+	brackets, parens, start := 0, 0, 0
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
 		case '[':
-			depth++
+			brackets++
 		case ']':
-			if depth > 0 {
-				depth--
+			if brackets > 0 {
+				brackets--
+			}
+		case '(':
+			parens++
+		case ')':
+			if parens > 0 {
+				parens--
 			}
 		case ',':
-			if depth == 0 {
+			if brackets == 0 && parens == 0 {
 				out = append(out, strings.TrimSpace(s[start:i]))
 				start = i + 1
 			}
