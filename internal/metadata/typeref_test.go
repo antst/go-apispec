@@ -92,6 +92,8 @@ type S struct {
 	N **User
 	O map[string][]*User
 	P qual.Type
+	T1 [0x10]byte
+	T2 [1_000]int
 }`
 	exprs, _ := fieldExprs(t, src, false)
 
@@ -117,7 +119,9 @@ type S struct {
 		{"M", RefSlice, "[][]int"},
 		{"N", RefPointer, "**User"},
 		{"O", RefMap, "map[string][]*User"},
-		{"P", RefNamed, "qual.Type"}, // selector, no type info → source qualifier
+		{"P", RefNamed, "qual.Type"},  // selector, no type info → source qualifier
+		{"T1", RefArray, "[16]byte"},  // hex literal length, no type info (ParseInt base 0)
+		{"T2", RefArray, "[1000]int"}, // underscore-separated literal length
 	}
 	for _, c := range cases {
 		ref := TypeRefFromExpr(exprs[c.field], nil)
