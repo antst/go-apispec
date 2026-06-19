@@ -114,15 +114,7 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 			return &TypeRef{Kind: RefNamed, Name: t.Name}
 		}
 	case *ast.SelectorExpr:
-		pkg, name := selectorParts(t, info)
-		full := name
-		if pkg != "" {
-			full = pkg + "." + name
-		}
-		if IsPrimitiveType(full) {
-			return &TypeRef{Kind: RefBasic, Pkg: pkg, Name: name}
-		}
-		return &TypeRef{Kind: RefNamed, Pkg: pkg, Name: name}
+		return namedOrBasic(selectorParts(t, info))
 	case *ast.StarExpr:
 		return wrap(RefPointer, TypeRefFromExpr(t.X, info))
 	case *ast.ArrayType:
@@ -274,7 +266,13 @@ func TypeRefFromType(t types.Type) *TypeRef {
 		if elem == nil {
 			return nil
 		}
-		return &TypeRef{Kind: RefArray, Len: int(u.Len()), Elem: elem}
+		// fitsLen guards the int64->int conversion (matches the AST path); an
+		// out-of-range length degrades to the inferred sentinel, not a wrap.
+		ln := -1
+		if fitsLen(u.Len()) {
+			ln = int(u.Len())
+		}
+		return &TypeRef{Kind: RefArray, Len: ln, Elem: elem}
 	case *types.Map:
 		key, val := TypeRefFromType(u.Key()), TypeRefFromType(u.Elem())
 		if key == nil || val == nil {
@@ -296,16 +294,10 @@ func TypeRefFromType(t types.Type) *TypeRef {
 	}
 }
 
-// namedTypeRef builds the TypeRef for a *types.Named, resolving package
-// identity, generic instantiation arguments, and the primitive special-cases
-// (e.g. time.Time) consistently with the AST path's selector handling.
-func namedTypeRef(n *types.Named) *TypeRef {
-	obj := n.Obj()
-	name := obj.Name()
-	pkg := ""
-	if obj.Pkg() != nil {
-		pkg = obj.Pkg().Path()
-	}
+// namedOrBasic classifies a resolved (pkg, name) pair as a primitive (RefBasic,
+// e.g. time.Time) or a package type (RefNamed). Shared by the AST and go/types
+// constructors so both classify the same type identically.
+func namedOrBasic(pkg, name string) *TypeRef {
 	full := name
 	if pkg != "" {
 		full = pkg + "." + name
@@ -313,10 +305,30 @@ func namedTypeRef(n *types.Named) *TypeRef {
 	if IsPrimitiveType(full) {
 		return &TypeRef{Kind: RefBasic, Pkg: pkg, Name: name}
 	}
-	ref := &TypeRef{Kind: RefNamed, Pkg: pkg, Name: name}
+	return &TypeRef{Kind: RefNamed, Pkg: pkg, Name: name}
+}
+
+// namedTypeRef builds the TypeRef for a *types.Named, resolving package identity,
+// the primitive special-cases (via namedOrBasic), and generic instantiation
+// arguments. An unresolvable type argument bails the whole node to nil, matching
+// the AST twin namedWithArgs.
+func namedTypeRef(n *types.Named) *TypeRef {
+	obj := n.Obj()
+	pkg := ""
+	if obj.Pkg() != nil {
+		pkg = obj.Pkg().Path()
+	}
+	ref := namedOrBasic(pkg, obj.Name())
+	if ref.Kind != RefNamed {
+		return ref // a primitive (error, time.Time, …) carries no type arguments
+	}
 	if args := n.TypeArgs(); args != nil {
 		for i := 0; i < args.Len(); i++ {
-			ref.Args = append(ref.Args, TypeRefFromType(args.At(i)))
+			a := TypeRefFromType(args.At(i))
+			if a == nil {
+				return nil
+			}
+			ref.Args = append(ref.Args, a)
 		}
 	}
 	return ref

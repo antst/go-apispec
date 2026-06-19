@@ -252,13 +252,9 @@ func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo
 				}
 
 				// Extract type parameter names for generics
-				typeParams := []string{}
-				if fn.Type != nil && fn.Type.TypeParams != nil {
-					for _, tparam := range fn.Type.TypeParams.List {
-						for _, name := range tparam.Names {
-							typeParams = append(typeParams, name.Name)
-						}
-					}
+				var typeParams []string
+				if fn.Type != nil {
+					typeParams = typeParamNames(fn.Type.TypeParams)
 				}
 
 				// Extract return value origins
@@ -1100,13 +1096,9 @@ func processFunctions(file *ast.File, info *types.Info, pkgName string, fset *to
 		comments := getComments(fn)
 
 		// Extract type parameter names for generics
-		typeParams := []string{}
-		if fn.Type != nil && fn.Type.TypeParams != nil {
-			for _, tparam := range fn.Type.TypeParams.List {
-				for _, name := range tparam.Names {
-					typeParams = append(typeParams, name.Name)
-				}
-			}
+		var typeParams []string
+		if fn.Type != nil {
+			typeParams = typeParamNames(fn.Type.TypeParams)
 		}
 
 		// Extract return value origins

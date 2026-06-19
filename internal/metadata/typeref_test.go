@@ -344,6 +344,7 @@ type S struct {
 	L chan int
 	M Alias
 	N struct{ X int }
+	Err error
 }`, true)
 	require.NotNil(t, info)
 
@@ -376,6 +377,11 @@ type S struct {
 	assert.Equal(t, "int", ref("M").String()) // alias resolved through Unalias
 	assert.Equal(t, RefParam, ref("V").Kind)  // type parameter of Box
 	assert.Equal(t, RefStruct, ref("N").Kind)
+	// builtin `error` is a pkg-less *types.Named (Obj().Pkg()==nil) and a
+	// recognized primitive — exercises namedTypeRef's nil-package branch.
+	e := ref("Err")
+	assert.Equal(t, RefBasic, e.Kind)
+	assert.Equal(t, "error", e.String())
 
 	// Defensive branches: an unrepresentable type (a tuple), and composites whose
 	// element/key is unrepresentable, yield nil rather than a fabricated node.
