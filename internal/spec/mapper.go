@@ -64,7 +64,13 @@ const (
 	refComponentsSchemasPrefix = "#/components/schemas/"
 )
 
-var schemaComponentNameReplacer = strings.NewReplacer("/", "_", "-->", ".", " ", "-", "[", "_", "]", "", ", ", "-")
+// schemaComponentNameReplacer sanitizes a Go type string into a valid OpenAPI
+// component name (must match ^[a-zA-Z0-9._-]+$). The bare "," case keeps
+// multi-type-parameter generic instantiations (e.g. Pair[User,Order]) valid —
+// the type string joins arguments with "," (no space), which the earlier ", "
+// rule does not catch; it is listed last so ", " still wins at comma-space
+// positions (strings.Replacer resolves overlaps in argument order).
+var schemaComponentNameReplacer = strings.NewReplacer("/", "_", "-->", ".", " ", "-", "[", "_", "]", "", ", ", "-", ",", "-")
 
 // GeneratorConfig holds generation configuration
 type GeneratorConfig struct {
@@ -1112,13 +1118,23 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 	genericTypes := map[string]string{}
 
 	if len(keyParts.GenericTypes) > 0 {
-		for _, part := range keyParts.GenericTypes {
+		for i, part := range keyParts.GenericTypes {
 			genericType := strings.Split(part, " ")
+			// Bind the concrete argument to the DECLARED type-parameter name
+			// (typ.TypeParams), not the positional T/U/V placeholder TypeParts
+			// assigns from the instantiation string — so Pair[K,V] substitutes K and
+			// V, not T and U (decision D3). On a length mismatch (fewer declared
+			// names than args) fall back to the placeholder so the common prefix
+			// still binds (FR-009, T019).
+			name := genericType[0]
+			if i < len(typ.TypeParams) {
+				name = typ.TypeParams[i]
+			}
 			if len(genericType) >= 2 {
 				// Map type parameter name to concrete type (e.g., "T" → "pkg.User")
-				genericTypes[genericType[0]] = genericType[1]
+				genericTypes[name] = genericType[1]
 			} else {
-				genericTypes[genericType[0]] = strings.ReplaceAll(part, " ", "-")
+				genericTypes[name] = strings.ReplaceAll(part, " ", "-")
 			}
 		}
 	}
