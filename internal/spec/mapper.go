@@ -1341,8 +1341,15 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 // a component schema (Go embedding has no separate JSON object), and isolation
 // keeps the result independent of map-iteration order.
 func promoteEmbeddedFields(schema *Schema, typ *metadata.Type, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) {
-	for _, embedIdx := range typ.Embeds {
+	for i, embedIdx := range typ.Embeds {
 		embedType := strings.TrimPrefix(getStringFromPool(meta, embedIdx), "*")
+		// Prefer the lossless EmbedRef over the getTypeName string, mirroring the
+		// field path (T009/T011).
+		if i < len(typ.EmbedRefs) {
+			if ref := typ.EmbedRefs[i]; ref != nil {
+				embedType = strings.TrimPrefix(ref.String(), "*")
+			}
+		}
 		et := typeByName(TypeParts(embedType), meta)
 		if et == nil || getStringFromPool(meta, et.Kind) != "struct" {
 			continue
