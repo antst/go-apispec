@@ -92,6 +92,7 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "maps_variety", inputDir: "../../testdata/maps_variety", configFn: spec.DefaultHTTPConfig},
 		{name: "arrays_variety", inputDir: "../../testdata/arrays_variety", configFn: spec.DefaultHTTPConfig},
 		{name: "fixed_arrays", inputDir: "../../testdata/fixed_arrays", configFn: spec.DefaultHTTPConfig},
+		{name: "inline_structs", inputDir: "../../testdata/inline_structs", configFn: spec.DefaultHTTPConfig},
 		{name: "pointers_variety", inputDir: "../../testdata/pointers_variety", configFn: spec.DefaultHTTPConfig},
 		{name: "optional_fields", inputDir: "../../testdata/optional_fields", configFn: spec.DefaultHTTPConfig},
 		// Regression for #52: a multipart handler must not get a request body

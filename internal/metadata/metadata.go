@@ -1006,6 +1006,22 @@ func isExternalPackage(pkgPath, currentModulePath string) bool {
 	return true
 }
 
+// inlineStructType returns the inline anonymous *ast.StructType a field
+// declares — either directly (struct{...}) or as the element of a slice/array
+// ([]struct{...}, [N]struct{...}) — or nil when the field is not an inline
+// struct. Named struct types resolve through their identifier, not here.
+func inlineStructType(expr ast.Expr) *ast.StructType {
+	switch t := expr.(type) {
+	case *ast.StructType:
+		return t
+	case *ast.ArrayType:
+		if s, ok := t.Elt.(*ast.StructType); ok {
+			return s
+		}
+	}
+	return nil
+}
+
 // processStructFields processes fields of a struct type
 func processStructFields(structType *ast.StructType, pkgName string, metadata *Metadata, t *Type, info *types.Info) {
 	for _, field := range structType.Fields.List {
@@ -1050,9 +1066,12 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 				TypeRef: fieldTypeRef,
 			}
 
-			// Check if this field has a nested struct type
-			if structTypeExpr, ok := field.Type.(*ast.StructType); ok {
-				// Create a nested type for this field
+			// Capture an inline anonymous struct so the consumer can describe its
+			// properties: directly (Meta struct{...}) or as a slice/array element
+			// ([]struct{...}, [N]struct{...}). For the element case NestedType holds
+			// the element struct; the field's RefSlice/RefArray TypeRef tells the
+			// consumer to wrap it back into an array.
+			if structTypeExpr := inlineStructType(field.Type); structTypeExpr != nil {
 				nestedType := &Type{
 					Name:     metadata.StringPool.Get(name.Name + "_nested"),
 					Pkg:      metadata.StringPool.Get(pkgName),

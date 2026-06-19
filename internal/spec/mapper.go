@@ -1221,7 +1221,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 		var newSchemas map[string]*Schema
 
 		if field.NestedType != nil {
-			// Handle nested struct type
+			// Handle nested inline struct type
 			fieldOriginalType := getStringFromPool(meta, field.NestedType.Name)
 
 			fieldSchema, newSchemas = generateSchemaFromType(usedTypes, fieldOriginalType, field.NestedType, meta, cfg, visitedTypes)
@@ -1230,6 +1230,16 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			}
 
 			maps.Copy(schemas, newSchemas)
+
+			// When the inline struct is the element of a slice/array field
+			// ([]struct{...}, [N]struct{...}), NestedType holds the element type;
+			// wrap the object back into an array so the items describe its
+			// properties. A fixed array also carries its length (decision D5/D7).
+			if ref := field.TypeRef; ref != nil && fieldSchema != nil &&
+				(ref.Kind == metadata.RefSlice || ref.Kind == metadata.RefArray) {
+				fieldSchema = &Schema{Type: "array", Items: fieldSchema}
+				setFixedArrayLen(fieldSchema, ref)
+			}
 		} else {
 			isPrimitive := metadata.IsPrimitiveType(fieldType)
 
@@ -2456,10 +2466,7 @@ func schemaFromTypeRef(ref *metadata.TypeRef) *Schema {
 			return nil
 		}
 		s := &Schema{Type: "array", Items: items}
-		if ref.Len >= 0 {
-			s.MinItems = ref.Len
-			s.MaxItems = ref.Len
-		}
+		setFixedArrayLen(s, ref)
 		return s
 	case metadata.RefMap:
 		if !isStringRef(ref.Key) {
@@ -2532,14 +2539,22 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 	// A fixed-length array whose element defers to the string path (a named
 	// struct/generic element, e.g. [4]Point) keeps its length only on the
 	// TypeRef — getTypeName flattened the field string to "[]Point", dropping the
-	// count. Re-apply minItems == maxItems == N onto the array the string path
-	// produced, matching the constraint schemaFromTypeRef already emits for
-	// primitive-element arrays (decision D5; byte arrays are handled there too).
-	if ref != nil && ref.Kind == metadata.RefArray && ref.Len >= 0 && s != nil && s.Type == "array" {
+	// count. Re-apply the length onto the array the string path produced.
+	setFixedArrayLen(s, ref)
+	return s, newSchemas
+}
+
+// setFixedArrayLen stamps minItems == maxItems == N on an array schema when ref
+// is a fixed-length array with a known length (decision D5). It is the single
+// source of truth for the array-length rule, shared by every site that builds an
+// array schema from a TypeRef (schemaFromTypeRef, schemaForType, and the inline
+// nested-struct element path). A no-op for slices, inferred-length ([...]T)
+// arrays, byte arrays (which use maxLength), and non-array schemas.
+func setFixedArrayLen(s *Schema, ref *metadata.TypeRef) {
+	if s != nil && s.Type == "array" && ref != nil && ref.Kind == metadata.RefArray && ref.Len >= 0 {
 		s.MinItems = ref.Len
 		s.MaxItems = ref.Len
 	}
-	return s, newSchemas
 }
 
 func canAddRefSchemaForType(key string) bool {

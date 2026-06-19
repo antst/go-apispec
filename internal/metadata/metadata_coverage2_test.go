@@ -2518,3 +2518,22 @@ var c = Config{}
 
 	assert.NotEmpty(t, f.StructInstances)
 }
+
+// TestInlineStructType covers the helper that recognizes an inline anonymous
+// struct a field declares — directly, or as a slice/array element — which is how
+// processStructFields decides to capture a NestedType (US3).
+func TestInlineStructType(t *testing.T) {
+	direct := &ast.StructType{Fields: &ast.FieldList{}}
+	elem := &ast.StructType{Fields: &ast.FieldList{}}
+
+	// Directly an inline struct.
+	assert.Equal(t, direct, inlineStructType(direct))
+	// Slice of an inline struct: returns the element struct.
+	assert.Equal(t, elem, inlineStructType(&ast.ArrayType{Elt: elem}))
+	// Fixed array of an inline struct: also returns the element struct.
+	assert.Equal(t, elem, inlineStructType(&ast.ArrayType{Len: ast.NewIdent("2"), Elt: elem}))
+	// Slice of a non-struct element: nil.
+	assert.Nil(t, inlineStructType(&ast.ArrayType{Elt: ast.NewIdent("int")}))
+	// A plain named type: nil.
+	assert.Nil(t, inlineStructType(ast.NewIdent("string")))
+}
