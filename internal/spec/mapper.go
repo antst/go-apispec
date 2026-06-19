@@ -821,6 +821,19 @@ func generateComponentSchemas(meta *metadata.Metadata, cfg *APISpecConfig, route
 	return components
 }
 
+// fieldTypeString returns the type string the schema pipeline works from,
+// preferring the lossless field.TypeRef (which preserves fixed-array lengths,
+// full package paths, multi-parameter generics, and interface/struct shapes)
+// over getTypeName's lossy flattened field.Type. Falls back to field.Type when
+// no TypeRef was built at analysis time. This is the field-path step of retiring
+// getTypeName from schema derivation (T011).
+func fieldTypeString(field metadata.Field, meta *metadata.Metadata) string {
+	if field.TypeRef != nil {
+		return field.TypeRef.String()
+	}
+	return getStringFromPool(meta, field.Type)
+}
+
 // schemaName applies the standard name replacer and optionally shortens the type name.
 func schemaName(typeName string, cfg *APISpecConfig) string {
 	if cfg != nil && cfg.UseShortNames() {
@@ -1135,7 +1148,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 
 	for _, field := range typ.Fields {
 		fieldName := getStringFromPool(meta, field.Name)
-		fieldType := getStringFromPool(meta, field.Type)
+		fieldType := fieldTypeString(field, meta)
 
 		// `_ struct{} `apispec:"..."`` is the convention for struct-level
 		// hints — it never serializes (zero-sized + unexported) but its tag
@@ -2538,7 +2551,11 @@ func setFixedArrayLen(s *Schema, ref *metadata.TypeRef) {
 }
 
 func canAddRefSchemaForType(key string) bool {
-	if metadata.IsPrimitiveType(key) || strings.HasPrefix(key, "[]") || strings.Contains(key, "map[") {
+	// A leading "[" marks an array or slice ("[]T" or a fixed-length "[N]T") —
+	// never a nameable component (generic instantiations start with the type
+	// name, e.g. "Pair[...]", so they are unaffected). Matching only "[]" missed
+	// fixed arrays, which getTypeName used to hide by flattening "[N]T" to "[]T".
+	if metadata.IsPrimitiveType(key) || strings.HasPrefix(key, "[") || strings.Contains(key, "map[") {
 		return false
 	}
 
