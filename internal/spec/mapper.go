@@ -849,17 +849,10 @@ func generateSchemas(usedTypes map[string]*Schema, cfg *APISpecConfig, component
 
 		// Generate schema based on type kind
 		for key, typ := range typs {
-			var schema *Schema
-			var schemas map[string]*Schema
-
 			if typ == nil {
-				keyParts := strings.Split(key, "-")
-				if len(keyParts) > 1 {
-					schema, schemas = mapGoTypeToOpenAPISchema(usedTypes, keyParts[1], meta, cfg, nil)
-				}
-			} else {
-				schema, schemas = generateSchemaFromType(usedTypes, key, typ, meta, cfg, nil)
+				continue
 			}
+			schema, schemas := generateSchemaFromType(usedTypes, key, typ, meta, cfg, nil)
 			if schema != nil {
 				components.Schemas[schemaName(key, cfg)] = schema
 			}
@@ -925,28 +918,15 @@ func findTypesInMetadata(meta *metadata.Metadata, typeName string) map[string]*m
 	}
 
 	typeParts := TypeParts(typeName)
-	var pkgName string
 
-	if !metadata.IsPrimitiveType(typeParts.PkgName) && typeParts.PkgName != "" {
-		pkgName = typeParts.PkgName + "."
-	}
-
-	// Generics
-	if len(typeParts.GenericTypes) > 0 {
-		for _, part := range typeParts.GenericTypes {
-			genericType := strings.Split(part, " ")
-			if metadata.IsPrimitiveType(genericType[1]) {
-				metaTypes[pkgName+genericType[0]+"-"+genericType[1]] = nil
-			} else {
-				genericTypeParts := TypeParts(genericType[0])
-
-				if t := typeByName(genericTypeParts, meta); t != nil {
-					metaTypes[pkgName+genericType[0]+"_"+genericType[1]] = t
-				}
-			}
-		}
-	}
-
+	// The base type only. The type arguments of a generic instantiation
+	// (Pair[string,int]) are NOT registered here: each parameter-typed field is
+	// resolved by name in generateStructSchema (US2), so the arguments surface as
+	// real component references where they are actually used. The former generic
+	// branch registered them positionally (T/U/V) — emitting orphan "T-string"
+	// components for primitive arguments and nothing for struct arguments
+	// (typeByName of the positional placeholder was always nil). It served no live
+	// consumer and is removed.
 	if typeName != "" {
 		metaTypes[typeName] = typeByName(typeParts, meta)
 	}

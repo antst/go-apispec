@@ -27,6 +27,24 @@
         }
       }
     },
+    "/scores": {
+      "get": {
+        "summary": "getScores returns Pair instantiated with PRIMITIVE arguments — first/second\nresolve to string/int inline, and (unlike the former positional binding) no\norphan \"K-string\"/\"V-int\" component is emitted.",
+        "operationId": "generic_envelopes.getScores",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generic_envelopes.Pair_string-int"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/user": {
       "get": {
         "operationId": "generic_envelopes.getUser",
@@ -85,6 +103,21 @@
           },
           "second": {
             "$ref": "#/components/schemas/generic_envelopes.Order"
+          }
+        },
+        "required": [
+          "first",
+          "second"
+        ]
+      },
+      "generic_envelopes.Pair_string-int": {
+        "type": "object",
+        "properties": {
+          "first": {
+            "type": "string"
+          },
+          "second": {
+            "type": "integer"
           }
         },
         "required": [

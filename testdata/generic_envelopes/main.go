@@ -43,9 +43,17 @@ func getPair(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(Pair[User, Order]{})
 }
 
+// getScores returns Pair instantiated with PRIMITIVE arguments — first/second
+// resolve to string/int inline, and (unlike the former positional binding) no
+// orphan "K-string"/"V-int" component is emitted.
+func getScores(w http.ResponseWriter, r *http.Request) {
+	_ = json.NewEncoder(w).Encode(Pair[string, int]{})
+}
+
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /user", getUser)
 	mux.HandleFunc("GET /pair", getPair)
+	mux.HandleFunc("GET /scores", getScores)
 	_ = http.ListenAndServe(":8080", mux)
 }
