@@ -855,7 +855,25 @@ func processLocalTypes(file *ast.File, info *types.Info, pkgName string, fset *t
 }
 
 // processTypeKind determines the kind of type and processes it accordingly
+// typeParamNames extracts declared type-parameter names from a generic
+// type/function parameter list (e.g. [K comparable, V any] -> ["K","V"]).
+func typeParamNames(fl *ast.FieldList) []string {
+	if fl == nil {
+		return nil
+	}
+	var names []string
+	for _, field := range fl.List {
+		for _, name := range field.Names {
+			names = append(names, name.Name)
+		}
+	}
+	return names
+}
+
 func processTypeKind(tspec *ast.TypeSpec, info *types.Info, pkgName string, fset *token.FileSet, t *Type, allTypes map[string]*Type, metadata *Metadata) {
+	// Phase 2: capture declared generic type-parameter names so an instantiation
+	// can bind concrete args to them by position during substitution.
+	t.TypeParams = typeParamNames(tspec.TypeParams)
 	switch ut := tspec.Type.(type) {
 	case *ast.StructType:
 		t.Kind = metadata.StringPool.Get("struct")
@@ -1027,6 +1045,8 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 				Tag:      metadata.StringPool.Get(tag),
 				Scope:    metadata.StringPool.Get(scope),
 				Comments: metadata.StringPool.Get(comments),
+				// Phase 2: structured type built from the field's AST expression.
+				TypeRef: TypeRefFromExpr(field.Type, info),
 			}
 
 			// Check if this field has a nested struct type

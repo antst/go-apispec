@@ -35,23 +35,28 @@ import (
 // open-ended reimplementation of Go's type grammar. Building the tree from the
 // AST sidesteps all of it: *ast.FuncType, *ast.IndexListExpr, and
 // *ast.ArrayType.Len each answer the question directly and unambiguously.
+//
+// The yaml tags let the tree round-trip through the metadata model's
+// serialization via default struct marshaling — no custom marshaler and no
+// string parser. Kind distinguishes RefArray from RefSlice, so Len carries an
+// omitempty 0 unambiguously (a genuine [0]T is a RefArray with Len 0).
 type TypeRef struct {
-	Kind RefKind
+	Kind RefKind `yaml:"kind,omitempty"`
 	// Named: the package import path and type name. Basic: Name only (and Pkg
 	// for a qualified primitive such as time.Time, so String renders it whole).
-	Pkg  string
-	Name string
+	Pkg  string `yaml:"pkg,omitempty"`
+	Name string `yaml:"name,omitempty"`
 	// Slice/Array/Pointer: the element type. Map: the value type.
-	Elem *TypeRef
+	Elem *TypeRef `yaml:"elem,omitempty"`
 	// Map: the key type.
-	Key *TypeRef
+	Key *TypeRef `yaml:"key,omitempty"`
 	// Named: generic instantiation arguments, e.g. the User in APIResponse[User]
 	// or the K, V in Pair[K, V] — positional, one per declared type parameter.
-	Args []*TypeRef
+	Args []*TypeRef `yaml:"args,omitempty"`
 	// Array: the length. >= 0 is a known constant length; -1 means inferred or
 	// not statically resolved — [...]T, or a const-expression length built
 	// without type info — and renders as [...]. A genuine [0]T keeps Len 0.
-	Len int
+	Len int `yaml:"len,omitempty"`
 }
 
 // RefKind tags the shape of a TypeRef.
@@ -243,6 +248,78 @@ func arrayLen(e ast.Expr, info *types.Info) int {
 // survives the int conversion without truncation (relevant on 32-bit builds).
 func fitsLen(n int64) bool {
 	return n >= 0 && int64(int(n)) == n
+}
+
+// TypeRefFromType builds a TypeRef from a go/types type — the resolved-type
+// counterpart to TypeRefFromExpr, for sites that have a types.Type but no
+// syntax (e.g. a value's inferred type). go/types has already resolved aliases,
+// constants, and instantiations, so array lengths and generic arguments are
+// always concrete here. A nil type, or a child that does not resolve, yields nil.
+func TypeRefFromType(t types.Type) *TypeRef {
+	switch u := t.(type) {
+	case nil:
+		return nil
+	case *types.Basic:
+		return &TypeRef{Kind: RefBasic, Name: u.Name()}
+	case *types.Named:
+		return namedTypeRef(u)
+	case *types.Alias:
+		return TypeRefFromType(types.Unalias(u))
+	case *types.Pointer:
+		return wrap(RefPointer, TypeRefFromType(u.Elem()))
+	case *types.Slice:
+		return wrap(RefSlice, TypeRefFromType(u.Elem()))
+	case *types.Array:
+		elem := TypeRefFromType(u.Elem())
+		if elem == nil {
+			return nil
+		}
+		return &TypeRef{Kind: RefArray, Len: int(u.Len()), Elem: elem}
+	case *types.Map:
+		key, val := TypeRefFromType(u.Key()), TypeRefFromType(u.Elem())
+		if key == nil || val == nil {
+			return nil
+		}
+		return &TypeRef{Kind: RefMap, Key: key, Elem: val}
+	case *types.Interface:
+		return &TypeRef{Kind: RefInterface}
+	case *types.Signature:
+		return &TypeRef{Kind: RefFunc}
+	case *types.Struct:
+		return &TypeRef{Kind: RefStruct}
+	case *types.Chan:
+		return &TypeRef{Kind: RefChan}
+	case *types.TypeParam:
+		return &TypeRef{Kind: RefParam, Name: u.Obj().Name()}
+	default:
+		return nil
+	}
+}
+
+// namedTypeRef builds the TypeRef for a *types.Named, resolving package
+// identity, generic instantiation arguments, and the primitive special-cases
+// (e.g. time.Time) consistently with the AST path's selector handling.
+func namedTypeRef(n *types.Named) *TypeRef {
+	obj := n.Obj()
+	name := obj.Name()
+	pkg := ""
+	if obj.Pkg() != nil {
+		pkg = obj.Pkg().Path()
+	}
+	full := name
+	if pkg != "" {
+		full = pkg + "." + name
+	}
+	if IsPrimitiveType(full) {
+		return &TypeRef{Kind: RefBasic, Pkg: pkg, Name: name}
+	}
+	ref := &TypeRef{Kind: RefNamed, Pkg: pkg, Name: name}
+	if args := n.TypeArgs(); args != nil {
+		for i := 0; i < args.Len(); i++ {
+			ref.Args = append(ref.Args, TypeRefFromType(args.At(i)))
+		}
+	}
+	return ref
 }
 
 // Qualify attaches pkg to every unqualified named node in the tree, turning a

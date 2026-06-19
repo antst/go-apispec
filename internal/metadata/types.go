@@ -394,6 +394,11 @@ type Type struct {
 	Methods       []Method `yaml:"methods,omitempty"`
 	Comments      int      `yaml:"comments,omitempty"`
 	Tags          []int    `yaml:"tags,omitempty"`
+
+	// TypeParams holds declared type-parameter names for a generic type
+	// declaration (e.g. ["K","V"]); empty for non-generic types. Used to bind
+	// an instantiation's TypeRef.Args to parameter names during substitution.
+	TypeParams []string `yaml:"type_params,omitempty"`
 }
 
 // Field represents a struct field
@@ -406,6 +411,10 @@ type Field struct {
 
 	// For nested struct types, store the nested type definition
 	NestedType *Type `yaml:"nested_type,omitempty"`
+
+	// TypeRef is the structured type for this field (Phase 2), built from the
+	// field's ast.Expr at analysis time.
+	TypeRef *TypeRef `yaml:"type_ref,omitempty"`
 }
 
 // Method represents a method
@@ -542,6 +551,9 @@ type CallArgument struct {
 	ResolvedType    int  `yaml:"resolved_type,omitempty"`     // The concrete type after type parameter resolution
 	IsGenericType   bool `yaml:"is_generic_type,omitempty"`   // Whether this argument represents a generic type
 	GenericTypeName int  `yaml:"generic_type_name,omitempty"` // The generic type parameter name (e.g., "TRequest", "TData")
+
+	// TypeRef is the structured type for this argument/return (Phase 2).
+	TypeRef *TypeRef `yaml:"type_ref,omitempty"`
 
 	ReceiverType *CallArgument `yaml:"receiver_type,omitempty"` // The type of the receiver
 

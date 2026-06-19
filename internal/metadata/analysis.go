@@ -301,6 +301,7 @@ func analyzeAssignmentValue(expr ast.Expr, info *types.Info, funcName string, pk
 			arg := NewCallArgument(metadata)
 			arg.SetKind(KindIdent)
 			arg.SetType(typ.String())
+			arg.TypeRef = TypeRefFromType(typ) // Phase 2: structured type from go/types
 			return pkgName, arg
 		}
 	}
@@ -322,6 +323,7 @@ func analyzeAssignmentValue(expr ast.Expr, info *types.Info, funcName string, pk
 		arg := NewCallArgument(metadata)
 		arg.SetKind(KindIdent)
 		arg.SetType(getTypeName(e, info))
+		arg.TypeRef = TypeRefFromExpr(e, info) // Phase 2: structured type from the AST selector
 		return pkgName, arg
 
 	case *ast.CallExpr:
@@ -352,6 +354,7 @@ func analyzeAssignmentValue(expr ast.Expr, info *types.Info, funcName string, pk
 		arg := NewCallArgument(metadata)
 		arg.SetKind(KindIdent)
 		arg.SetType("interface{}")
+		arg.TypeRef = &TypeRef{Kind: RefInterface} // Phase 2: empty interface
 		return pkgName, arg
 
 	case *ast.StarExpr:
