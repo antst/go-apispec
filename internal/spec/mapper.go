@@ -2398,6 +2398,81 @@ func mapGoTypeToOpenAPISchema(usedTypes map[string]*Schema, goType string, meta 
 	}
 }
 
+// schemaFromTypeRef produces the OpenAPI schema for a structured TypeRef — the
+// tree-based counterpart to the leaf/structural cases of
+// mapGoTypeToOpenAPISchema. It returns nil for forms that still need metadata
+// lookup, component naming, or generic substitution (named/struct/generic), so
+// the string path continues to handle those during the migration.
+//
+// T007: built and shadow-tested against mapGoTypeToOpenAPISchema for
+// equivalence; wired into the live schema path in a follow-up so each golden can
+// be verified. Fixed-array length (US1) and generic substitution (US2) are added
+// later — this mirrors current output.
+func schemaFromTypeRef(ref *metadata.TypeRef) *Schema {
+	if ref == nil {
+		return nil
+	}
+	switch ref.Kind {
+	case metadata.RefPointer:
+		return schemaFromTypeRef(ref.Elem) // a pointer is transparent to the schema
+	case metadata.RefSlice, metadata.RefArray:
+		if isByteRef(ref.Elem) {
+			return &Schema{Type: "string", Format: "byte"} // []byte / [N]byte -> base64 string
+		}
+		items := schemaFromTypeRef(ref.Elem)
+		if items == nil {
+			return nil // unknown element — defer to the string path
+		}
+		return &Schema{Type: "array", Items: items}
+	case metadata.RefMap:
+		if !isStringRef(ref.Key) {
+			return nil // only string-keyed maps map cleanly to an object
+		}
+		val := schemaFromTypeRef(ref.Elem)
+		if val == nil {
+			return nil
+		}
+		return &Schema{Type: "object", AdditionalProperties: val}
+	case metadata.RefInterface:
+		return &Schema{Type: "object"}
+	case metadata.RefBasic:
+		return basicRefSchema(ref.Name)
+	default:
+		return nil // named / generic / struct / func / chan — string path for now
+	}
+}
+
+func isByteRef(r *metadata.TypeRef) bool {
+	return r != nil && r.Kind == metadata.RefBasic && r.Name == "byte"
+}
+
+func isStringRef(r *metadata.TypeRef) bool {
+	return r != nil && r.Kind == metadata.RefBasic && r.Name == "string"
+}
+
+// basicRefSchema maps a primitive type name to its schema, mirroring the default
+// switch of mapGoTypeToOpenAPISchema. Returns nil for an unrecognized name.
+func basicRefSchema(name string) *Schema {
+	switch name {
+	case "string":
+		return &Schema{Type: "string"}
+	case "int", "int8", "int16", "int32", "int64":
+		return &Schema{Type: "integer"}
+	case "uint", "uint8", "uint16", "uint32", "uint64", "byte":
+		return &Schema{Type: "integer", Minimum: floatPtr(0)}
+	case "float32", "float64":
+		return &Schema{Type: "number"}
+	case "bool":
+		return &Schema{Type: "boolean"}
+	case "time.Time":
+		return &Schema{Type: "string", Format: "date-time"}
+	case "interface{}", "struct{}", "any":
+		return &Schema{Type: "object"}
+	default:
+		return nil
+	}
+}
+
 func canAddRefSchemaForType(key string) bool {
 	if metadata.IsPrimitiveType(key) || strings.HasPrefix(key, "[]") || strings.Contains(key, "map[") {
 		return false
