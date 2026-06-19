@@ -1295,7 +1295,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 		// Only apply enum detection for custom types (not built-in types)
 		if fieldSchema != nil && len(fieldSchema.Enum) == 0 {
 			// Use the original field type before resolution for enum detection
-			originalFieldType := getStringFromPool(meta, field.Type)
+			originalFieldType := fieldTypeString(field, meta)
 
 			// Only detect enums for custom types, not built-in types like string, int, etc.
 			if !metadata.IsPrimitiveType(originalFieldType) {
