@@ -850,7 +850,6 @@ func processLocalTypes(file *ast.File, info *types.Info, pkgName string, fset *t
 	}
 }
 
-// processTypeKind determines the kind of type and processes it accordingly
 // typeParamNames extracts declared type-parameter names from a generic
 // type/function parameter list (e.g. [K comparable, V any] -> ["K","V"]).
 func typeParamNames(fl *ast.FieldList) []string {
@@ -866,6 +865,7 @@ func typeParamNames(fl *ast.FieldList) []string {
 	return names
 }
 
+// processTypeKind determines the kind of type and processes it accordingly.
 func processTypeKind(tspec *ast.TypeSpec, info *types.Info, pkgName string, fset *token.FileSet, t *Type, allTypes map[string]*Type, metadata *Metadata) {
 	// Phase 2: capture declared generic type-parameter names so an instantiation
 	// can bind concrete args to them by position during substitution.
