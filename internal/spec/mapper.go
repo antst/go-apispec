@@ -1240,7 +1240,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 				schemas[derivedFieldType] = bodySchema
 				markUsedType(usedTypes, derivedFieldType, bodySchema)
 			} else {
-				fieldSchema, newSchemas = mapGoTypeToOpenAPISchema(usedTypes, derivedFieldType, meta, cfg, visitedTypes)
+				fieldSchema, newSchemas = schemaForType(usedTypes, derivedFieldType, field.TypeRef, meta, cfg, visitedTypes)
 				if canAddRefSchemaForType(derivedFieldType) {
 					schemas[derivedFieldType] = fieldSchema
 					fieldSchema = addRefSchemaForType(derivedFieldType)
@@ -2415,15 +2415,36 @@ func schemaFromTypeRef(ref *metadata.TypeRef) *Schema {
 	switch ref.Kind {
 	case metadata.RefPointer:
 		return schemaFromTypeRef(ref.Elem) // a pointer is transparent to the schema
-	case metadata.RefSlice, metadata.RefArray:
+	case metadata.RefSlice:
 		if isByteRef(ref.Elem) {
-			return &Schema{Type: "string", Format: "byte"} // []byte / [N]byte -> base64 string
+			return &Schema{Type: "string", Format: "byte"} // []byte -> base64 string
 		}
 		items := schemaFromTypeRef(ref.Elem)
 		if items == nil {
 			return nil // unknown element — defer to the string path
 		}
 		return &Schema{Type: "array", Items: items}
+	case metadata.RefArray:
+		// A fixed-length array mirrors the string path's [N]T handling: byte
+		// arrays become a base64 string with maxLength; others an array with
+		// minItems == maxItems. Len -1 (inferred/unresolved) carries no constraint.
+		if isByteRef(ref.Elem) {
+			s := &Schema{Type: "string", Format: "byte"}
+			if ref.Len >= 0 {
+				s.MaxLength = ref.Len
+			}
+			return s
+		}
+		items := schemaFromTypeRef(ref.Elem)
+		if items == nil {
+			return nil
+		}
+		s := &Schema{Type: "array", Items: items}
+		if ref.Len >= 0 {
+			s.MinItems = ref.Len
+			s.MaxItems = ref.Len
+		}
+		return s
 	case metadata.RefMap:
 		if !isStringRef(ref.Key) {
 			return nil // only string-keyed maps map cleanly to an object
@@ -2471,6 +2492,20 @@ func basicRefSchema(name string) *Schema {
 	default:
 		return nil
 	}
+}
+
+// schemaForType returns the schema for a type, trying the structured TypeRef
+// first (when one is available) and falling back to the string-based
+// mapGoTypeToOpenAPISchema for forms the tree generator does not yet handle.
+// This is the migration seam: tree-first, string-fallback, output-preserving
+// (schemaFromTypeRef is shadow-tested to match the string path).
+func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.TypeRef, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema) {
+	if ref != nil {
+		if s := schemaFromTypeRef(ref); s != nil {
+			return s, map[string]*Schema{}
+		}
+	}
+	return mapGoTypeToOpenAPISchema(usedTypes, goType, meta, cfg, visitedTypes)
 }
 
 func canAddRefSchemaForType(key string) bool {

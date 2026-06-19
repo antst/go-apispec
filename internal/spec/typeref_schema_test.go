@@ -27,8 +27,8 @@ import (
 // generator against the existing string-based mapGoTypeToOpenAPISchema: for the
 // leaf/structural forms schemaFromTypeRef handles, the two MUST produce the
 // identical schema. This proves the tree generator is a faithful mirror before
-// it is wired into the live path. (RefArray is intentionally excluded — it is
-// slice-equivalent until US1 adds the fixed-length constraints.)
+// it is wired into the live path. RefArray emits the same minItems/maxItems (or
+// maxLength for byte arrays) as the string path's [N]T handling.
 func TestSchemaFromTypeRef_MatchesStringPath(t *testing.T) {
 	cfg := &APISpecConfig{}
 	meta := &metadata.Metadata{Packages: map[string]*metadata.Package{}}
@@ -50,6 +50,8 @@ func TestSchemaFromTypeRef_MatchesStringPath(t *testing.T) {
 		slice(b("byte")),     // []byte -> string/byte
 		slice(ptr(b("int"))), // []*int
 		{Kind: metadata.RefMap, Key: b("string"), Elem: b("int")},
+		{Kind: metadata.RefArray, Len: 3, Elem: b("int")},   // [3]int -> minItems == maxItems
+		{Kind: metadata.RefArray, Len: 16, Elem: b("byte")}, // [16]byte -> string/byte/maxLength
 	}
 	for _, ref := range cases {
 		got := schemaFromTypeRef(ref)
@@ -58,18 +60,19 @@ func TestSchemaFromTypeRef_MatchesStringPath(t *testing.T) {
 		assert.Equal(t, want, got, "schema mismatch for %q", ref.String())
 	}
 
-	// RefArray is slice-equivalent for now (length lost in current output; US1
-	// adds the constraints), so it is verified directly rather than via String().
-	assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "integer"}},
-		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: 3, Elem: b("int")}))
-	assert.Equal(t, &Schema{Type: "string", Format: "byte"},
-		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: 16, Elem: b("byte")}))
 	// A slice/array of an unrepresentable element defers to the string path.
 	assert.Nil(t, schemaFromTypeRef(slice(&metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"})))
 	// An unrecognized basic name also defers (e.g. error has no default mapping).
 	assert.Nil(t, schemaFromTypeRef(b("error")))
 	// A string-keyed map with an unrepresentable value defers too.
 	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefMap, Key: b("string"), Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"}}))
+	// A fixed array of an unrepresentable element defers to the string path.
+	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: 3, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"}}))
+	// Inferred-length arrays ([...]T, Len -1) carry no length constraint.
+	assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "integer"}},
+		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: -1, Elem: b("int")}))
+	assert.Equal(t, &Schema{Type: "string", Format: "byte"},
+		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: -1, Elem: b("byte")}))
 
 	// Forms the tree generator defers to the string path (named/generic/struct).
 	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "User"}))
