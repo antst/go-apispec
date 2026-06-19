@@ -422,6 +422,21 @@ type S struct {
 	assert.Equal(t, 3, b.Len)
 }
 
+func TestTypeRefFromExpr_PackageIdent(t *testing.T) {
+	// A package identifier (the "http" in http.Header) is not a type; it must not
+	// become a fabricated RefNamed. It surfaces as a sub-expression when the
+	// call-graph builder recurses into selectors.
+	exprs, info := fieldExprs(t, `package x
+import "net/http"
+type S struct{ F http.Header }`, true)
+	require.NotNil(t, info)
+	sel, ok := exprs["F"].(*ast.SelectorExpr)
+	require.True(t, ok)
+	assert.Nil(t, TypeRefFromExpr(sel.X, info)) // sel.X is the "http" package ident
+	// The selector itself still resolves correctly.
+	assert.Equal(t, "net/http.Header", TypeRefFromExpr(sel, info).String())
+}
+
 func TestTypeRef_ConstructorsAgree(t *testing.T) {
 	// With type info, TypeRefFromExpr routes through TypeRefFromType, so the two
 	// constructors produce identical trees and the prior divergences (bare vs

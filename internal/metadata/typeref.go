@@ -119,6 +119,8 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 		return TypeRefFromExpr(t.X, info)
 	case *ast.Ident:
 		switch {
+		case isPackageName(t, info):
+			return nil // a package identifier (the "http" in http.Header) is not a type
 		case IsPrimitiveType(t.Name):
 			return &TypeRef{Kind: RefBasic, Name: t.Name}
 		case isTypeParam(t, info):
@@ -207,6 +209,17 @@ func isTypeParam(id *ast.Ident, info *types.Info) bool {
 		return false
 	}
 	_, ok := obj.Type().(*types.TypeParam)
+	return ok
+}
+
+// isPackageName reports whether id refers to an imported package rather than a
+// type (the "http" in http.Header). Such an identifier has no type and must not
+// become a fabricated RefNamed. Requires type info.
+func isPackageName(id *ast.Ident, info *types.Info) bool {
+	if info == nil {
+		return false
+	}
+	_, ok := info.ObjectOf(id).(*types.PkgName)
 	return ok
 }
 

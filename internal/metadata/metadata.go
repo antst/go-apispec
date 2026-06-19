@@ -1010,6 +1010,7 @@ func isExternalPackage(pkgPath, currentModulePath string) bool {
 func processStructFields(structType *ast.StructType, pkgName string, metadata *Metadata, t *Type, info *types.Info) {
 	for _, field := range structType.Fields.List {
 		fieldType := getTypeName(field.Type, info)
+		fieldTypeRef := TypeRefFromExpr(field.Type, info)
 		tag := getFieldTag(field)
 		comments := getComments(field)
 
@@ -1019,9 +1020,11 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 				// Only resolve external types to their underlying primitives
 				// Internal project types should remain as-is since they'll be resolved from the project
 				if isExternalType(fieldTypeInfo, metadata.CurrentModulePath) {
-					underlyingFieldType := fieldTypeInfo.Underlying().String()
-					if IsPrimitiveType(underlyingFieldType) {
+					underlying := fieldTypeInfo.Underlying()
+					if underlyingFieldType := underlying.String(); IsPrimitiveType(underlyingFieldType) {
 						fieldType = underlyingFieldType
+						// Keep the structured type aligned with the rewritten string.
+						fieldTypeRef = TypeRefFromType(underlying)
 					}
 				}
 			}
@@ -1030,7 +1033,7 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 		if len(field.Names) == 0 {
 			// Embedded (anonymous) field
 			t.Embeds = append(t.Embeds, metadata.StringPool.Get(fieldType))
-			t.EmbedRefs = append(t.EmbedRefs, TypeRefFromExpr(field.Type, info))
+			t.EmbedRefs = append(t.EmbedRefs, fieldTypeRef)
 			continue
 		}
 
@@ -1042,8 +1045,9 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 				Tag:      metadata.StringPool.Get(tag),
 				Scope:    metadata.StringPool.Get(scope),
 				Comments: metadata.StringPool.Get(comments),
-				// Phase 2: structured type built from the field's AST expression.
-				TypeRef: TypeRefFromExpr(field.Type, info),
+				// Phase 2: structured type (external types normalized to their
+				// underlying primitive, matching Type above).
+				TypeRef: fieldTypeRef,
 			}
 
 			// Check if this field has a nested struct type
