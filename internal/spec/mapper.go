@@ -2504,6 +2504,13 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 		if s := schemaFromTypeRef(ref); s != nil {
 			return s, map[string]*Schema{}
 		}
+		// The flattened string can be empty where getTypeName has a gap — most
+		// notably a multi-type-parameter generic (Pair[K, V]), whose IndexListExpr
+		// it never handled. The tree carries the real type, so fall back to its
+		// canonical string and let the existing machinery resolve it.
+		if goType == "" {
+			goType = ref.String()
+		}
 	}
 	return mapGoTypeToOpenAPISchema(usedTypes, goType, meta, cfg, visitedTypes)
 }

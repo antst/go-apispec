@@ -80,3 +80,22 @@ func TestSchemaFromTypeRef_MatchesStringPath(t *testing.T) {
 	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefMap, Key: b("int"), Elem: b("int")})) // non-string key
 	assert.Nil(t, schemaFromTypeRef(nil))
 }
+
+// TestSchemaForType_EmptyStringBridge covers schemaForType's fallback for a type
+// whose flattened string is empty (the getTypeName gap for multi-parameter
+// generics): it bridges to the TypeRef's canonical string so the named type
+// still resolves instead of producing nothing.
+func TestSchemaForType_EmptyStringBridge(t *testing.T) {
+	cfg := &APISpecConfig{}
+	meta := &metadata.Metadata{Packages: map[string]*metadata.Package{}}
+
+	// With a TypeRef, the empty string is bridged to ref.String()="User" and
+	// resolves to a $ref.
+	ref := &metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"}
+	got, _ := schemaForType(map[string]*Schema{}, "", ref, meta, cfg, nil)
+	require.NotNil(t, got)
+
+	// Without a TypeRef, the empty string yields nothing (the broken status quo).
+	none, _ := schemaForType(map[string]*Schema{}, "", nil, meta, cfg, nil)
+	assert.Nil(t, none)
+}
