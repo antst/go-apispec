@@ -1030,6 +1030,7 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 		if len(field.Names) == 0 {
 			// Embedded (anonymous) field
 			t.Embeds = append(t.Embeds, metadata.StringPool.Get(fieldType))
+			t.EmbedRefs = append(t.EmbedRefs, TypeRefFromExpr(field.Type, info))
 			continue
 		}
 

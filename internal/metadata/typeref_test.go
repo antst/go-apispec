@@ -388,11 +388,68 @@ type S struct {
 	tuple := types.NewTuple()
 	intT := types.Typ[types.Int]
 	assert.Nil(t, TypeRefFromType(nil))
+	assert.Nil(t, TypeRefFromType(types.Typ[types.Invalid]))  // unresolved/erroneous
 	assert.Nil(t, TypeRefFromType(tuple))                     // default arm
 	assert.Nil(t, TypeRefFromType(types.NewArray(tuple, 3)))  // array elem nil
 	assert.Nil(t, TypeRefFromType(types.NewMap(tuple, intT))) // map key nil
 	assert.Nil(t, TypeRefFromType(types.NewMap(intT, tuple))) // map value nil
 	assert.Nil(t, TypeRefFromType(types.NewPointer(tuple)))   // pointer elem nil (via wrap)
+}
+
+func TestTypeRefFromExpr_InfoFallback(t *testing.T) {
+	// When type info is present but the type is unresolved (TypeOf is nil/invalid),
+	// TypeRefFromExpr falls back to the AST path — which still uses info to resolve
+	// the selector's package and the array length.
+	exprs, info := fieldExprs(t, `package x
+import "time"
+type S struct {
+	A time.Undefined
+	B [3]time.Nope
+}`, true)
+	require.NotNil(t, info)
+
+	// Selector to an undefined member: the AST fallback resolves the package
+	// import path via info (exercises selectorParts' info branch).
+	a := TypeRefFromExpr(exprs["A"], info)
+	require.Equal(t, RefNamed, a.Kind)
+	assert.Equal(t, "time", a.Pkg)
+	assert.Equal(t, "Undefined", a.Name)
+
+	// Array of an undefined element: the AST fallback resolves the constant
+	// length via info (exercises arrayLen's info path).
+	b := TypeRefFromExpr(exprs["B"], info)
+	require.Equal(t, RefArray, b.Kind)
+	assert.Equal(t, 3, b.Len)
+}
+
+func TestTypeRef_ConstructorsAgree(t *testing.T) {
+	// With type info, TypeRefFromExpr routes through TypeRefFromType, so the two
+	// constructors produce identical trees and the prior divergences (bare vs
+	// full package path, `any` Kind) are gone.
+	exprs, info := fieldExprs(t, `package x
+type Local struct{ X int }
+type S struct {
+	A Local
+	B any
+	C []Local
+}`, true)
+	require.NotNil(t, info)
+
+	// Same-package type now carries the full package path (matching go/types),
+	// not a bare name — and equals what TypeRefFromType produces.
+	a := TypeRefFromExpr(exprs["A"], info)
+	require.Equal(t, RefNamed, a.Kind)
+	assert.Equal(t, "x", a.Pkg)
+	assert.Equal(t, TypeRefFromType(info.TypeOf(exprs["A"])), a)
+
+	// `any` resolves to the interface kind through go/types (not RefBasic{"any"}).
+	b := TypeRefFromExpr(exprs["B"], info)
+	assert.Equal(t, RefInterface, b.Kind)
+	assert.Equal(t, TypeRefFromType(info.TypeOf(exprs["B"])), b)
+
+	// Composite of a same-package type agrees too.
+	c := TypeRefFromExpr(exprs["C"], info)
+	assert.Equal(t, TypeRefFromType(info.TypeOf(exprs["C"])), c)
 }
 
 func TestTypeRef_YAMLRoundTrip(t *testing.T) {

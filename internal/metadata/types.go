@@ -382,18 +382,21 @@ type File struct {
 
 // Type represents a Go type
 type Type struct {
-	Name          int      `yaml:"name,omitempty"`
-	Pkg           int      `yaml:"pkg,omitempty"`
-	Kind          int      `yaml:"kind,omitempty"`
-	Target        int      `yaml:"target,omitempty"`
-	Implements    []int    `yaml:"implements,omitempty"`
-	ImplementedBy []int    `yaml:"implemented_by,omitempty"`
-	Embeds        []int    `yaml:"embeds,omitempty"`
-	Fields        []Field  `yaml:"fields,omitempty"`
-	Scope         int      `yaml:"scope,omitempty"`
-	Methods       []Method `yaml:"methods,omitempty"`
-	Comments      int      `yaml:"comments,omitempty"`
-	Tags          []int    `yaml:"tags,omitempty"`
+	Name          int   `yaml:"name,omitempty"`
+	Pkg           int   `yaml:"pkg,omitempty"`
+	Kind          int   `yaml:"kind,omitempty"`
+	Target        int   `yaml:"target,omitempty"`
+	Implements    []int `yaml:"implements,omitempty"`
+	ImplementedBy []int `yaml:"implemented_by,omitempty"`
+	Embeds        []int `yaml:"embeds,omitempty"`
+	// EmbedRefs is the structured type for each embedded field, index-aligned
+	// with Embeds (Phase 2); a nil entry means the embed had no usable type.
+	EmbedRefs []*TypeRef `yaml:"embed_refs,omitempty"`
+	Fields    []Field    `yaml:"fields,omitempty"`
+	Scope     int        `yaml:"scope,omitempty"`
+	Methods   []Method   `yaml:"methods,omitempty"`
+	Comments  int        `yaml:"comments,omitempty"`
+	Tags      []int      `yaml:"tags,omitempty"`
 
 	// TypeParams holds declared type-parameter names for a generic type
 	// declaration (e.g. ["K","V"]); empty for non-generic types. Used to bind

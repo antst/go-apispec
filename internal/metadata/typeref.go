@@ -99,6 +99,19 @@ const (
 //
 //nolint:gocyclo // flat type switch over many AST node kinds — low real complexity
 func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
+	// Prefer the fully-resolved go/types type when available: it is the single
+	// source of truth (resolves aliases, instantiations, and package import
+	// paths) and guarantees TypeRefFromExpr and TypeRefFromType agree for the
+	// same type. Fall back to the AST only when type info is absent or the type
+	// is unresolved (external fragments, undefined identifiers). This also lets
+	// the constructor handle value expressions, whose type comes from info.
+	if e != nil && info != nil {
+		if t := info.TypeOf(e); t != nil {
+			if ref := TypeRefFromType(t); ref != nil {
+				return ref
+			}
+		}
+	}
 	switch t := e.(type) {
 	case nil:
 		return nil
@@ -252,6 +265,9 @@ func TypeRefFromType(t types.Type) *TypeRef {
 	case nil:
 		return nil
 	case *types.Basic:
+		if u.Kind() == types.Invalid {
+			return nil // unresolved/erroneous type — no usable representation
+		}
 		return &TypeRef{Kind: RefBasic, Name: u.Name()}
 	case *types.Named:
 		return namedTypeRef(u)
