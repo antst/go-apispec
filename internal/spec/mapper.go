@@ -2512,7 +2512,18 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 			goType = ref.String()
 		}
 	}
-	return mapGoTypeToOpenAPISchema(usedTypes, goType, meta, cfg, visitedTypes)
+	s, newSchemas := mapGoTypeToOpenAPISchema(usedTypes, goType, meta, cfg, visitedTypes)
+	// A fixed-length array whose element defers to the string path (a named
+	// struct/generic element, e.g. [4]Point) keeps its length only on the
+	// TypeRef — getTypeName flattened the field string to "[]Point", dropping the
+	// count. Re-apply minItems == maxItems == N onto the array the string path
+	// produced, matching the constraint schemaFromTypeRef already emits for
+	// primitive-element arrays (decision D5; byte arrays are handled there too).
+	if ref != nil && ref.Kind == metadata.RefArray && ref.Len >= 0 && s != nil && s.Type == "array" {
+		s.MinItems = ref.Len
+		s.MaxItems = ref.Len
+	}
+	return s, newSchemas
 }
 
 func canAddRefSchemaForType(key string) bool {

@@ -99,3 +99,38 @@ func TestSchemaForType_EmptyStringBridge(t *testing.T) {
 	none, _ := schemaForType(map[string]*Schema{}, "", nil, meta, cfg, nil)
 	assert.Nil(t, none)
 }
+
+// TestSchemaForType_FixedArrayLengthReapplied covers the seam's re-application of
+// a fixed array's length when its element defers to the string path (a named
+// struct/generic element, e.g. [4]Point): schemaFromTypeRef returns nil, the
+// string path resolves the array shape, and schemaForType stamps minItems ==
+// maxItems == Len back on from the TypeRef. Slices and inferred-length arrays
+// ([...]T) stay unconstrained. The "[]string" goType is a stand-in for whatever
+// length-less array string the flattener produced; only the post-apply matters.
+func TestSchemaForType_FixedArrayLengthReapplied(t *testing.T) {
+	cfg := &APISpecConfig{}
+	meta := &metadata.Metadata{Packages: map[string]*metadata.Package{}}
+	named := func() *metadata.TypeRef { return &metadata.TypeRef{Kind: metadata.RefNamed, Name: "Thing"} }
+
+	// Fixed array, known length: re-applied.
+	arr := &metadata.TypeRef{Kind: metadata.RefArray, Len: 5, Elem: named()}
+	got, _ := schemaForType(map[string]*Schema{}, "[]string", arr, meta, cfg, nil)
+	require.NotNil(t, got)
+	assert.Equal(t, "array", got.Type)
+	assert.Equal(t, 5, got.MinItems)
+	assert.Equal(t, 5, got.MaxItems)
+
+	// Slice element that also resolves to an array via the string path: no length.
+	sl := &metadata.TypeRef{Kind: metadata.RefSlice, Elem: named()}
+	gotSlice, _ := schemaForType(map[string]*Schema{}, "[]string", sl, meta, cfg, nil)
+	require.NotNil(t, gotSlice)
+	assert.Equal(t, 0, gotSlice.MinItems)
+	assert.Equal(t, 0, gotSlice.MaxItems)
+
+	// Inferred-length array ([...]T, Len -1): no constraint (Len < 0 guard).
+	inferred := &metadata.TypeRef{Kind: metadata.RefArray, Len: -1, Elem: named()}
+	gotInf, _ := schemaForType(map[string]*Schema{}, "[]string", inferred, meta, cfg, nil)
+	require.NotNil(t, gotInf)
+	assert.Equal(t, 0, gotInf.MinItems)
+	assert.Equal(t, 0, gotInf.MaxItems)
+}
