@@ -1815,6 +1815,13 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		// declaration "APIResponse[T any]" — so only fall back to rawArgType when
 		// bodyType isn't already a bound (concrete-arg) generic instantiation.
 		rawArgType := r.contextProvider.GetString(arg.Type)
+		// Prefer the lossless TypeRef, which carries the BOUND generic
+		// instantiation (Pair[User,Order]) where arg.Type may hold only the unbound
+		// declaration (Pair[K,V]) — the wrapper this branch exists to preserve
+		// (T009/T011).
+		if arg.TypeRef != nil {
+			rawArgType = arg.TypeRef.String()
+		}
 		if strings.Contains(rawArgType, "[") && !strings.HasPrefix(rawArgType, "[]") && !strings.HasPrefix(rawArgType, "map[") {
 			if !genericArgsAreConcrete(bodyType) {
 				bodyType = rawArgType
