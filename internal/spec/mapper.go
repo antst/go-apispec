@@ -2649,19 +2649,22 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 		if goType == "" {
 			goType = ref.String()
 		}
-	} else if goType != "" && !strings.Contains(goType, TypeSep) {
-		// String-only caller (no TypeRef): recover one by parsing the canonical
-		// string so the structural cases resolve on the tree instead of the string
-		// generator. Strings still carrying the metadata "-->" separator are left to
-		// mapGoTypeToOpenAPISchema, whose usedTypes keys other consumers (field-format
-		// inference) look up by that exact spelling — the convention is unified in a
-		// follow-up before those flow through the tree. Alias/generic/config leaves
-		// fall through regardless.
+	} else if goType != "" {
+		// String-only caller (no TypeRef): recover one by parsing the string so the
+		// structural and named cases resolve on the tree instead of the string
+		// generator. A direct named type registers under the ORIGINAL goType string
+		// (which may carry the metadata "-->" separator), so a consumer that looks
+		// the component up by that exact key — field-format inference — still finds
+		// it. Alias/generic/config leaves fall through regardless.
 		if pref := metadata.ParseTypeRef(goType); pref != nil {
 			if s := schemaFromTypeRef(pref); s != nil {
 				return s, map[string]*Schema{}
 			}
-			if s, ns, ok := schemaForRefTree(usedTypes, pref, meta, cfg, visitedTypes); ok {
+			if pref.Kind == metadata.RefNamed && len(pref.Args) == 0 {
+				if s, ns, ok := schemaForNamedRef(usedTypes, pref, goType, meta, cfg, visitedTypes); ok {
+					return s, ns
+				}
+			} else if s, ns, ok := schemaForRefTree(usedTypes, pref, meta, cfg, visitedTypes); ok {
 				return s, ns
 			}
 		}
@@ -2697,7 +2700,7 @@ func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta 
 		if len(ref.Args) != 0 {
 			return nil, nil, false // generic instantiation → string path
 		}
-		return schemaForNamedRef(usedTypes, ref, meta, cfg, visitedTypes)
+		return schemaForNamedRef(usedTypes, ref, "", meta, cfg, visitedTypes)
 	case metadata.RefSlice, metadata.RefArray:
 		items, schemas, ok := schemaForRefTree(usedTypes, ref.Elem, meta, cfg, visitedTypes)
 		if !ok || items == nil {
@@ -2733,8 +2736,15 @@ func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta 
 // config mapping, is not found in metadata (external/dangling refs the string
 // path names by their short alias), or yields no schema — preserving those exact
 // behaviours.
-func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
-	goType := ref.String()
+func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key string, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
+	// key is the component/usedTypes key. A string-only caller passes the original
+	// type string (which may carry the metadata "-->" separator) so the component
+	// registers under the exact spelling other consumers — field-format inference —
+	// look it up by. Recursive (tree) callers pass "" to use the canonical form.
+	goType := key
+	if goType == "" {
+		goType = ref.String()
+	}
 
 	// Decide whether to handle this leaf BEFORE any side effect on visitedTypes:
 	// a premature cycle-key write would make a string-path fallback for the same

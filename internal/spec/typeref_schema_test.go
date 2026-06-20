@@ -108,6 +108,42 @@ func TestSchemaForType_EmptyStringBridge(t *testing.T) {
 	assert.Contains(t, schemas, "main.User")
 }
 
+// TestSchemaForType_StringOnly covers the string-only caller path (nil TypeRef):
+// the string is parsed and resolved on the tree, with a direct named type
+// registering under the ORIGINAL key (preserving the "-->" separator).
+func TestSchemaForType_StringOnly(t *testing.T) {
+	cfg := &APISpecConfig{}
+
+	// Primitive string → structural leaf, no metadata needed.
+	got, _ := schemaForType(map[string]*Schema{}, "int", nil, metaWithNamedTypes(), cfg, nil)
+	assert.Equal(t, &Schema{Type: "integer"}, got)
+
+	// Direct named struct (dotted) → $ref, registered under the dotted key.
+	used := map[string]*Schema{}
+	got, _ = schemaForType(used, "main.User", nil, metaWithNamedTypes(), cfg, nil)
+	require.NotNil(t, got)
+	assert.Equal(t, refComponentsSchemasPrefix+"main.User", got.Ref)
+	assert.Contains(t, used, "main.User")
+
+	// Direct named struct via the "-->" separator → registered under the ORIGINAL
+	// "-->" key (so field-format inference, which looks up that exact spelling,
+	// still finds the component).
+	used = map[string]*Schema{}
+	got, _ = schemaForType(used, "main-->User", nil, metaWithNamedTypes(), cfg, nil)
+	require.NotNil(t, got)
+	assert.Contains(t, used, "main-->User")
+
+	// Container of a named struct → array of $ref via schemaForRefTree.
+	got, _ = schemaForType(map[string]*Schema{}, "[]main.User", nil, metaWithNamedTypes(), cfg, nil)
+	require.NotNil(t, got)
+	assert.Equal(t, "array", got.Type)
+
+	// Config TypeMapping wins over structural resolution.
+	mapped := &APISpecConfig{TypeMapping: []TypeMapping{{GoType: "int", OpenAPIType: &Schema{Type: "string", Format: "int-as-string"}}}}
+	got, _ = schemaForType(map[string]*Schema{}, "int", nil, metaWithNamedTypes(), mapped, nil)
+	assert.Equal(t, "int-as-string", got.Format)
+}
+
 // metaWithNamedTypes builds a metadata with a struct ("User") and an alias
 // ("Status") in package "main", for the named-ref resolution tests.
 func metaWithNamedTypes() *metadata.Metadata {
@@ -202,39 +238,39 @@ func TestSchemaForNamedRef(t *testing.T) {
 	userRef := &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User"}
 
 	// Struct → handled (ok), returns a $ref to the registered component.
-	s, schemas, ok := schemaForNamedRef(map[string]*Schema{}, userRef, meta, &APISpecConfig{}, map[string]bool{})
+	s, schemas, ok := schemaForNamedRef(map[string]*Schema{}, userRef, "", meta, &APISpecConfig{}, map[string]bool{})
 	require.True(t, ok)
 	require.NotNil(t, s)
 	assert.Equal(t, refComponentsSchemasPrefix+"main.User", s.Ref)
 	assert.Contains(t, schemas, "main.User")
 
 	// Alias → deferred (ok=false): the caller's inline-resolved primitive wins.
-	_, _, ok = schemaForNamedRef(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}, meta, &APISpecConfig{}, map[string]bool{})
+	_, _, ok = schemaForNamedRef(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}, "", meta, &APISpecConfig{}, map[string]bool{})
 	assert.False(t, ok)
 
 	// Not found → deferred (string path emits the short-named external $ref).
-	_, _, ok = schemaForNamedRef(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Missing"}, meta, &APISpecConfig{}, map[string]bool{})
+	_, _, ok = schemaForNamedRef(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Missing"}, "", meta, &APISpecConfig{}, map[string]bool{})
 	assert.False(t, ok)
 
 	// Config TypeMapping match → deferred.
 	cfgMap := &APISpecConfig{TypeMapping: []TypeMapping{{GoType: "main.User", OpenAPIType: &Schema{Type: "string"}}}}
-	_, _, ok = schemaForNamedRef(map[string]*Schema{}, userRef, meta, cfgMap, map[string]bool{})
+	_, _, ok = schemaForNamedRef(map[string]*Schema{}, userRef, "", meta, cfgMap, map[string]bool{})
 	assert.False(t, ok)
 
 	// Config ExternalType match → deferred.
 	cfgExt := &APISpecConfig{ExternalTypes: []ExternalType{{Name: "main.User", OpenAPIType: &Schema{Type: "object"}}}}
-	_, _, ok = schemaForNamedRef(map[string]*Schema{}, userRef, meta, cfgExt, map[string]bool{})
+	_, _, ok = schemaForNamedRef(map[string]*Schema{}, userRef, "", meta, cfgExt, map[string]bool{})
 	assert.False(t, ok)
 
 	// Cycle guard: the type already in-flight → short-circuit to a $ref.
 	visiting := map[string]bool{"main.User" + mapGoTypeToOpenAPISchemaKey: true}
-	s, _, ok = schemaForNamedRef(map[string]*Schema{}, userRef, meta, &APISpecConfig{}, visiting)
+	s, _, ok = schemaForNamedRef(map[string]*Schema{}, userRef, "", meta, &APISpecConfig{}, visiting)
 	require.True(t, ok)
 	assert.Equal(t, refComponentsSchemasPrefix+"main.User", s.Ref)
 
 	// usedTypes already resolved → short-circuit to a $ref.
 	used := map[string]*Schema{"main.User": {Type: "object"}}
-	s, _, ok = schemaForNamedRef(used, userRef, meta, &APISpecConfig{}, map[string]bool{})
+	s, _, ok = schemaForNamedRef(used, userRef, "", meta, &APISpecConfig{}, map[string]bool{})
 	require.True(t, ok)
 	assert.Equal(t, refComponentsSchemasPrefix+"main.User", s.Ref)
 }
