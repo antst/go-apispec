@@ -59,6 +59,24 @@ func TestParseTypeRef_RoundTrip(t *testing.T) {
 		t.Error("empty should be nil")
 	}
 
+	// NamedLeaf unwraps containers to the named/basic leaf.
+	check := func(in, wantLeaf string) {
+		if leaf := ParseTypeRef(in).NamedLeaf(); leaf == nil || leaf.String() != wantLeaf {
+			t.Errorf("ParseTypeRef(%q).NamedLeaf() = %v, want %q", in, leaf, wantLeaf)
+		}
+	}
+	check("models.User", "models.User")
+	check("*models.User", "models.User")
+	check("[]models.User", "models.User")
+	check("map[string][]*models.User", "models.User")
+	check("[3]int", "int")
+	if (&TypeRef{Kind: RefStruct}).NamedLeaf().Kind != RefStruct {
+		t.Error("NamedLeaf of a non-container should return itself")
+	}
+	if (*TypeRef)(nil).NamedLeaf() != nil {
+		t.Error("NamedLeaf(nil) should be nil")
+	}
+
 	// Malformed inputs → nil (the error/guard branches).
 	bad := []string{
 		"*",          // pointer with no element

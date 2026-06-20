@@ -259,33 +259,22 @@ func lookupStructFields(bodyType string, meta *metadata.Metadata) map[string]str
 	if meta == nil {
 		return nil
 	}
-	parts := TypeParts(strings.TrimPrefix(bodyType, "*"))
-	if parts.PkgName == "" || parts.TypeName == "" {
+	typ := typeByRef(metadata.ParseTypeRef(strings.TrimPrefix(bodyType, "*")), meta)
+	if typ == nil {
 		return nil
 	}
-	pkg, ok := meta.Packages[parts.PkgName]
-	if !ok {
-		return nil
-	}
-	for _, file := range pkg.Files {
-		typ, ok := file.Types[parts.TypeName]
-		if !ok {
+	out := make(map[string]string, len(typ.Fields))
+	for _, field := range typ.Fields {
+		goName := stringFromPool(meta, field.Name)
+		if goName == "" {
 			continue
 		}
-		out := make(map[string]string, len(typ.Fields))
-		for _, field := range typ.Fields {
-			goName := stringFromPool(meta, field.Name)
-			if goName == "" {
-				continue
-			}
-			tag := stringFromPool(meta, field.Tag)
-			jsonName := extractJSONName(tag)
-			if jsonName == "" {
-				jsonName = goName
-			}
-			out[goName] = jsonName
+		tag := stringFromPool(meta, field.Tag)
+		jsonName := extractJSONName(tag)
+		if jsonName == "" {
+			jsonName = goName
 		}
-		return out
+		out[goName] = jsonName
 	}
-	return nil
+	return out
 }

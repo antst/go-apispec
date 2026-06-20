@@ -1780,43 +1780,6 @@ func TestExtractJSONName_Comprehensive(t *testing.T) {
 	}
 }
 
-// TestTypeParts_Comprehensive tests type parts parsing
-func TestTypeParts_Comprehensive(t *testing.T) {
-	tests := []struct {
-		input                string
-		expectedPkgName      string
-		expectedTypeName     string
-		expectedGenericTypes []string
-	}{
-		{"string", "", "string", nil},
-		{"main-->User", "main", "User", nil},
-		{"pkg-->Type-->T", "pkg", "Type", []string{"T"}},
-		{"Container[T]", "", "Container", []string{"T T"}},
-		{"Container[T, U]", "", "Container", []string{"T T", "U U"}},
-		{"pkg-->Container[T]", "pkg", "Container", []string{"T"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			result := TypeParts(tt.input)
-			if result.PkgName != tt.expectedPkgName {
-				t.Errorf("Expected PkgName to be %s, got %s", tt.expectedPkgName, result.PkgName)
-			}
-			if result.TypeName != tt.expectedTypeName {
-				t.Errorf("Expected TypeName to be %s, got %s", tt.expectedTypeName, result.TypeName)
-			}
-			if len(result.GenericTypes) != len(tt.expectedGenericTypes) {
-				t.Errorf("Expected %d generic types, got %d", len(tt.expectedGenericTypes), len(result.GenericTypes))
-			}
-			for i, expected := range tt.expectedGenericTypes {
-				if i < len(result.GenericTypes) && result.GenericTypes[i] != expected {
-					t.Errorf("Expected generic type %d to be %s, got %s", i, expected, result.GenericTypes[i])
-				}
-			}
-		})
-	}
-}
-
 // TestFindTypesInMetadata_Comprehensive tests type finding in metadata
 func TestFindTypesInMetadata_Comprehensive(t *testing.T) {
 	tests := []struct {

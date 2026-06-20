@@ -2533,21 +2533,6 @@ func TestApplyValidationConstraints_Format_Mount(t *testing.T) {
 // ===========================================================================
 // TypeParts — additional coverage
 // ===========================================================================
-
-func TestTypeParts_Complex(t *testing.T) {
-	parts := TypeParts("map[string][]User")
-	assert.NotEmpty(t, parts)
-
-	parts = TypeParts("*User")
-	assert.NotEmpty(t, parts)
-
-	parts = TypeParts("[]string")
-	assert.NotEmpty(t, parts)
-
-	parts = TypeParts("interface{}")
-	assert.NotEmpty(t, parts)
-}
-
 // ===========================================================================
 // resolveUnderlyingType — additional coverage
 // ===========================================================================
@@ -3303,41 +3288,6 @@ func TestHasOmitempty_DashTag(t *testing.T) {
 }
 
 // ===========================================================================
-// typeByName — with metadata packages
-// ===========================================================================
-
-func TestTypeByName_Found(t *testing.T) {
-	meta := newTestMeta()
-	sp := meta.StringPool
-
-	expectedType := &metadata.Type{
-		Name: sp.Get("User"),
-		Pkg:  sp.Get("myapp"),
-		Kind: sp.Get("struct"),
-	}
-
-	meta.Packages["myapp"] = &metadata.Package{
-		Files: map[string]*metadata.File{
-			"user.go": {
-				Types: map[string]*metadata.Type{
-					"User": expectedType,
-				},
-			},
-		},
-	}
-
-	parts := TypeParts("myapp-->User")
-	result := typeByName(parts, meta)
-	assert.NotNil(t, result)
-}
-
-func TestTypeByName_NilMeta(t *testing.T) {
-	parts := TypeParts("myapp-->User")
-	result := typeByName(parts, nil)
-	assert.Nil(t, result)
-}
-
-// ===========================================================================
 // resolveUnderlyingType — with alias type
 // ===========================================================================
 
@@ -3553,24 +3503,6 @@ func TestMapMetadataToOpenAPI_EmptyInfoFallsBack(t *testing.T) {
 // ===========================================================================
 // TypeParts — more edge cases
 // ===========================================================================
-
-func TestTypeParts_EdgeCases(t *testing.T) {
-	// Simple type
-	parts := TypeParts("string")
-	assert.Equal(t, "", parts.PkgName)
-	assert.Equal(t, "string", parts.TypeName)
-
-	// Type with TypeSep
-	parts = TypeParts("myapp-->User")
-	assert.Equal(t, "myapp", parts.PkgName)
-	assert.Equal(t, "User", parts.TypeName)
-
-	// Generic type
-	parts = TypeParts("myapp-->Response[T myapp-->User]")
-	assert.Equal(t, "myapp", parts.PkgName)
-	assert.NotEmpty(t, parts.GenericTypes)
-}
-
 // ===========================================================================
 // extractEnumValues — with non-const values
 // ===========================================================================

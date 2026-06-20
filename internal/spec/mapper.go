@@ -948,48 +948,16 @@ func findTypesInMetadata(meta *metadata.Metadata, typeName string) map[string]*m
 		return nil
 	}
 
-	typeParts := TypeParts(typeName)
-
-	// The base type only. The type arguments of a generic instantiation
-	// (Pair[string,int]) are NOT registered here: each parameter-typed field is
-	// resolved by name in generateStructSchema (US2), so the arguments surface as
-	// real component references where they are actually used. The former generic
-	// branch registered them positionally (T/U/V) — emitting orphan "T-string"
-	// components for primitive arguments and nothing for struct arguments
-	// (typeByName of the positional placeholder was always nil). It served no live
-	// consumer and is removed.
+	// The base type only, resolved through the TypeRef tree (typeByRef). The type
+	// arguments of a generic instantiation (Pair[string,int]) are NOT registered
+	// here: each parameter-typed field is resolved by name in generateStructSchema
+	// (US2), so the arguments surface as real component references where they are
+	// actually used.
 	if typeName != "" {
-		metaTypes[typeName] = typeByName(typeParts, meta)
+		metaTypes[typeName] = typeByRef(metadata.ParseTypeRef(typeName), meta)
 	}
 
 	return metaTypes
-}
-
-func typeByName(typeParts Parts, meta *metadata.Metadata) *metadata.Type {
-	if meta == nil {
-		return nil
-	}
-
-	if typeParts.PkgName != "" && typeParts.TypeName != "" {
-		pkgName := typeParts.PkgName
-
-		if pkg, exists := meta.Packages[pkgName]; exists {
-			for _, file := range pkg.Files {
-				if typ, exists := file.Types[typeParts.TypeName]; exists {
-					return typ
-				}
-			}
-		}
-	}
-
-	for _, pkg := range meta.Packages {
-		for _, file := range pkg.Files {
-			if typ, exists := file.Types[typeParts.TypeName]; exists {
-				return typ
-			}
-		}
-	}
-	return nil
 }
 
 // bodyTypeFromMetadataRef returns the canonical type string for a body/param
@@ -1007,11 +975,7 @@ func typeByName(typeParts Parts, meta *metadata.Metadata) *metadata.Type {
 // path still handles. This is the alignment seam for migrating the body/param type
 // off the string reconstruction (T009/T011).
 func bodyTypeFromMetadataRef(ref *metadata.TypeRef, meta *metadata.Metadata, cfg *APISpecConfig) string {
-	leaf := ref
-	for leaf != nil && (leaf.Kind == metadata.RefPointer || leaf.Kind == metadata.RefSlice ||
-		leaf.Kind == metadata.RefArray || leaf.Kind == metadata.RefMap) {
-		leaf = leaf.Elem
-	}
+	leaf := ref.NamedLeaf()
 	if leaf == nil || leaf.Kind != metadata.RefNamed {
 		return ""
 	}
@@ -1061,78 +1025,6 @@ func typeByRef(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Type {
 		}
 	}
 	return nil
-}
-
-type Parts struct {
-	PkgName      string
-	TypeName     string
-	GenericTypes []string
-}
-
-func TypeParts(typeName string) Parts {
-	parts := Parts{}
-
-	// Handle bracket-style generic types first (e.g., "APIResponse[pkg.User]")
-	// Extract base type and generic params before any separator splitting.
-	if bracketIdx := strings.Index(typeName, "["); bracketIdx > 0 && !strings.Contains(typeName[:bracketIdx], TypeSep) {
-		baseName := typeName[:bracketIdx]
-		genericParam := typeName[bracketIdx+1:]
-
-		genericParam = strings.TrimSuffix(genericParam, "]")
-
-		// Split base name into pkg.Type
-		lastDot := strings.LastIndex(baseName, defaultSep)
-		if lastDot > 0 {
-			parts.PkgName = baseName[:lastDot]
-			parts.TypeName = baseName[lastDot+1:]
-		} else {
-			parts.TypeName = baseName
-		}
-		// Format: "ParamName ConcreteType" — use single-letter type params
-		// (T, U, V) for positional parameters since we don't have the param
-		// names from the type string. generateStructSchema matches field types
-		// against these to substitute.
-		params := strings.Split(genericParam, ",")
-		paramNames := []string{"T", "U", "V", "W", "X", "Y", "Z"}
-		for i, param := range params {
-			param = strings.TrimSpace(param)
-			name := paramNames[0]
-			if i < len(paramNames) {
-				name = paramNames[i]
-			}
-			parts.GenericTypes = append(parts.GenericTypes, name+" "+param)
-		}
-		return parts
-	}
-
-	typeParts := strings.Split(typeName, TypeSep)
-
-	if len(typeParts) == 1 {
-		lastSep := strings.LastIndex(typeName, defaultSep)
-		if lastSep > 0 {
-			parts.PkgName = typeName[:lastSep]
-			parts.TypeName = typeName[lastSep+1:]
-		} else {
-			parts.TypeName = typeName
-		}
-	} else if len(typeParts) > 1 {
-		parts.PkgName = typeParts[0]
-		parts.TypeName = typeParts[1]
-		parts.GenericTypes = typeParts[2:]
-	}
-
-	if len(typeParts) == 2 && strings.Contains(typeParts[1], "[") {
-		genericParts := strings.Split(typeParts[1], "[")
-		if len(genericParts) > 1 {
-			parts.TypeName = genericParts[0]
-			parts.GenericTypes = []string{genericParts[1][:len(genericParts[1])-1]}
-		}
-	}
-
-	parts.PkgName = strings.TrimPrefix(parts.PkgName, "*")
-	parts.PkgName = strings.TrimPrefix(parts.PkgName, "[]")
-
-	return parts
 }
 
 const generateSchemaFromTypeKey = "generateSchemaFromType"
@@ -1196,28 +1088,25 @@ func generateSchemaFromType(usedTypes map[string]*Schema, key string, typ *metad
 func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadata.Type, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema) {
 	schemas := map[string]*Schema{}
 
-	keyParts := TypeParts(key)
+	// The instantiation's concrete type arguments come straight off the parsed
+	// TypeRef (keyRef.Args), replacing TypeParts' string-split. Each is bound to the
+	// DECLARED type-parameter name (typ.TypeParams) — so Pair[K,V] substitutes K and
+	// V, not the positional T/U/V — falling back to the positional placeholder when
+	// the declared names are unavailable or fewer than the args (decision D3;
+	// FR-009/T019).
+	keyRef := metadata.ParseTypeRef(key)
 	genericTypes := map[string]string{}
-
-	if len(keyParts.GenericTypes) > 0 {
-		for i, part := range keyParts.GenericTypes {
-			genericType := strings.Split(part, " ")
-			// Bind the concrete argument to the DECLARED type-parameter name
-			// (typ.TypeParams), not the positional T/U/V placeholder TypeParts
-			// assigns from the instantiation string — so Pair[K,V] substitutes K and
-			// V, not T and U (decision D3). On a length mismatch (fewer declared
-			// names than args) fall back to the placeholder so the common prefix
-			// still binds (FR-009, T019).
-			name := genericType[0]
+	if keyRef != nil && len(keyRef.Args) > 0 {
+		positional := []string{"T", "U", "V", "W", "X", "Y", "Z"}
+		for i, arg := range keyRef.Args {
+			name := positional[0]
+			if i < len(positional) {
+				name = positional[i]
+			}
 			if i < len(typ.TypeParams) {
 				name = typ.TypeParams[i]
 			}
-			if len(genericType) >= 2 {
-				// Map type parameter name to concrete type (e.g., "T" → "pkg.User")
-				genericTypes[name] = genericType[1]
-			} else {
-				genericTypes[name] = strings.ReplaceAll(part, " ", "-")
-			}
+			genericTypes[name] = arg.String()
 		}
 	}
 
@@ -1439,7 +1328,7 @@ func promoteEmbeddedFields(schema *Schema, typ *metadata.Type, meta *metadata.Me
 				embedType = strings.TrimPrefix(ref.String(), "*")
 			}
 		}
-		et := typeByName(TypeParts(embedType), meta)
+		et := typeByRef(metadata.ParseTypeRef(embedType), meta)
 		if et == nil || getStringFromPool(meta, et.Kind) != "struct" {
 			continue
 		}
@@ -1483,8 +1372,8 @@ func generateAliasSchema(usedTypes map[string]*Schema, typ *metadata.Type, meta 
 	if schema != nil && metadata.IsPrimitiveType(underlyingType) {
 		// Extract package name for enum detection
 		pkgName := ""
-		if typeParts := TypeParts(originalTypeName); typeParts.PkgName != "" {
-			pkgName = typeParts.PkgName
+		if ref := metadata.ParseTypeRef(originalTypeName); ref != nil {
+			pkgName = ref.Pkg
 		}
 
 		// Detect enum values for this alias type using the original type name
@@ -1924,13 +1813,11 @@ func detectEnumFromConstants(goType string, pkgName string, meta *metadata.Metad
 
 	var goTypePkgName string
 
-	goTypeParts := TypeParts(goType)
-	if goTypeParts.PkgName != "" {
-		goTypePkgName = goTypeParts.PkgName
-		goTypePkgName = strings.TrimPrefix(goTypePkgName, "*")
-		goTypePkgName = strings.TrimPrefix(goTypePkgName, "[]")
-
-		goType = goTypeParts.TypeName
+	// Unwrap to the named leaf and split its package qualifier off via the tree
+	// (replacing TypeParts).
+	if leaf := metadata.ParseTypeRef(goType).NamedLeaf(); leaf != nil && leaf.Kind == metadata.RefNamed && leaf.Pkg != "" {
+		goTypePkgName = leaf.Pkg
+		goType = leaf.Name
 	}
 
 	// Group constants by their resolved type and group index

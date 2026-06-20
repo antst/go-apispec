@@ -893,47 +893,6 @@ func TestFindTypesInMetadata(t *testing.T) {
 		t.Error("Should return nil for nil metadata")
 	}
 }
-
-func TestTypeByName(t *testing.T) {
-	// Create metadata with string pool
-	stringPool := metadata.NewStringPool()
-	meta := &metadata.Metadata{
-		StringPool: stringPool,
-		Packages: map[string]*metadata.Package{
-			"main": {
-				Files: map[string]*metadata.File{
-					"types.go": {
-						Types: map[string]*metadata.Type{
-							"User": {
-								Name: stringPool.Get("User"),
-								Kind: stringPool.Get("struct"),
-								Fields: []metadata.Field{
-									{
-										Name: stringPool.Get("Name"),
-										Type: stringPool.Get("string"),
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	// Test finding type by name
-	typ := typeByName(Parts{PkgName: "main", TypeName: "User"}, meta)
-	if typ == nil {
-		t.Error("Should find type by name")
-	}
-
-	// Test finding non-existent type
-	typ = typeByName(Parts{PkgName: "main", TypeName: "NonExistentType"}, meta)
-	if typ != nil {
-		t.Error("Should not find non-existent type")
-	}
-}
-
 func TestAddTypeAndDependenciesWithMetadata(t *testing.T) {
 	// Test adding type and dependencies
 	usedTypes := make(map[string]*Schema)

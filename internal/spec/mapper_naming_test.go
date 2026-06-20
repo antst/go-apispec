@@ -1272,47 +1272,6 @@ func TestExtractJSONName_Naming(t *testing.T) {
 		})
 	}
 }
-
-func TestTypeParts_VariousFormats(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected Parts
-	}{
-		{
-			name:  "with TypeSep",
-			input: "models-->User",
-			expected: Parts{
-				PkgName:  "models",
-				TypeName: "User",
-			},
-		},
-		{
-			name:  "with dot separator",
-			input: "github.com/org/project.Type",
-			expected: Parts{
-				PkgName:  "github.com/org/project",
-				TypeName: "Type",
-			},
-		},
-		{
-			name:  "bare type",
-			input: "User",
-			expected: Parts{
-				TypeName: "User",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := TypeParts(tt.input)
-			assert.Equal(t, tt.expected.PkgName, result.PkgName)
-			assert.Equal(t, tt.expected.TypeName, result.TypeName)
-		})
-	}
-}
-
 func TestEnsureAllPathParams(t *testing.T) {
 	params := []Parameter{
 		{Name: "id", In: "path", Required: true, Schema: &Schema{Type: "string"}},

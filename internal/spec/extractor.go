@@ -2107,8 +2107,7 @@ func (r *ResponsePatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgumen
 	// `WriteJSON[T any](w, status, v T)` would emit the bare type parameter
 	// (e.g. `pkg.T`) instead of the concrete instantiation at the call site
 	// (e.g. `dto.CheckRoomHTTPResponse`). Mirrors the request-side logic.
-	typeParts := TypeParts(originalType)
-	if genericType := traceGenericOrigin(node, typeParts); genericType != "" {
+	if genericType := traceGenericOrigin(node, originalType); genericType != "" {
 		return genericType
 	}
 

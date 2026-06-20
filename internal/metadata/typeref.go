@@ -386,6 +386,16 @@ func (t *TypeRef) Qualify(pkg string) {
 	}
 }
 
+// NamedLeaf unwraps pointer, slice, array, and map wrappers and returns the first
+// non-container node — the named/basic leaf a container ultimately holds (the map
+// value for a map). Returns the receiver for a leaf, nil for nil.
+func (t *TypeRef) NamedLeaf() *TypeRef {
+	for t != nil && (t.Kind == RefPointer || t.Kind == RefSlice || t.Kind == RefArray || t.Kind == RefMap) {
+		t = t.Elem
+	}
+	return t
+}
+
 // ParseTypeRef parses a Go-type string into a TypeRef — the inverse of String().
 // It accepts the canonical String() form and the equivalent variants the schema
 // pipeline produces: the "-->" package separator, short or bare package

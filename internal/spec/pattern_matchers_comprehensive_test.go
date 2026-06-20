@@ -1373,37 +1373,38 @@ func TestTraceGenericOrigin(t *testing.T) {
 		},
 	}
 
-	// Test traceGenericOrigin with different type parts
+	// Test traceGenericOrigin with different type strings (the leaf name resolves
+	// through the call site's type-param map).
 	tests := []struct {
-		name      string
-		typeParts Parts
-		expected  string
+		name       string
+		typeString string
+		expected   string
 	}{
 		{
-			name:      "generic type with concrete resolution",
-			typeParts: Parts{PkgName: "List", TypeName: "T"},
-			expected:  "string",
+			name:       "generic type with concrete resolution",
+			typeString: "List.T",
+			expected:   "string",
 		},
 		{
-			name:      "non-generic type",
-			typeParts: Parts{TypeName: "string"},
-			expected:  "",
+			name:       "non-generic type",
+			typeString: "string",
+			expected:   "",
 		},
 		{
-			name:      "empty type parts",
-			typeParts: Parts{},
-			expected:  "",
+			name:       "empty type",
+			typeString: "",
+			expected:   "",
 		},
 		{
-			name:      "single type part",
-			typeParts: Parts{TypeName: "User"},
-			expected:  "",
+			name:       "single type part",
+			typeString: "User",
+			expected:   "",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := traceGenericOrigin(mockNode, tt.typeParts)
+			result := traceGenericOrigin(mockNode, tt.typeString)
 			if result != tt.expected {
 				t.Errorf("Expected %s, got %s", tt.expected, result)
 			}
