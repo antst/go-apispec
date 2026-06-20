@@ -1802,6 +1802,16 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		}
 
 		bodyType := r.contextProvider.GetArgumentInfo(arg)
+		// For a composite literal whose named leaf is a type we have in metadata,
+		// prefer the lossless TypeRef string: its canonical fully-qualified form is
+		// what the field path uses, so the body references the same component. A
+		// literal needs no origin tracing, so taking it here is safe; external types
+		// (not in metadata) keep the string path's short alias (T009/T011).
+		if arg.GetKind() == metadata.KindCompositeLit && arg.TypeRef != nil && route.Metadata != nil {
+			if s := bodyTypeFromMetadataRef(arg.TypeRef, route.Metadata); s != "" {
+				bodyType = s
+			}
+		}
 		// Prefer the conversion target type if available
 		if conversionTargetType != "" {
 			bodyType = conversionTargetType

@@ -974,6 +974,29 @@ func typeByName(typeParts Parts, meta *metadata.Metadata) *metadata.Type {
 	return nil
 }
 
+// bodyTypeFromMetadataRef returns the canonical TypeRef.String() when the ref's
+// named leaf (under any pointer/slice/array/map wrappers) resolves to a type in
+// metadata — the fully-qualified form the field path already uses, so a body or
+// parameter references the same component a field of that type would. It returns
+// "" for external/unresolved leaves and generic instantiations, which the string
+// path names by their short alias (feeding the long path would produce a dangling
+// ref no shortening pass can collapse). This is the alignment seam for migrating
+// the body/param type off the string reconstruction (T009/T011).
+func bodyTypeFromMetadataRef(ref *metadata.TypeRef, meta *metadata.Metadata) string {
+	leaf := ref
+	for leaf != nil && (leaf.Kind == metadata.RefPointer || leaf.Kind == metadata.RefSlice ||
+		leaf.Kind == metadata.RefArray || leaf.Kind == metadata.RefMap) {
+		leaf = leaf.Elem
+	}
+	if leaf == nil || leaf.Kind != metadata.RefNamed || len(leaf.Args) != 0 {
+		return ""
+	}
+	if typeByRef(leaf, meta) == nil {
+		return ""
+	}
+	return ref.String()
+}
+
 // typeByRef resolves a named TypeRef to its metadata.Type using the ref's own
 // Pkg/Name fields — the tree counterpart to typeByName(TypeParts(string)), with
 // no string re-parsing. It keeps typeByName's two-step strategy: try the

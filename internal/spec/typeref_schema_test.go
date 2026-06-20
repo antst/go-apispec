@@ -133,6 +133,25 @@ func metaWithNamedTypes() *metadata.Metadata {
 	}
 }
 
+// TestBodyTypeFromMetadataRef covers the body/param alignment seam: it yields the
+// canonical TypeRef string only when the named leaf resolves in metadata.
+func TestBodyTypeFromMetadataRef(t *testing.T) {
+	meta := metaWithNamedTypes()
+	user := func() *metadata.TypeRef { return &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User"} }
+
+	// Direct and container-wrapped in-metadata leaves → canonical string.
+	assert.Equal(t, "main.User", bodyTypeFromMetadataRef(user(), meta))
+	assert.Equal(t, "[]main.User", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefSlice, Elem: user()}, meta))
+	assert.Equal(t, "*main.User", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefPointer, Elem: user()}, meta))
+	assert.Equal(t, "map[string]main.User", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, Elem: user()}, meta))
+
+	// External (not in metadata), generic, and non-named leaves → "" (string path).
+	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "ext", Name: "Thing"}, meta))
+	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, meta))
+	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, meta))
+	assert.Equal(t, "", bodyTypeFromMetadataRef(nil, meta))
+}
+
 // TestTypeByRef covers the tree-based metadata lookup that replaces
 // typeByName(TypeParts(string)) on the named-type path.
 func TestTypeByRef(t *testing.T) {
