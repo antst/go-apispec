@@ -545,7 +545,7 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		// Check if this is a literal value - if so, determine appropriate type
 		if arg.GetKind() == metadata.KindLiteral {
 			bodyType = determineLiteralType(bodyType)
-		} else if s := bodyTypeFromMetadataRef(arg.TypeRef, route.Metadata); s != "" {
+		} else if s := bodyTypeFromMetadataRef(arg.TypeRef, route.Metadata, r.cfg); s != "" {
 			// The decode target (&dto) carries a TypeRef whose named leaf is a type
 			// in metadata — its declared type IS the body type, no origin tracing
 			// needed. Use the canonical fully-qualified form (deref'd to match the

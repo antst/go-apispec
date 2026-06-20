@@ -1808,7 +1808,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		// literal needs no origin tracing, so taking it here is safe; external types
 		// (not in metadata) keep the string path's short alias (T009/T011).
 		if arg.GetKind() == metadata.KindCompositeLit && arg.TypeRef != nil && route.Metadata != nil {
-			if s := bodyTypeFromMetadataRef(arg.TypeRef, route.Metadata); s != "" {
+			if s := bodyTypeFromMetadataRef(arg.TypeRef, route.Metadata, r.cfg); s != "" {
 				bodyType = s
 			}
 		}

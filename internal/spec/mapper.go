@@ -834,8 +834,26 @@ func fieldTypeString(field metadata.Field, meta *metadata.Metadata) string {
 	return getStringFromPool(meta, field.Type)
 }
 
+// majorVersionInPath matches a Go module major-version path segment ("/v2.",
+// "/v3.", …) sitting between an import path and the type name.
+var majorVersionInPath = regexp.MustCompile(`/v[0-9]+\.`)
+
+// stripMajorVersion removes the Go module major-version segment from an
+// import-path-qualified type string so a versioned external type names the same
+// as its unversioned form: "github.com/gofiber/fiber/v2.Map" ->
+// "github.com/gofiber/fiber.Map". This matches the historical naming (which
+// dropped the segment) and the way external-type config Names spell it. A no-op
+// for strings without a "/vN." segment.
+func stripMajorVersion(typeName string) string {
+	if !strings.Contains(typeName, "/v") {
+		return typeName
+	}
+	return majorVersionInPath.ReplaceAllString(typeName, ".")
+}
+
 // schemaName applies the standard name replacer and optionally shortens the type name.
 func schemaName(typeName string, cfg *APISpecConfig) string {
+	typeName = stripMajorVersion(typeName)
 	if cfg != nil && cfg.UseShortNames() {
 		return schemaComponentNameReplacer.Replace(shortenTypeName(typeName))
 	}
@@ -974,15 +992,21 @@ func typeByName(typeParts Parts, meta *metadata.Metadata) *metadata.Type {
 	return nil
 }
 
-// bodyTypeFromMetadataRef returns the canonical TypeRef.String() when the ref's
-// named leaf (under any pointer/slice/array/map wrappers) resolves to a type in
-// metadata — the fully-qualified form the field path already uses, so a body or
-// parameter references the same component a field of that type would. It returns
-// "" for external/unresolved leaves and generic instantiations, which the string
-// path names by their short alias (feeding the long path would produce a dangling
-// ref no shortening pass can collapse). This is the alignment seam for migrating
-// the body/param type off the string reconstruction (T009/T011).
-func bodyTypeFromMetadataRef(ref *metadata.TypeRef, meta *metadata.Metadata) string {
+// bodyTypeFromMetadataRef returns the canonical type string for a body/param
+// whose TypeRef leaf (under any pointer/slice/array/map wrappers) names a concrete
+// type — so it references the same component a field of that type would:
+//
+//   - a type in metadata → ref.String() (the fully-qualified form the field path
+//     uses);
+//   - a configured external type (cfg.ExternalTypes) → ref.String() with the Go
+//     module major-version segment stripped, matching how the config Name and the
+//     existing string path spell it (e.g. github.com/gofiber/fiber/v2.Map ->
+//     github.com/gofiber/fiber.Map).
+//
+// It returns "" for unresolved leaves and generic instantiations, which the string
+// path still handles. This is the alignment seam for migrating the body/param type
+// off the string reconstruction (T009/T011).
+func bodyTypeFromMetadataRef(ref *metadata.TypeRef, meta *metadata.Metadata, cfg *APISpecConfig) string {
 	leaf := ref
 	for leaf != nil && (leaf.Kind == metadata.RefPointer || leaf.Kind == metadata.RefSlice ||
 		leaf.Kind == metadata.RefArray || leaf.Kind == metadata.RefMap) {
@@ -991,10 +1015,18 @@ func bodyTypeFromMetadataRef(ref *metadata.TypeRef, meta *metadata.Metadata) str
 	if leaf == nil || leaf.Kind != metadata.RefNamed || len(leaf.Args) != 0 {
 		return ""
 	}
-	if typeByRef(leaf, meta) == nil {
-		return ""
+	if typeByRef(leaf, meta) != nil {
+		return ref.String()
 	}
-	return ref.String()
+	if cfg != nil {
+		leafName := stripMajorVersion(leaf.String())
+		for _, et := range cfg.ExternalTypes {
+			if et.Name == leafName {
+				return stripMajorVersion(ref.String())
+			}
+		}
+	}
+	return ""
 }
 
 // typeByRef resolves a named TypeRef to its metadata.Type using the ref's own

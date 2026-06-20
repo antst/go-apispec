@@ -140,16 +140,27 @@ func TestBodyTypeFromMetadataRef(t *testing.T) {
 	user := func() *metadata.TypeRef { return &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User"} }
 
 	// Direct and container-wrapped in-metadata leaves → canonical string.
-	assert.Equal(t, "main.User", bodyTypeFromMetadataRef(user(), meta))
-	assert.Equal(t, "[]main.User", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefSlice, Elem: user()}, meta))
-	assert.Equal(t, "*main.User", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefPointer, Elem: user()}, meta))
-	assert.Equal(t, "map[string]main.User", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, Elem: user()}, meta))
+	assert.Equal(t, "main.User", bodyTypeFromMetadataRef(user(), meta, &APISpecConfig{}))
+	assert.Equal(t, "[]main.User", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefSlice, Elem: user()}, meta, &APISpecConfig{}))
+	assert.Equal(t, "*main.User", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefPointer, Elem: user()}, meta, &APISpecConfig{}))
+	assert.Equal(t, "map[string]main.User", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, Elem: user()}, meta, &APISpecConfig{}))
 
-	// External (not in metadata), generic, and non-named leaves → "" (string path).
-	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "ext", Name: "Thing"}, meta))
-	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, meta))
-	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, meta))
-	assert.Equal(t, "", bodyTypeFromMetadataRef(nil, meta))
+	// A configured external type → the major-version-stripped canonical form
+	// (matching the config Name and the string path), even behind a wrapper.
+	extCfg := &APISpecConfig{ExternalTypes: []ExternalType{{Name: "github.com/gofiber/fiber.Map", OpenAPIType: &Schema{Type: "object"}}}}
+	fiberMap := func() *metadata.TypeRef {
+		return &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "github.com/gofiber/fiber/v2", Name: "Map"}
+	}
+	assert.Equal(t, "github.com/gofiber/fiber.Map", bodyTypeFromMetadataRef(fiberMap(), meta, extCfg))
+	assert.Equal(t, "[]github.com/gofiber/fiber.Map", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefSlice, Elem: fiberMap()}, meta, extCfg))
+	// Same external ref but no matching config → "" (string path).
+	assert.Equal(t, "", bodyTypeFromMetadataRef(fiberMap(), meta, &APISpecConfig{}))
+
+	// Other unresolved, generic, and non-named leaves → "" (string path).
+	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "ext", Name: "Thing"}, meta, &APISpecConfig{}))
+	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, meta, &APISpecConfig{}))
+	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, meta, &APISpecConfig{}))
+	assert.Equal(t, "", bodyTypeFromMetadataRef(nil, meta, &APISpecConfig{}))
 }
 
 // TestTypeByRef covers the tree-based metadata lookup that replaces
