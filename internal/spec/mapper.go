@@ -2688,7 +2688,7 @@ func schemaFromParsedString(usedTypes map[string]*Schema, goType string, meta *m
 	if s := schemaFromTypeRef(pref); s != nil {
 		return s, map[string]*Schema{}, true
 	}
-	if pref.Kind == metadata.RefNamed && len(pref.Args) == 0 {
+	if pref.Kind == metadata.RefNamed {
 		return schemaForNamedRef(usedTypes, pref, goType, meta, cfg, visitedTypes)
 	}
 	return schemaForRefTree(usedTypes, pref, false, meta, cfg, visitedTypes)
@@ -2717,9 +2717,6 @@ func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, inlin
 	case metadata.RefPointer:
 		return schemaForRefTree(usedTypes, ref.Elem, inlineAlias, meta, cfg, visitedTypes) // transparent
 	case metadata.RefNamed:
-		if len(ref.Args) != 0 {
-			return nil, nil, false // generic instantiation → string path
-		}
 		if inlineAlias {
 			if s := aliasInlineSchema(ref, meta); s != nil {
 				return s, map[string]*Schema{}, true
@@ -2830,14 +2827,22 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 
 	// Committed to handling: now apply the same cycle/recursion guards the string
 	// path applies on entry, keyed on the same string, so a back-reference resolves
-	// to a $ref at the identical point.
+	// to a $ref at the identical point. The $ref is built from schemaName (the
+	// shortened/legacy component name) rather than addRefSchemaForType's raw
+	// replaced form: for a generic instantiation the raw form
+	// (APIResponse_pkg.Product) ends with the inner type's component key
+	// (pkg.Product), and the shortenAllRefs suffix match would then resolve the ref
+	// to the inner type instead of the wrapper. schemaName matches the key exactly.
+	componentRef := func() *Schema {
+		return &Schema{Ref: refComponentsSchemasPrefix + schemaName(goType, cfg)}
+	}
 	schemas := map[string]*Schema{}
 	if visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] && canAddRefSchemaForType(goType) {
-		return addRefSchemaForType(goType), schemas, true
+		return componentRef(), schemas, true
 	}
 	visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] = true
 	if s, exists := usedTypes[goType]; exists && s != nil && canAddRefSchemaForType(goType) {
-		return addRefSchemaForType(goType), schemas, true
+		return componentRef(), schemas, true
 	}
 
 	schema, newSchemas := generateSchemaFromType(usedTypes, goType, typ, meta, cfg, visitedTypes)
@@ -2846,7 +2851,7 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 	}
 	if canAddRefSchemaForType(goType) {
 		schemas[goType] = schema
-		schema = addRefSchemaForType(goType)
+		schema = componentRef()
 	}
 	maps.Copy(schemas, newSchemas)
 	markUsedType(usedTypes, goType, schema)

@@ -326,9 +326,12 @@ func TestSchemaForRefTree(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, &Schema{Type: "object", AdditionalProperties: userArrayItems}, s)
 
-	// Deferred forms: generic instantiation, non-string-keyed map, alias leaf, nil.
+	// A generic instantiation whose base type is in metadata resolves (the args
+	// substitute via generateStructSchema) → ok=true.
 	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, false, metaWithNamedTypes(), cfg, map[string]bool{})
-	assert.False(t, ok)
+	assert.True(t, ok)
+
+	// Deferred forms: non-string-keyed map, func, nil.
 	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "int"}, Elem: userRef()}, false, metaWithNamedTypes(), cfg, map[string]bool{})
 	assert.False(t, ok) // non-string key → defer
 	// A slice/map whose element is an alias-to-primitive INLINES the underlying
