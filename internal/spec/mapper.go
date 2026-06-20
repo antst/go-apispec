@@ -2129,389 +2129,9 @@ func typeMatches(constantType, targetType string, meta *metadata.Metadata) bool 
 	}
 }
 
+// schemaCycleGuardKey suffixes a type string to key the in-flight set used by
+// schemaForNamedRef to break recursive-type cycles (kept stable for goldens).
 const mapGoTypeToOpenAPISchemaKey = "mapGoTypeToOpenAPISchema"
-
-// mapGoTypeToOpenAPISchema maps Go types to OpenAPI schemas
-//
-//nolint:gocyclo // Go type to OpenAPI schema mapping with all Go types
-func mapGoTypeToOpenAPISchema(usedTypes map[string]*Schema, goType string, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema) {
-	schemas := map[string]*Schema{}
-	var schema *Schema
-
-	if visitedTypes == nil {
-		visitedTypes = map[string]bool{}
-	}
-
-	isPrimitive := metadata.IsPrimitiveType(goType)
-
-	derivedGoType := strings.TrimPrefix(goType, "*")
-
-	// Check for cycles using both the original type and the derived type
-	if (visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] || visitedTypes[derivedGoType+mapGoTypeToOpenAPISchemaKey]) && canAddRefSchemaForType(derivedGoType) {
-		return addRefSchemaForType(goType), schemas
-	}
-	visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] = true
-
-	// Add recursion guard - if we're already processing this type, return a reference
-	if schema, exists := usedTypes[derivedGoType]; exists && schema != nil && canAddRefSchemaForType(derivedGoType) {
-		return addRefSchemaForType(derivedGoType), schemas
-	}
-
-	// Check type mappings first
-	for _, mapping := range cfg.TypeMapping {
-		if mapping.GoType == goType {
-			schema = mapping.OpenAPIType
-			markUsedType(usedTypes, goType, schema)
-
-			return schema, schemas
-		}
-	}
-
-	// Check external types
-	if cfg != nil {
-		for _, externalType := range cfg.ExternalTypes {
-			if externalType.Name == goType {
-				schemas[goType] = externalType.OpenAPIType
-			}
-		}
-	}
-
-	// Handle pointer types
-	if strings.HasPrefix(goType, "*") {
-		underlyingType := strings.TrimSpace(goType[1:])
-		// For pointer types, we generate the same schema as the underlying type
-		// but we could add nullable: true if needed for OpenAPI 3.0+
-		schema, newSchemas := mapGoTypeToOpenAPISchema(usedTypes, underlyingType, meta, cfg, visitedTypes)
-		maps.Copy(schemas, newSchemas)
-		return schema, schemas
-	}
-
-	// Handle array types (e.g., [16]byte, [N]string)
-	if strings.HasPrefix(goType, "[") {
-		// Find the closing bracket
-		endIdx := strings.Index(goType, "]")
-		if endIdx > 1 {
-			elementType := strings.TrimSpace(goType[endIdx+1:])
-			arraySize := strings.TrimSpace(goType[1:endIdx])
-
-			var resolvedType string
-			if resolvedType = resolveUnderlyingType(elementType, meta); resolvedType == "" {
-				resolvedType = elementType
-			}
-			isPrimitiveElement := metadata.IsPrimitiveType(resolvedType)
-
-			// Special handling for byte arrays - convert to string with maxLength
-			if elementType == "byte" || resolvedType == "byte" {
-				schema = &Schema{
-					Type:   "string",
-					Format: "byte",
-				}
-				if size := parseArraySize(arraySize); size != nil {
-					schema.MaxLength = *size
-				}
-				return schema, schemas
-			}
-
-			// For other primitive types, create array schema
-			if isPrimitiveElement {
-				items, newSchemas := mapGoTypeToOpenAPISchema(usedTypes, resolvedType, meta, cfg, visitedTypes)
-				maps.Copy(schemas, newSchemas)
-
-				schema = &Schema{
-					Type:  "array",
-					Items: items,
-				}
-				if size := parseArraySize(arraySize); size != nil {
-					schema.MaxItems = *size
-					schema.MinItems = *size // Fixed size array
-				}
-				return schema, schemas
-			}
-
-			// For complex types, check if already exists in usedTypes
-			if bodySchema, ok := usedTypes[elementType]; ok {
-				if bodySchema == nil {
-					var newBodySchemas map[string]*Schema
-					bodySchema, newBodySchemas = mapGoTypeToOpenAPISchema(usedTypes, resolvedType, meta, cfg, visitedTypes)
-					maps.Copy(schemas, newBodySchemas)
-				}
-				markUsedType(usedTypes, resolvedType, bodySchema)
-
-				// Create a reference to the existing schema
-				schema = &Schema{
-					Type:  "array",
-					Items: addRefSchemaForType(resolvedType),
-				}
-				if size := parseArraySize(arraySize); size != nil {
-					schema.MaxItems = *size
-					schema.MinItems = *size // Fixed size array
-				}
-				return schema, schemas
-			}
-
-			items, newSchemas := mapGoTypeToOpenAPISchema(usedTypes, resolvedType, meta, cfg, visitedTypes)
-			maps.Copy(schemas, newSchemas)
-
-			// Use reference for complex element types in arrays
-			if canAddRefSchemaForType(resolvedType) && items != nil {
-				schemas[resolvedType] = items
-				items = addRefSchemaForType(resolvedType)
-			}
-
-			// Apply enum detection for array elements if the element type is not primitive
-			if !metadata.IsPrimitiveType(elementType) && items != nil && len(items.Enum) == 0 {
-				// Extract package name for enum detection
-				pkgName := ""
-				if typeParts := TypeParts(elementType); typeParts.PkgName != "" {
-					pkgName = typeParts.PkgName
-				}
-
-				// Detect enum values for this element type
-				if enumValues := detectEnumFromConstants(elementType, pkgName, meta); len(enumValues) > 0 {
-					// Apply enum values to the stored schema if it exists
-					if storedSchema, exists := schemas[resolvedType]; exists {
-						storedSchema.Enum = enumValues
-					} else {
-						items.Enum = enumValues
-					}
-				}
-			}
-
-			schema = &Schema{
-				Type:  "array",
-				Items: items,
-			}
-			if size := parseArraySize(arraySize); size != nil {
-				schema.MaxItems = *size
-				schema.MinItems = *size // Fixed size array
-			}
-			return schema, schemas
-		}
-	}
-
-	// Handle map types
-	if strings.Contains(goType, "map[") {
-		startIdx := strings.Index(goType, "map[")
-		endIdx := strings.Index(goType, "]")
-		if endIdx > startIdx+4 {
-			keyType := goType[startIdx+4 : endIdx]
-			valueType := strings.TrimSpace(goType[endIdx+1:])
-
-			// Qualify the value's element type with the map's package prefix
-			// (everything before "map["). The prefix already carries its
-			// trailing dot, so it must not be doubled, and any []/* wrapper
-			// stays outside the qualifier so map[string][]Money becomes
-			// []pkg.Money rather than pkg..[]Money (then pkg.._Money).
-			if startIdx > 0 {
-				valueType = qualifyElementType(valueType, goType[:startIdx])
-			}
-
-			if keyType == "string" {
-				var resolvedType string
-				if resolvedType = resolveUnderlyingType(valueType, meta); resolvedType == "" {
-					resolvedType = valueType
-				}
-
-				additionalProperties, newSchemas := mapGoTypeToOpenAPISchema(usedTypes, resolvedType, meta, cfg, visitedTypes)
-				maps.Copy(schemas, newSchemas)
-
-				// Use reference for complex value types in maps
-				if !metadata.IsPrimitiveType(resolvedType) && canAddRefSchemaForType(resolvedType) {
-					schemas[resolvedType] = additionalProperties
-					additionalProperties = addRefSchemaForType(resolvedType)
-				}
-
-				// Apply enum detection for map values if the value type is not primitive
-				if !metadata.IsPrimitiveType(valueType) && additionalProperties != nil && len(additionalProperties.Enum) == 0 {
-					// Extract package name for enum detection
-					pkgName := ""
-					if typeParts := TypeParts(valueType); typeParts.PkgName != "" {
-						pkgName = typeParts.PkgName
-					}
-
-					// Detect enum values for this value type
-					if enumValues := detectEnumFromConstants(valueType, pkgName, meta); len(enumValues) > 0 {
-						// Apply enum values to the stored schema if it exists
-						if storedSchema, exists := usedTypes[resolvedType]; exists && storedSchema != nil {
-							storedSchema.Enum = enumValues
-						} else if storedSchema, exists := schemas[resolvedType]; exists {
-							storedSchema.Enum = enumValues
-						} else {
-							additionalProperties.Enum = enumValues
-						}
-					}
-				}
-
-				schema = &Schema{
-					Type:                 "object",
-					AdditionalProperties: additionalProperties,
-				}
-
-				return schema, schemas
-			}
-			// Non-string keys are not supported in OpenAPI, fallback to generic object
-			schema = &Schema{Type: "object"}
-
-			return schema, schemas
-		}
-	}
-
-	// Handle generic struct instantiation (e.g., "APIResponse[pkg.User]").
-	// Find the base struct, substitute type parameters, generate inline schema,
-	// and store it as a named component.
-	if bracketIdx := strings.Index(goType, "["); bracketIdx > 0 && !strings.HasPrefix(goType, "[]") && !strings.HasPrefix(goType, "map[") {
-		parts := TypeParts(goType)
-		typ := typeByName(parts, meta)
-		if typ != nil && getStringFromPool(meta, typ.Kind) == "struct" {
-			structSchema, newSchemas := generateStructSchema(usedTypes, goType, typ, meta, cfg, visitedTypes)
-			if structSchema != nil {
-				// Use schemaName for the component key to ensure $ref matches
-				componentKey := schemaName(goType, cfg)
-				schemas[goType] = structSchema
-				maps.Copy(schemas, newSchemas)
-				markUsedType(usedTypes, goType, structSchema)
-				return &Schema{Ref: refComponentsSchemasPrefix + componentKey}, schemas
-			}
-		}
-	}
-
-	// Handle []byte explicitly before generic slice handling.
-	// []byte maps to string/byte (base64) for struct fields.
-	// Response-writer context overrides to string/binary in ExtractResponse.
-	if goType == "[]byte" {
-		return &Schema{Type: "string", Format: "byte"}, schemas
-	}
-	// Also catch type aliases that resolve to []byte.
-	if strings.HasPrefix(goType, "[]") {
-		resolved := resolveUnderlyingType(goType, meta)
-		if resolved == "[]byte" {
-			return &Schema{Type: "string", Format: "byte"}, schemas
-		}
-	}
-
-	// Handle slice types
-	if strings.HasPrefix(goType, "[]") {
-		elementType := strings.TrimSpace(goType[2:])
-
-		var resolvedType string
-		if resolvedType = resolveUnderlyingType(elementType, meta); resolvedType == "" {
-			resolvedType = elementType
-		}
-		isPrimitiveElement := metadata.IsPrimitiveType(resolvedType)
-
-		// Check if the element type already exists in usedTypes
-		if bodySchema, ok := usedTypes[elementType]; !isPrimitiveElement && ok {
-			if bodySchema == nil {
-				var newBodySchemas map[string]*Schema
-
-				bodySchema, newBodySchemas = mapGoTypeToOpenAPISchema(usedTypes, resolvedType, meta, cfg, visitedTypes)
-				maps.Copy(schemas, newBodySchemas)
-			}
-			markUsedType(usedTypes, resolvedType, bodySchema)
-
-			// Create a reference to the existing schema
-			schema = &Schema{
-				Type:  "array",
-				Items: addRefSchemaForType(resolvedType),
-			}
-
-			return schema, schemas
-		}
-
-		items, newSchemas := mapGoTypeToOpenAPISchema(usedTypes, resolvedType, meta, cfg, visitedTypes)
-		maps.Copy(schemas, newSchemas)
-
-		// Use reference for complex element types in arrays
-		if !isPrimitiveElement && canAddRefSchemaForType(resolvedType) && items != nil {
-			schemas[resolvedType] = items
-			items = addRefSchemaForType(resolvedType)
-		}
-
-		// Apply enum detection for array elements if the element type is not primitive
-		if !metadata.IsPrimitiveType(elementType) && items != nil && len(items.Enum) == 0 {
-			// Extract package name for enum detection
-			pkgName := ""
-			if typeParts := TypeParts(elementType); typeParts.PkgName != "" {
-				pkgName = typeParts.PkgName
-			}
-
-			// Detect enum values for this element type
-			if enumValues := detectEnumFromConstants(elementType, pkgName, meta); len(enumValues) > 0 {
-				// Apply enum values to the stored schema if it exists
-				if storedSchema, exists := usedTypes[resolvedType]; exists && storedSchema != nil {
-					storedSchema.Enum = enumValues
-				} else if storedSchema, exists := schemas[resolvedType]; exists {
-					storedSchema.Enum = enumValues
-				} else {
-					items.Enum = enumValues
-				}
-			}
-		}
-
-		schema = &Schema{
-			Type:  "array",
-			Items: items,
-		}
-
-		return schema, schemas
-	}
-
-	// Default mappings
-	switch goType {
-	case "string":
-		return &Schema{Type: "string"}, schemas
-	case "int", "int8", "int16", "int32", "int64":
-		return &Schema{Type: "integer"}, schemas
-	case "uint", "uint8", "uint16", "uint32", "uint64", "byte":
-		return &Schema{Type: "integer", Minimum: floatPtr(0)}, schemas
-	case "float32", "float64":
-		return &Schema{Type: "number"}, schemas
-	case "bool":
-		return &Schema{Type: "boolean"}, schemas
-	case "time.Time":
-		return &Schema{
-			Type:   "string",
-			Format: "date-time",
-		}, schemas
-	case "[]string":
-		return &Schema{Type: "array", Items: &Schema{Type: "string"}}, schemas
-	case "[]time.Time":
-		return &Schema{Type: "array", Items: &Schema{Type: "string", Format: "date-time"}}, schemas
-	case "[]int":
-		return &Schema{Type: "array", Items: &Schema{Type: "integer"}}, schemas
-	case "interface{}", "struct{}", "any":
-		return &Schema{Type: "object"}, schemas
-	default:
-		// For custom types, check if it's a struct in metadata
-		if meta != nil {
-			// Try to find the type in metadata
-			typs := findTypesInMetadata(meta, goType)
-			for key, typ := range typs {
-				if typ != nil {
-					// Generate inline schema for the type
-					schema, newSchemas := generateSchemaFromType(usedTypes, key, typ, meta, cfg, visitedTypes)
-					if schema != nil {
-						if canAddRefSchemaForType(key) {
-							schemas[key] = schema
-							schema = addRefSchemaForType(key)
-						}
-
-						maps.Copy(schemas, newSchemas)
-						markUsedType(usedTypes, goType, schema)
-
-						return schema, schemas
-					}
-				}
-			}
-		}
-
-		if !isPrimitive && goType != "" {
-			return addRefSchemaForType(goType), schemas
-		}
-
-		return schema, schemas
-	}
-}
 
 // schemaFromTypeRef produces the OpenAPI schema for a structured TypeRef — the
 // tree-based counterpart to the leaf/structural cases of
@@ -2633,16 +2253,16 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 		if s := schemaFromTypeRef(ref); s != nil {
 			return s, map[string]*Schema{}
 		}
-		// A caller that pre-resolved an alias/enum field to its underlying type
-		// (generateStructSchema's resolveUnderlyingType step) passes that underlying
-		// as goType while ref still names the alias. The underlying is the answer —
-		// resolve it structurally (inline, no component) and let the caller apply the
-		// field's enum, instead of fabricating a component for the alias.
+		// The caller's goType can differ from ref.String() in two cases, and in both
+		// the goType is the answer: an alias/enum field pre-resolved to its
+		// underlying (generateStructSchema's resolveUnderlyingType step), and a
+		// generic field substituted to its concrete argument (ref is still the
+		// RefParam placeholder, goType the bound type). Resolve goType fully through
+		// the tree — inline for a primitive underlying, a generated component + $ref
+		// for a named one — instead of leaning on the unresolvable ref.
 		if goType != "" && goType != ref.String() {
-			if pref := metadata.ParseTypeRef(goType); pref != nil {
-				if s := schemaFromTypeRef(pref); s != nil {
-					return s, map[string]*Schema{}
-				}
+			if s, ns, ok := schemaFromParsedString(usedTypes, goType, meta, cfg, visitedTypes); ok {
+				return s, ns
 			}
 		}
 		// Walk the tree for a named leaf, optionally wrapped in
@@ -2664,13 +2284,36 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 			return s, ns
 		}
 	}
-	s, newSchemas := mapGoTypeToOpenAPISchema(usedTypes, goType, meta, cfg, visitedTypes)
-	// A fixed-length array whose element defers to the string path (a named
-	// struct/generic element, e.g. [4]Point) keeps its length only on the
-	// TypeRef — getTypeName flattened the field string to "[]Point", dropping the
-	// count. Re-apply the length onto the array the string path produced.
+	s, schemas := schemaForUnresolved(goType, cfg)
 	setFixedArrayLen(s, ref)
-	return s, newSchemas
+	return s, schemas
+}
+
+// schemaForUnresolved is schemaForType's terminal fallback once the tree has
+// declined (func/chan leaves, malformed or otherwise unresolvable strings): a
+// configured external type registers its component, a primitive that arrived as a
+// named ref still maps to its scalar schema (as the string path's primitive switch
+// did), a non-primitive name emits a $ref the analyzer cannot expand, and anything
+// else yields no schema.
+func schemaForUnresolved(goType string, cfg *APISpecConfig) (*Schema, map[string]*Schema) {
+	schemas := map[string]*Schema{}
+	if goType == "" {
+		return nil, schemas
+	}
+	if cfg != nil {
+		for _, et := range cfg.ExternalTypes {
+			if et.Name == goType {
+				schemas[goType] = et.OpenAPIType
+			}
+		}
+	}
+	if s := basicRefSchema(goType); s != nil {
+		return s, schemas
+	}
+	if metadata.IsPrimitiveType(goType) || !canAddRefSchemaForType(goType) {
+		return nil, schemas
+	}
+	return addRefSchemaForType(goType), schemas // dangling ref, raw name (see schemaForNamedRef)
 }
 
 // schemaFromParsedString resolves a string-only caller's type (no TypeRef) by
@@ -2732,10 +2375,11 @@ func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, inlin
 		setFixedArrayLen(s, ref)
 		return s, schemas, true
 	case metadata.RefMap:
-		// Only string-keyed maps map cleanly to an OpenAPI object (matching
-		// schemaFromTypeRef and the string path); others defer.
+		// A non-string-keyed map is not expressible as an OpenAPI object with typed
+		// values; emit a generic object, exactly as the string path's map handler did
+		// for a non-"string" key.
 		if !isStringRef(ref.Key) {
-			return nil, nil, false
+			return &Schema{Type: "object"}, map[string]*Schema{}, true
 		}
 		val, schemas, ok := schemaForRefTree(usedTypes, ref.Elem, true, meta, cfg, visitedTypes)
 		if !ok || val == nil {
@@ -2791,27 +2435,40 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 	if goType == "" {
 		goType = ref.String()
 	}
+	// The $ref is built from schemaName (the shortened/legacy component name) rather
+	// than addRefSchemaForType's raw replaced form: for a generic instantiation the
+	// raw form (APIResponse_pkg.Product) ends with the inner type's component key
+	// (pkg.Product), and the shortenAllRefs suffix match would then resolve the ref
+	// to the inner type instead of the wrapper. schemaName matches the key exactly.
+	componentRef := func() *Schema {
+		return &Schema{Ref: refComponentsSchemasPrefix + schemaName(goType, cfg)}
+	}
 
-	// Decide whether to handle this leaf BEFORE any side effect on visitedTypes:
-	// a premature cycle-key write would make a string-path fallback for the same
-	// goType mistake it for a back-reference and emit a bare $ref without ever
-	// generating the component.
-	//
-	// Config mappings take precedence in the string path (checked before any
-	// structural handling); leave them to it.
+	// A configured TypeMapping is applied by schemaForType before the tree walk;
+	// defer it (a direct caller of this function still gets that precedence).
 	for _, m := range cfg.TypeMapping {
 		if m.GoType == goType {
 			return nil, nil, false
 		}
 	}
+	// A configured external type registers its component and references it.
 	for _, et := range cfg.ExternalTypes {
 		if et.Name == goType {
-			return nil, nil, false
+			schemas := map[string]*Schema{goType: et.OpenAPIType}
+			markUsedType(usedTypes, goType, et.OpenAPIType)
+			return componentRef(), schemas, true
 		}
 	}
 	typ := typeByRef(ref, meta)
 	if typ == nil {
-		return nil, nil, false // external/unfound: string path emits the short-named $ref
+		// External/unfound named type with no component: emit the same dangling $ref
+		// the string path did — addRefSchemaForType's raw replaced name (NOT
+		// schemaName), since there is no component for the shortenAllRefs post-pass
+		// to collapse it onto. A primitive name that slipped through carries none.
+		if metadata.IsPrimitiveType(goType) || !canAddRefSchemaForType(goType) {
+			return nil, nil, false
+		}
+		return addRefSchemaForType(goType), map[string]*Schema{}, true
 	}
 	// struct, alias, and interface kinds all resolve here via generateSchemaFromType
 	// (which dispatches to generateStructSchema / generateAliasSchema /
@@ -2827,15 +2484,7 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 
 	// Committed to handling: now apply the same cycle/recursion guards the string
 	// path applies on entry, keyed on the same string, so a back-reference resolves
-	// to a $ref at the identical point. The $ref is built from schemaName (the
-	// shortened/legacy component name) rather than addRefSchemaForType's raw
-	// replaced form: for a generic instantiation the raw form
-	// (APIResponse_pkg.Product) ends with the inner type's component key
-	// (pkg.Product), and the shortenAllRefs suffix match would then resolve the ref
-	// to the inner type instead of the wrapper. schemaName matches the key exactly.
-	componentRef := func() *Schema {
-		return &Schema{Ref: refComponentsSchemasPrefix + schemaName(goType, cfg)}
-	}
+	// to a $ref at the identical point.
 	schemas := map[string]*Schema{}
 	if visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] && canAddRefSchemaForType(goType) {
 		return componentRef(), schemas, true
@@ -2910,27 +2559,6 @@ func isInSameGroupAsTypedConstant(groupIndex int, targetType string, variables m
 		}
 	}
 	return false
-}
-
-// parseArraySize parses the array size from Go array syntax
-// Returns the size as an integer, or nil if parsing fails or no size constraint
-func parseArraySize(sizeStr string) *int {
-	if sizeStr == "" {
-		return nil
-	}
-
-	// Handle "..." (variable length array)
-	if sizeStr == "..." {
-		return nil
-	}
-
-	// Try to parse as integer
-	if size, err := strconv.Atoi(sizeStr); err == nil {
-		return &size
-	}
-
-	// If it's not a number, return nil (no size constraint)
-	return nil
 }
 
 // extractDocComment looks up the handler function's doc comment from metadata

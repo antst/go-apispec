@@ -944,7 +944,7 @@ func testMapGoTypeToOpenAPISchemaPrimitiveTypes(t *testing.T) {
 
 	for _, tt := range primitiveTests {
 		t.Run(tt.goType, func(t *testing.T) {
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if schema.Type != tt.expectedType {
 				t.Errorf("Expected type %s for %s, got %s", tt.expectedType, tt.goType, schema.Type)
 			}
@@ -968,7 +968,7 @@ func testMapGoTypeToOpenAPISchemaPointerTypes(t *testing.T) {
 
 	for _, tt := range pointerTests {
 		t.Run(tt.goType, func(t *testing.T) {
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if schema.Type != tt.expectedType {
 				t.Errorf("Expected type %s for %s, got %s", tt.expectedType, tt.goType, schema.Type)
 			}
@@ -993,7 +993,7 @@ func testMapGoTypeToOpenAPISchemaSliceTypes(t *testing.T) {
 
 	for _, tt := range sliceTests {
 		t.Run(tt.goType, func(t *testing.T) {
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if schema.Type != tt.expectedType {
 				t.Errorf("Expected type %s for %s, got %s", tt.expectedType, tt.goType, schema.Type)
 			}
@@ -1056,7 +1056,7 @@ func testMapGoTypeToOpenAPISchemaArrayTypes(t *testing.T) {
 
 	for _, tt := range arrayTests {
 		t.Run(tt.goType, func(t *testing.T) {
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, make(map[string]bool))
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, make(map[string]bool))
 
 			if schema == nil {
 				t.Fatalf("Expected schema for %s, got nil", tt.goType)
@@ -1109,7 +1109,7 @@ func testMapGoTypeToOpenAPISchemaMapTypes(t *testing.T) {
 
 	for _, tt := range mapTests {
 		t.Run(tt.goType, func(t *testing.T) {
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if schema.Type != tt.expectedType {
 				t.Errorf("Expected type %s for %s, got %s", tt.expectedType, tt.goType, schema.Type)
 			}
@@ -1150,7 +1150,7 @@ func testMapGoTypeToOpenAPISchemaCustomTypes(t *testing.T) {
 		},
 	}
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "User", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "User", nil, meta, cfg, nil)
 	// Should be a reference
 	if schema.Ref == "" {
 		t.Errorf("Expected reference for custom type, got empty Ref")
@@ -1181,7 +1181,7 @@ func testMapGoTypeToOpenAPISchemaExternalTypes(t *testing.T) {
 	}
 	usedTypes := make(map[string]*Schema)
 
-	_, schemas := mapGoTypeToOpenAPISchema(usedTypes, "CustomType", nil, cfg, nil)
+	_, schemas := schemaForType(usedTypes, "CustomType", nil, nil, cfg, nil)
 	// External types are added to schemas map, not returned directly
 	if externalSchema, exists := schemas["CustomType"]; exists {
 		if externalSchema.Type != "string" {
@@ -1209,7 +1209,7 @@ func testMapGoTypeToOpenAPISchemaTypeMappings(t *testing.T) {
 	}
 	usedTypes := make(map[string]*Schema)
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "CustomType", nil, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "CustomType", nil, nil, cfg, nil)
 	if schema.Type != "integer" {
 		t.Errorf("Expected type 'integer' for mapped type, got %s", schema.Type)
 	}
@@ -1223,7 +1223,7 @@ func testMapGoTypeToOpenAPISchemaNilMetadata(t *testing.T) {
 	usedTypes := make(map[string]*Schema)
 
 	// Test with nil metadata
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "CustomType", nil, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "CustomType", nil, nil, cfg, nil)
 	if schema == nil {
 		t.Error("Expected non-nil schema")
 		return

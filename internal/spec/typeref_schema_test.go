@@ -56,7 +56,7 @@ func TestSchemaFromTypeRef_MatchesStringPath(t *testing.T) {
 	for _, ref := range cases {
 		got := schemaFromTypeRef(ref)
 		require.NotNil(t, got, ref.String())
-		want, _ := mapGoTypeToOpenAPISchema(map[string]*Schema{}, ref.String(), meta, cfg, nil)
+		want, _ := schemaForType(map[string]*Schema{}, ref.String(), nil, meta, cfg, nil)
 		assert.Equal(t, want, got, "schema mismatch for %q", ref.String())
 	}
 
@@ -223,6 +223,38 @@ func TestAliasInlineSchema(t *testing.T) {
 	assert.Nil(t, aliasInlineSchema(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Missing"}, meta))
 }
 
+// TestSchemaForUnresolved covers schemaForType's terminal fallback: external
+// config, a primitive arriving as a name, a dangling non-primitive ref, and the
+// no-schema cases.
+func TestSchemaForUnresolved(t *testing.T) {
+	// Empty → nil.
+	s, _ := schemaForUnresolved("", &APISpecConfig{})
+	assert.Nil(t, s)
+
+	// Configured external type → registers its component schema.
+	extCfg := &APISpecConfig{ExternalTypes: []ExternalType{{Name: "pkg.Ext", OpenAPIType: &Schema{Type: "object"}}}}
+	s, schemas := schemaForUnresolved("pkg.Ext", extCfg)
+	require.NotNil(t, s)
+	assert.Contains(t, schemas, "pkg.Ext")
+
+	// A primitive name → its scalar schema.
+	s, _ = schemaForUnresolved("time.Time", &APISpecConfig{})
+	assert.Equal(t, &Schema{Type: "string", Format: "date-time"}, s)
+
+	// A primitive with no scalar mapping (error) → nil.
+	s, _ = schemaForUnresolved("error", &APISpecConfig{})
+	assert.Nil(t, s)
+
+	// A container string (not nameable as a component) → nil.
+	s, _ = schemaForUnresolved("[]Unknown", &APISpecConfig{})
+	assert.Nil(t, s)
+
+	// A non-primitive name → a dangling $ref (raw replaced name).
+	s, _ = schemaForUnresolved("github.com/x/y.Thing", &APISpecConfig{})
+	require.NotNil(t, s)
+	assert.Equal(t, refComponentsSchemasPrefix+"github.com_x_y.Thing", s.Ref)
+}
+
 // TestTypeByRef covers the tree-based metadata lookup that replaces
 // typeByName(TypeParts(string)) on the named-type path.
 func TestTypeByRef(t *testing.T) {
@@ -271,19 +303,22 @@ func TestSchemaForNamedRef(t *testing.T) {
 	_, _, ok = schemaForNamedRef(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}, "", meta, &APISpecConfig{}, map[string]bool{})
 	assert.True(t, ok)
 
-	// Not found → deferred (string path emits the short-named external $ref).
-	_, _, ok = schemaForNamedRef(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Missing"}, "", meta, &APISpecConfig{}, map[string]bool{})
-	assert.False(t, ok)
+	// Not found → emits a dangling $ref (raw name) to a component that won't exist.
+	s, _, ok = schemaForNamedRef(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Missing"}, "", meta, &APISpecConfig{}, map[string]bool{})
+	require.True(t, ok)
+	assert.Equal(t, refComponentsSchemasPrefix+"main.Missing", s.Ref)
 
-	// Config TypeMapping match → deferred.
+	// Config TypeMapping match → deferred (schemaForType applies it before the walk).
 	cfgMap := &APISpecConfig{TypeMapping: []TypeMapping{{GoType: "main.User", OpenAPIType: &Schema{Type: "string"}}}}
 	_, _, ok = schemaForNamedRef(map[string]*Schema{}, userRef, "", meta, cfgMap, map[string]bool{})
 	assert.False(t, ok)
 
-	// Config ExternalType match → deferred.
+	// Config ExternalType match → registers the component and references it.
 	cfgExt := &APISpecConfig{ExternalTypes: []ExternalType{{Name: "main.User", OpenAPIType: &Schema{Type: "object"}}}}
-	_, _, ok = schemaForNamedRef(map[string]*Schema{}, userRef, "", meta, cfgExt, map[string]bool{})
-	assert.False(t, ok)
+	s, exns, ok := schemaForNamedRef(map[string]*Schema{}, userRef, "", meta, cfgExt, map[string]bool{})
+	require.True(t, ok)
+	assert.Equal(t, refComponentsSchemasPrefix+"main.User", s.Ref)
+	assert.Contains(t, exns, "main.User")
 
 	// Cycle guard: the type already in-flight → short-circuit to a $ref.
 	visiting := map[string]bool{"main.User" + mapGoTypeToOpenAPISchemaKey: true}
@@ -331,9 +366,12 @@ func TestSchemaForRefTree(t *testing.T) {
 	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, false, metaWithNamedTypes(), cfg, map[string]bool{})
 	assert.True(t, ok)
 
-	// Deferred forms: non-string-keyed map, func, nil.
-	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "int"}, Elem: userRef()}, false, metaWithNamedTypes(), cfg, map[string]bool{})
-	assert.False(t, ok) // non-string key → defer
+	// A non-string-keyed map → generic object (not expressible with typed values).
+	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "int"}, Elem: userRef()}, false, metaWithNamedTypes(), cfg, map[string]bool{})
+	require.True(t, ok)
+	assert.Equal(t, &Schema{Type: "object"}, s)
+
+	// Deferred forms: func, nil.
 	// A slice/map whose element is an alias-to-primitive INLINES the underlying
 	// (with any enum), rather than componentizing — matching the string path.
 	statusElem := func() *metadata.TypeRef {

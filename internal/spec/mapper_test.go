@@ -94,7 +94,7 @@ func TestMapGoTypeToOpenAPISchema_PointerTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, meta, cfg, nil)
 			if schema.Type != tt.expected {
 				t.Errorf("expected type %s, got %s", tt.expected, schema.Type)
 			}
@@ -365,7 +365,7 @@ func TestMapGoTypeToOpenAPISchema_ExternalTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			result, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, nil)
+			result, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if !reflect.DeepEqual(result, tt.expected) {
 				t.Errorf("mapGoTypeToOpenAPISchema() = %v, want %v", result, tt.expected)
 			}
@@ -1287,7 +1287,7 @@ func TestMapGoTypeToOpenAPISchema_CircularReference(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// This should not panic or cause stack overflow
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			// Verify we got a valid schema
 			if schema == nil {
@@ -1583,7 +1583,7 @@ func TestMapGoTypeToOpenAPISchema_DeepCircularReference(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// This should not panic or cause stack overflow
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			// Verify we got a valid schema
 			if schema == nil {
@@ -1697,7 +1697,7 @@ func TestResolveUnderlyingType_ComplexCircularReference(t *testing.T) {
 			// This should not panic or cause stack overflow
 			usedTypes := make(map[string]*Schema)
 			visitedTypes := make(map[string]bool)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, visitedTypes)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, visitedTypes)
 
 			// Verify we got a valid schema
 			if schema == nil {
@@ -1718,8 +1718,9 @@ func TestDetectEnumFromConstantsDirect(t *testing.T) {
 					"types.go": {
 						Types: map[string]*metadata.Type{
 							"Status": {
-								Name: stringPool.Get("Status"),
-								Kind: stringPool.Get("string"),
+								Name:   stringPool.Get("Status"),
+								Kind:   stringPool.Get("alias"),
+								Target: stringPool.Get("string"),
 							},
 						},
 						Variables: map[string]*metadata.Variable{
@@ -1774,8 +1775,9 @@ func TestEnumDetectionForArraysSimple(t *testing.T) {
 					"types.go": {
 						Types: map[string]*metadata.Type{
 							"Status": {
-								Name: stringPool.Get("Status"),
-								Kind: stringPool.Get("string"),
+								Name:   stringPool.Get("Status"),
+								Kind:   stringPool.Get("alias"),
+								Target: stringPool.Get("string"),
 							},
 						},
 						Variables: map[string]*metadata.Variable{
@@ -1829,8 +1831,9 @@ func TestEnumDetectionForArrays(t *testing.T) {
 					"types.go": {
 						Types: map[string]*metadata.Type{
 							"Status": {
-								Name: stringPool.Get("Status"),
-								Kind: stringPool.Get("string"),
+								Name:   stringPool.Get("Status"),
+								Kind:   stringPool.Get("alias"),
+								Target: stringPool.Get("string"),
 							},
 						},
 						Variables: map[string]*metadata.Variable{
@@ -1885,7 +1888,7 @@ func TestEnumDetectionForArrays(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
 
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			if schema == nil {
 				t.Fatal("Expected non-nil schema")
@@ -1975,8 +1978,9 @@ func TestEnumDetectionForMaps(t *testing.T) {
 					"types.go": {
 						Types: map[string]*metadata.Type{
 							"Priority": {
-								Name: stringPool.Get("Priority"),
-								Kind: stringPool.Get("string"),
+								Name:   stringPool.Get("Priority"),
+								Kind:   stringPool.Get("alias"),
+								Target: stringPool.Get("string"),
 							},
 						},
 						Variables: map[string]*metadata.Variable{
@@ -2036,7 +2040,7 @@ func TestEnumDetectionForMaps(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			if schema == nil {
 				t.Fatal("Expected non-nil schema")
@@ -2158,7 +2162,7 @@ func TestEnumDetectionForAliasTypes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			if schema == nil {
 				t.Fatal("Expected non-nil schema")
@@ -2352,8 +2356,8 @@ func TestMapTypeWithPackagePrefix(t *testing.T) {
 		expectedType string
 	}{
 		{
-			name:         "map with package prefix",
-			goType:       "pkg.map[string]CustomType",
+			name:         "map with package-qualified value",
+			goType:       "map[string]pkg.CustomType",
 			expectedType: "object",
 		},
 		{
@@ -2366,7 +2370,7 @@ func TestMapTypeWithPackagePrefix(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			if schema == nil {
 				t.Fatal("Expected non-nil schema")

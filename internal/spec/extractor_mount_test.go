@@ -2901,7 +2901,7 @@ func TestMapGoTypeToOpenAPISchema_SliceType(t *testing.T) {
 	visitedTypes := map[string]bool{}
 	meta := newTestMeta()
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[]string", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "[]string", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 	require.NotNil(t, schema.Items)
@@ -2914,7 +2914,7 @@ func TestMapGoTypeToOpenAPISchema_MapType(t *testing.T) {
 	visitedTypes := map[string]bool{}
 	meta := newTestMeta()
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "map[string]int", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "map[string]int", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	assert.Equal(t, "object", schema.Type)
 }
@@ -2925,7 +2925,7 @@ func TestMapGoTypeToOpenAPISchema_PointerType(t *testing.T) {
 	visitedTypes := map[string]bool{}
 	meta := newTestMeta()
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "*string", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "*string", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	assert.Equal(t, "string", schema.Type)
 }
@@ -2937,7 +2937,7 @@ func TestMapGoTypeToOpenAPISchema_FixedArray(t *testing.T) {
 	meta := newTestMeta()
 
 	// [16]byte → string with format byte
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[16]byte", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "[16]byte", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	assert.Equal(t, "string", schema.Type)
 	assert.Equal(t, "byte", schema.Format)
@@ -2951,7 +2951,7 @@ func TestMapGoTypeToOpenAPISchema_FixedArrayInt(t *testing.T) {
 	meta := newTestMeta()
 
 	// [3]int → array of integers
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[3]int", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "[3]int", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 	assert.Equal(t, 3, schema.MaxItems)
@@ -2966,7 +2966,7 @@ func TestMapGoTypeToOpenAPISchema_CycleDetection(t *testing.T) {
 	meta := newTestMeta()
 
 	// The type already exists in usedTypes — should return a reference
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "myapp.User", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "myapp.User", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	// Should be a $ref since the type already exists
 	assert.NotEmpty(t, schema.Ref)
@@ -3175,7 +3175,7 @@ func TestMapGoTypeToOpenAPISchema_Interface(t *testing.T) {
 	usedTypes := map[string]*Schema{}
 	meta := newTestMeta()
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "interface{}", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "interface{}", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "object", schema.Type)
 }
@@ -3185,7 +3185,7 @@ func TestMapGoTypeToOpenAPISchema_Any(t *testing.T) {
 	usedTypes := map[string]*Schema{}
 	meta := newTestMeta()
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "any", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "any", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 }
 
@@ -3634,7 +3634,7 @@ func TestMapGoTypeToOpenAPISchema_CustomTypeFromMetadata(t *testing.T) {
 	cfg := &APISpecConfig{}
 	usedTypes := map[string]*Schema{}
 
-	schema, schemas := mapGoTypeToOpenAPISchema(usedTypes, "myapp-->User", meta, cfg, nil)
+	schema, schemas := schemaForType(usedTypes, "myapp-->User", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	// Schema should be either an object or a ref
 	_ = schemas
@@ -3665,7 +3665,7 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfCustomType(t *testing.T) {
 	usedTypes := map[string]*Schema{}
 
 	// Test with a fixed-size array of custom type
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[5]myapp-->User", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "[5]myapp-->User", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 }
@@ -3857,7 +3857,7 @@ func TestMapGoTypeToOpenAPISchema_GenericStruct(t *testing.T) {
 
 	// Generic struct instantiation with bracket syntax (dot separator, not TypeSep)
 	// TypeParts handles "myapp.APIResponse[myapp.User]" format
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "myapp.APIResponse[myapp.User]", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "myapp.APIResponse[myapp.User]", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 }
 

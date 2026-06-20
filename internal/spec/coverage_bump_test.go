@@ -264,7 +264,7 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfCachedComplexType(t *testing.T) {
 	}
 	usedTypes := map[string]*Schema{"User": cached}
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[]User", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "[]User", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type, "array of complex type")
 	require.NotNil(t, schema.Items, "items schema must be set")
@@ -282,7 +282,7 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfCachedComplexType_NilSchema(t *testing.
 	// schema generation before the type's own pass completes.
 	usedTypes := map[string]*Schema{"User": nil}
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[]User", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "[]User", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 	require.NotNil(t, schema.Items)
@@ -297,7 +297,7 @@ func TestMapGoTypeToOpenAPISchema_FixedSizeArrayOfCachedType(t *testing.T) {
 	usedTypes := map[string]*Schema{
 		"User": {Type: "object", Properties: map[string]*Schema{"id": {Type: "integer"}}},
 	}
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[5]User", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "[5]User", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 	assert.Equal(t, 5, schema.MinItems, "fixed-size array must set MinItems")
@@ -354,7 +354,7 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfEnumOverlaysOntoStoredSchema(t *testing
 	}
 
 	usedTypes := map[string]*Schema{}
-	schema, schemas := mapGoTypeToOpenAPISchema(usedTypes, "[]enum.Status", meta, cfg, nil)
+	schema, schemas := schemaForType(usedTypes, "[]enum.Status", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 	// Element type was non-primitive (`enum.Status`) so the array branch

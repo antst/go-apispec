@@ -396,6 +396,8 @@ func (t *TypeRef) Qualify(pkg string) {
 // This lets every remaining string-only producer (origin-traced body/param
 // types, alias targets, config and wrapper-override type strings) reach the
 // TypeRef tree, so the string-based schema generator can be retired.
+//
+//nolint:gocyclo // one case per type-syntax form; a flat dispatch is clearest here
 func ParseTypeRef(s string) *TypeRef {
 	s = strings.TrimSpace(strings.ReplaceAll(s, "-->", "."))
 	if s == "" {

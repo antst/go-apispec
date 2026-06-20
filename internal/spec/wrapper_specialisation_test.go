@@ -329,6 +329,7 @@ func TestSpecialiseWrapperSchema(t *testing.T) {
 			"orders.go": {Types: map[string]*metadata.Type{"Order": {
 				Name:   sp.Get("Order"),
 				Pkg:    sp.Get("orders"),
+				Kind:   sp.Get("struct"),
 				Fields: []metadata.Field{{Name: sp.Get("ID"), Type: sp.Get("string"), Tag: sp.Get(`json:"id"`)}},
 			}}},
 		},
@@ -454,6 +455,7 @@ func TestExtractResponse_WrapperEnvelope(t *testing.T) {
 			"orders.go": {Types: map[string]*metadata.Type{"Order": {
 				Name:   sp.Get("Order"),
 				Pkg:    sp.Get("orders"),
+				Kind:   sp.Get("struct"),
 				Fields: []metadata.Field{{Name: sp.Get("ID"), Type: sp.Get("string"), Tag: sp.Get(`json:"id"`)}},
 			}}},
 		},

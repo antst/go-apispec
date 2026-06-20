@@ -225,7 +225,7 @@ func TestMapGoTypeToOpenAPISchema_EdgeCases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, meta, cfg, nil)
 
 			if tt.expected == nil {
 				if schema != nil {
@@ -389,7 +389,7 @@ func TestSchemaGeneration_ComplexTypes(t *testing.T) {
 							},
 							"Status": {
 								Name:   stringPool.Get("Status"),
-								Kind:   stringPool.Get("string"),
+								Kind:   stringPool.Get("alias"),
 								Target: stringPool.Get("string"),
 							},
 							"Profile": {
@@ -518,7 +518,7 @@ func TestSchemaGeneration_TypeMapping(t *testing.T) {
 	// Test custom type mapping
 	t.Run("custom type mapping", func(t *testing.T) {
 		usedTypes := make(map[string]*Schema)
-		schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "CustomType", meta, cfg, nil)
+		schema, _ := schemaForType(usedTypes, "CustomType", nil, meta, cfg, nil)
 		if schema == nil {
 			t.Fatal("Failed to generate schema for CustomType")
 			return
@@ -535,7 +535,7 @@ func TestSchemaGeneration_TypeMapping(t *testing.T) {
 
 	t.Run("custom slice type mapping", func(t *testing.T) {
 		usedTypes := make(map[string]*Schema)
-		schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[]CustomType", meta, cfg, nil)
+		schema, _ := schemaForType(usedTypes, "[]CustomType", nil, meta, cfg, nil)
 		if schema == nil {
 			t.Fatal("Failed to generate schema for []CustomType")
 			return
@@ -618,7 +618,7 @@ func TestSchemaGeneration_ExternalTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.typeName, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.typeName, nil, meta, cfg, nil)
 			if schema == nil {
 				t.Fatalf("Failed to generate schema for %s", tt.typeName)
 				return
