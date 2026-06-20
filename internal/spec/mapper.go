@@ -1012,13 +1012,17 @@ func bodyTypeFromMetadataRef(ref *metadata.TypeRef, meta *metadata.Metadata, cfg
 		leaf.Kind == metadata.RefArray || leaf.Kind == metadata.RefMap) {
 		leaf = leaf.Elem
 	}
-	if leaf == nil || leaf.Kind != metadata.RefNamed || len(leaf.Args) != 0 {
+	if leaf == nil || leaf.Kind != metadata.RefNamed {
 		return ""
 	}
+	// In-metadata named leaf — including a generic instantiation, whose base type
+	// resolves by Pkg/Name and whose args ride along in ref.String() for the
+	// string path's substitution.
 	if typeByRef(leaf, meta) != nil {
 		return ref.String()
 	}
-	if cfg != nil {
+	// A configured external type; generics are not external-configured.
+	if cfg != nil && len(leaf.Args) == 0 {
 		leafName := stripMajorVersion(leaf.String())
 		for _, et := range cfg.ExternalTypes {
 			if et.Name == leafName {

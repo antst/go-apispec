@@ -156,9 +156,12 @@ func TestBodyTypeFromMetadataRef(t *testing.T) {
 	// Same external ref but no matching config → "" (string path).
 	assert.Equal(t, "", bodyTypeFromMetadataRef(fiberMap(), meta, &APISpecConfig{}))
 
-	// Other unresolved, generic, and non-named leaves → "" (string path).
+	// A generic instantiation whose base type is in metadata resolves too — the
+	// args ride along in the canonical string for the string path's substitution.
+	assert.Equal(t, "main.User[int]", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, meta, &APISpecConfig{}))
+
+	// Other unresolved and non-named leaves → "" (string path).
 	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "ext", Name: "Thing"}, meta, &APISpecConfig{}))
-	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, meta, &APISpecConfig{}))
 	assert.Equal(t, "", bodyTypeFromMetadataRef(&metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, meta, &APISpecConfig{}))
 	assert.Equal(t, "", bodyTypeFromMetadataRef(nil, meta, &APISpecConfig{}))
 }
