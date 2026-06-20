@@ -206,6 +206,39 @@ func TestSchemaForNamedRef(t *testing.T) {
 	assert.Equal(t, refComponentsSchemasPrefix+"main.User", s.Ref)
 }
 
+// TestSchemaForRefTree covers the recursive tree walker that wraps a named struct
+// leaf in pointers/slices/arrays, and defers the forms it does not yet reproduce.
+func TestSchemaForRefTree(t *testing.T) {
+	cfg := &APISpecConfig{}
+	userRef := func() *metadata.TypeRef { return &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User"} }
+	userArrayItems := &Schema{Ref: refComponentsSchemasPrefix + "main.User"}
+
+	// []User → {array, items:$ref}.
+	s, _, ok := schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefSlice, Elem: userRef()}, metaWithNamedTypes(), cfg, map[string]bool{})
+	require.True(t, ok)
+	assert.Equal(t, &Schema{Type: "array", Items: userArrayItems}, s)
+
+	// [3]User → {array, items:$ref, minItems==maxItems==3}.
+	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefArray, Len: 3, Elem: userRef()}, metaWithNamedTypes(), cfg, map[string]bool{})
+	require.True(t, ok)
+	assert.Equal(t, &Schema{Type: "array", Items: userArrayItems, MinItems: 3, MaxItems: 3}, s)
+
+	// []*User → pointer is transparent, same as []User.
+	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefPointer, Elem: userRef()}}, metaWithNamedTypes(), cfg, map[string]bool{})
+	require.True(t, ok)
+	assert.Equal(t, &Schema{Type: "array", Items: userArrayItems}, s)
+
+	// Deferred forms: generic instantiation, map, alias leaf, slice-of-alias, nil.
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, metaWithNamedTypes(), cfg, map[string]bool{})
+	assert.False(t, ok)
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, Elem: userRef()}, metaWithNamedTypes(), cfg, map[string]bool{})
+	assert.False(t, ok)
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}}, metaWithNamedTypes(), cfg, map[string]bool{})
+	assert.False(t, ok) // alias leaf → defer
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, nil, metaWithNamedTypes(), cfg, map[string]bool{})
+	assert.False(t, ok)
+}
+
 // TestSchemaForType_FixedArrayLengthReapplied covers the seam's re-application of
 // a fixed array's length when its element defers to the string path (a named
 // struct/generic element, e.g. [4]Point): schemaFromTypeRef returns nil, the

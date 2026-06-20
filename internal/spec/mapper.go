@@ -2563,15 +2563,14 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 		if s := schemaFromTypeRef(ref); s != nil {
 			return s, map[string]*Schema{}
 		}
-		// A direct, non-generic named type resolves through the tree: look the
-		// metadata type up by the ref's own Pkg/Name (no string parsing) and reuse
-		// the shared component machinery. Generic instantiations (ref.Args) still
-		// route through the string path, whose generic substitution is keyed on the
-		// instantiation string; those get the lossless ref.String() below.
-		if ref.Kind == metadata.RefNamed && len(ref.Args) == 0 {
-			if s, ns, ok := schemaForNamedRef(usedTypes, ref, meta, cfg, visitedTypes); ok {
-				return s, ns
-			}
+		// Walk the tree for a named struct leaf, optionally wrapped in
+		// pointers/slices/arrays — looking metadata types up by the ref's own
+		// Pkg/Name (no string parsing) and reusing the shared component machinery.
+		// schemaForRefTree defers (string path) for generics, maps, and alias/enum
+		// leaves, which the string path resolves with behaviour this does not
+		// reproduce yet.
+		if s, ns, ok := schemaForRefTree(usedTypes, ref, meta, cfg, visitedTypes); ok {
+			return s, ns
 		}
 		// The flattened string can be empty where getTypeName has a gap — most
 		// notably a multi-type-parameter generic (Pair[K, V]), whose IndexListExpr
@@ -2588,6 +2587,42 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 	// count. Re-apply the length onto the array the string path produced.
 	setFixedArrayLen(s, ref)
 	return s, newSchemas
+}
+
+// schemaForRefTree walks a TypeRef whose leaf is a named struct — directly or
+// wrapped in pointers (transparent to the schema), slices, or fixed arrays — and
+// builds the schema from the tree, reusing schemaForNamedRef for the leaf. It is
+// the recursive completion of schemaFromTypeRef for the cases that need metadata
+// lookup and component generation (which the pure schemaFromTypeRef cannot do).
+//
+// It returns ok=false (deferring to the string path) for anything it does not yet
+// reproduce byte-for-byte: generic instantiations, maps, and alias/enum leaves
+// (the string path applies inline alias resolution and element enum detection).
+// schemaFromTypeRef already handled every primitive-leaf container before this is
+// reached, so the slice/array cases here only ever wrap a named leaf.
+func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
+	if ref == nil {
+		return nil, nil, false
+	}
+	switch ref.Kind {
+	case metadata.RefPointer:
+		return schemaForRefTree(usedTypes, ref.Elem, meta, cfg, visitedTypes) // transparent
+	case metadata.RefNamed:
+		if len(ref.Args) != 0 {
+			return nil, nil, false // generic instantiation → string path
+		}
+		return schemaForNamedRef(usedTypes, ref, meta, cfg, visitedTypes)
+	case metadata.RefSlice, metadata.RefArray:
+		items, schemas, ok := schemaForRefTree(usedTypes, ref.Elem, meta, cfg, visitedTypes)
+		if !ok || items == nil {
+			return nil, nil, false
+		}
+		s := &Schema{Type: "array", Items: items}
+		setFixedArrayLen(s, ref)
+		return s, schemas, true
+	default:
+		return nil, nil, false // map / func / chan / basic → string path
+	}
 }
 
 // schemaForNamedRef resolves a direct, non-generic named TypeRef to its schema by
