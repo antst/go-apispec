@@ -827,11 +827,12 @@ func generateComponentSchemas(meta *metadata.Metadata, cfg *APISpecConfig, route
 // over getTypeName's lossy flattened field.Type. Falls back to field.Type when
 // no TypeRef was built at analysis time. This is the field-path step of retiring
 // getTypeName from schema derivation (T011).
-func fieldTypeString(field metadata.Field, meta *metadata.Metadata) string {
-	if field.TypeRef != nil {
-		return field.TypeRef.String()
-	}
-	return getStringFromPool(meta, field.Type)
+// fieldTypeString returns the field's schema type from its lossless TypeRef.
+// Every struct field carries one (enforced by TestEveryStructFieldHasTypeRef), so
+// there is no getTypeName fallback; TypeRef.String() is "" only for a nil ref,
+// which the guard test forbids.
+func fieldTypeString(field metadata.Field) string {
+	return field.TypeRef.String()
 }
 
 // majorVersionInPath matches a Go module major-version path segment ("/v2.",
@@ -1126,7 +1127,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 
 	for _, field := range typ.Fields {
 		fieldName := getStringFromPool(meta, field.Name)
-		fieldType := fieldTypeString(field, meta)
+		fieldType := fieldTypeString(field)
 
 		// `_ struct{} `apispec:"..."`` is the convention for struct-level
 		// hints — it never serializes (zero-sized + unexported) but its tag
@@ -1273,7 +1274,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 		// Only apply enum detection for custom types (not built-in types)
 		if fieldSchema != nil && len(fieldSchema.Enum) == 0 {
 			// Use the original field type before resolution for enum detection
-			originalFieldType := fieldTypeString(field, meta)
+			originalFieldType := fieldTypeString(field)
 
 			// Only detect enums for custom types, not built-in types like string, int, etc.
 			if !metadata.IsPrimitiveType(originalFieldType) {

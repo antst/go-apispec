@@ -27,7 +27,17 @@ const (
 	defaultScopeUnexported = "unexported"
 )
 
-// getTypeName extracts a type name from an AST expression
+// getTypeName extracts a flattened type-name string from an AST expression.
+//
+// It is RETAINED for non-schema consumers only (T027): the call graph
+// (receiver/argument type strings via SetType, used for matching and
+// callArgToString's string-based body/param type derivation) and diagnostics.
+// Schema generation no longer reads its output — struct fields and embeds carry a
+// lossless *TypeRef (TestEveryStructFieldHasTypeRef enforces this), and the schema
+// pipeline derives every type from the TypeRef tree. Do NOT reintroduce it into
+// schema derivation; it is lossy (drops fixed-array lengths, multi-parameter
+// generics, and full package paths). Retiring it from the body/param path as well
+// requires moving callArgToString and origin tracing onto the tree.
 //
 //nolint:gocyclo // AST type name extraction with multiple node types
 func getTypeName(nd ast.Node, info *types.Info) string {
