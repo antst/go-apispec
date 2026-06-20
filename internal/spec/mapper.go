@@ -974,6 +974,36 @@ func typeByName(typeParts Parts, meta *metadata.Metadata) *metadata.Type {
 	return nil
 }
 
+// typeByRef resolves a named TypeRef to its metadata.Type using the ref's own
+// Pkg/Name fields — the tree counterpart to typeByName(TypeParts(string)), with
+// no string re-parsing. It keeps typeByName's two-step strategy: try the
+// qualified package first, then fall back to a name-only search across all
+// packages (covering types whose ref.Pkg does not match a metadata package key,
+// e.g. import-path vs module-relative differences). Returns nil for non-named
+// refs and unresolved names.
+func typeByRef(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Type {
+	if meta == nil || ref == nil || ref.Kind != metadata.RefNamed || ref.Name == "" {
+		return nil
+	}
+	if ref.Pkg != "" {
+		if pkg, exists := meta.Packages[ref.Pkg]; exists {
+			for _, file := range pkg.Files {
+				if typ, exists := file.Types[ref.Name]; exists {
+					return typ
+				}
+			}
+		}
+	}
+	for _, pkg := range meta.Packages {
+		for _, file := range pkg.Files {
+			if typ, exists := file.Types[ref.Name]; exists {
+				return typ
+			}
+		}
+	}
+	return nil
+}
+
 type Parts struct {
 	PkgName      string
 	TypeName     string
@@ -2523,9 +2553,25 @@ func basicRefSchema(name string) *Schema {
 // This is the migration seam: tree-first, string-fallback, output-preserving
 // (schemaFromTypeRef is shadow-tested to match the string path).
 func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.TypeRef, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema) {
+	// Shared with schemaForNamedRef and mapGoTypeToOpenAPISchema below so the
+	// cycle-tracking map is one instance (and never nil — schemaForNamedRef writes
+	// to it before the string path's own nil-guard would run).
+	if visitedTypes == nil {
+		visitedTypes = map[string]bool{}
+	}
 	if ref != nil {
 		if s := schemaFromTypeRef(ref); s != nil {
 			return s, map[string]*Schema{}
+		}
+		// A direct, non-generic named type resolves through the tree: look the
+		// metadata type up by the ref's own Pkg/Name (no string parsing) and reuse
+		// the shared component machinery. Generic instantiations (ref.Args) still
+		// route through the string path, whose generic substitution is keyed on the
+		// instantiation string; those get the lossless ref.String() below.
+		if ref.Kind == metadata.RefNamed && len(ref.Args) == 0 {
+			if s, ns, ok := schemaForNamedRef(usedTypes, ref, meta, cfg, visitedTypes); ok {
+				return s, ns
+			}
 		}
 		// The flattened string can be empty where getTypeName has a gap — most
 		// notably a multi-type-parameter generic (Pair[K, V]), whose IndexListExpr
@@ -2542,6 +2588,71 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 	// count. Re-apply the length onto the array the string path produced.
 	setFixedArrayLen(s, ref)
 	return s, newSchemas
+}
+
+// schemaForNamedRef resolves a direct, non-generic named TypeRef to its schema by
+// looking the metadata type up via the ref's Pkg/Name (typeByRef — no string
+// parsing) and reusing generateSchemaFromType plus the shared component
+// machinery. It is a faithful tree-sourced mirror of mapGoTypeToOpenAPISchema's
+// named (default) branch, including the same cycle/usedTypes guards keyed on the
+// canonical string, so output is identical.
+//
+// Returns ok=false (defer to the string path) when the type is governed by a
+// config mapping, is not found in metadata (external/dangling refs the string
+// path names by their short alias), or yields no schema — preserving those exact
+// behaviours.
+func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
+	goType := ref.String()
+
+	// Config mappings take precedence in the string path (checked before any
+	// structural handling); leave them to it.
+	for _, m := range cfg.TypeMapping {
+		if m.GoType == goType {
+			return nil, nil, false
+		}
+	}
+	for _, et := range cfg.ExternalTypes {
+		if et.Name == goType {
+			return nil, nil, false
+		}
+	}
+
+	// Same cycle/recursion guards the string path applies on entry, keyed on the
+	// same string, so a back-reference resolves to a $ref at the identical point.
+	schemas := map[string]*Schema{}
+	if visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] && canAddRefSchemaForType(goType) {
+		return addRefSchemaForType(goType), schemas, true
+	}
+	visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] = true
+	if s, exists := usedTypes[goType]; exists && s != nil && canAddRefSchemaForType(goType) {
+		return addRefSchemaForType(goType), schemas, true
+	}
+
+	typ := typeByRef(ref, meta)
+	if typ == nil {
+		return nil, nil, false // external/unfound: string path emits the short-named $ref
+	}
+	// Only structs are resolved on the tree here. An alias/enum field is resolved
+	// to its underlying type INLINE by the caller (resolveUnderlyingType in
+	// generateStructSchema) before this point — so goType arriving here is already
+	// the underlying primitive; deferring keeps that inline-with-enum result
+	// instead of fabricating a component $ref. Interface and other kinds likewise
+	// defer to the string path's handling (internal-alias tree resolution is T009).
+	if getStringFromPool(meta, typ.Kind) != "struct" {
+		return nil, nil, false
+	}
+
+	schema, newSchemas := generateSchemaFromType(usedTypes, goType, typ, meta, cfg, visitedTypes)
+	if schema == nil {
+		return nil, nil, false
+	}
+	if canAddRefSchemaForType(goType) {
+		schemas[goType] = schema
+		schema = addRefSchemaForType(goType)
+	}
+	maps.Copy(schemas, newSchemas)
+	markUsedType(usedTypes, goType, schema)
+	return schema, schemas, true
 }
 
 // setFixedArrayLen stamps minItems == maxItems == N on an array schema when ref
