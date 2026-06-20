@@ -1342,7 +1342,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 				if bodySchema == nil {
 					var newBodySchemas map[string]*Schema
 
-					bodySchema, newBodySchemas = mapGoTypeToOpenAPISchema(usedTypes, fieldType, meta, cfg, visitedTypes)
+					bodySchema, newBodySchemas = schemaForType(usedTypes, fieldType, nil, meta, cfg, visitedTypes)
 					maps.Copy(schemas, newBodySchemas)
 				}
 				schemas[derivedFieldType] = bodySchema
@@ -1477,7 +1477,7 @@ func generateAliasSchema(usedTypes map[string]*Schema, typ *metadata.Type, meta 
 	originalTypeName := getStringFromPool(meta, typ.Name)
 
 	// Generate the base schema from underlying type
-	schema, schemas := mapGoTypeToOpenAPISchema(usedTypes, underlyingType, meta, cfg, visitedTypes)
+	schema, schemas := schemaForType(usedTypes, underlyingType, nil, meta, cfg, visitedTypes)
 
 	// If the underlying type is a primitive (like string), try to detect enum values
 	if schema != nil && metadata.IsPrimitiveType(underlyingType) {
@@ -2618,6 +2618,17 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 	if visitedTypes == nil {
 		visitedTypes = map[string]bool{}
 	}
+	// Config TypeMapping takes precedence over any structural/named resolution,
+	// exactly as mapGoTypeToOpenAPISchema applies it before everything else — so
+	// neither the tree nor the parse retry below can shadow a configured override.
+	if cfg != nil && goType != "" {
+		for _, mapping := range cfg.TypeMapping {
+			if mapping.GoType == goType {
+				markUsedType(usedTypes, goType, mapping.OpenAPIType)
+				return mapping.OpenAPIType, map[string]*Schema{}
+			}
+		}
+	}
 	if ref != nil {
 		if s := schemaFromTypeRef(ref); s != nil {
 			return s, map[string]*Schema{}
@@ -2637,6 +2648,22 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 		// canonical string and let the existing machinery resolve it.
 		if goType == "" {
 			goType = ref.String()
+		}
+	} else if goType != "" && !strings.Contains(goType, TypeSep) {
+		// String-only caller (no TypeRef): recover one by parsing the canonical
+		// string so the structural cases resolve on the tree instead of the string
+		// generator. Strings still carrying the metadata "-->" separator are left to
+		// mapGoTypeToOpenAPISchema, whose usedTypes keys other consumers (field-format
+		// inference) look up by that exact spelling — the convention is unified in a
+		// follow-up before those flow through the tree. Alias/generic/config leaves
+		// fall through regardless.
+		if pref := metadata.ParseTypeRef(goType); pref != nil {
+			if s := schemaFromTypeRef(pref); s != nil {
+				return s, map[string]*Schema{}
+			}
+			if s, ns, ok := schemaForRefTree(usedTypes, pref, meta, cfg, visitedTypes); ok {
+				return s, ns
+			}
 		}
 	}
 	s, newSchemas := mapGoTypeToOpenAPISchema(usedTypes, goType, meta, cfg, visitedTypes)
@@ -2709,6 +2736,11 @@ func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta 
 func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
 	goType := ref.String()
 
+	// Decide whether to handle this leaf BEFORE any side effect on visitedTypes:
+	// a premature cycle-key write would make a string-path fallback for the same
+	// goType mistake it for a back-reference and emit a bare $ref without ever
+	// generating the component.
+	//
 	// Config mappings take precedence in the string path (checked before any
 	// structural handling); leave them to it.
 	for _, m := range cfg.TypeMapping {
@@ -2721,18 +2753,6 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta
 			return nil, nil, false
 		}
 	}
-
-	// Same cycle/recursion guards the string path applies on entry, keyed on the
-	// same string, so a back-reference resolves to a $ref at the identical point.
-	schemas := map[string]*Schema{}
-	if visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] && canAddRefSchemaForType(goType) {
-		return addRefSchemaForType(goType), schemas, true
-	}
-	visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] = true
-	if s, exists := usedTypes[goType]; exists && s != nil && canAddRefSchemaForType(goType) {
-		return addRefSchemaForType(goType), schemas, true
-	}
-
 	typ := typeByRef(ref, meta)
 	if typ == nil {
 		return nil, nil, false // external/unfound: string path emits the short-named $ref
@@ -2745,6 +2765,18 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta
 	// defer to the string path's handling (internal-alias tree resolution is T009).
 	if getStringFromPool(meta, typ.Kind) != "struct" {
 		return nil, nil, false
+	}
+
+	// Committed to handling: now apply the same cycle/recursion guards the string
+	// path applies on entry, keyed on the same string, so a back-reference resolves
+	// to a $ref at the identical point.
+	schemas := map[string]*Schema{}
+	if visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] && canAddRefSchemaForType(goType) {
+		return addRefSchemaForType(goType), schemas, true
+	}
+	visitedTypes[goType+mapGoTypeToOpenAPISchemaKey] = true
+	if s, exists := usedTypes[goType]; exists && s != nil && canAddRefSchemaForType(goType) {
+		return addRefSchemaForType(goType), schemas, true
 	}
 
 	schema, newSchemas := generateSchemaFromType(usedTypes, goType, typ, meta, cfg, visitedTypes)

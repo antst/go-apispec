@@ -582,7 +582,7 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		// target + field-inference frame onto the handler.
 		bodyType, fieldFrameBaseID = r.refineBodyTypeThroughHelper(node, reqInfo, bodyType, fieldFrameBaseID, route)
 
-		schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
+		schema, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, r.cfg, nil)
 		reqInfo.Schema = schema
 	}
 

@@ -1144,7 +1144,7 @@ func (e *Extractor) expandHelperFunctionResponses(routeNode TrackerNodeInterface
 					if bodyArg, ok := call.edge.ParamArgMap[bodyParam]; ok {
 						bodyType := e.contextProvider.GetArgumentInfo(&bodyArg)
 						if bodyType != "" && bodyType != "interface{}" && bodyType != "any" {
-							if s, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, e.cfg, nil); s != nil {
+							if s, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, e.cfg, nil); s != nil {
 								schema = s
 							}
 						}
@@ -1880,7 +1880,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		if bodyType == "[]byte" {
 			respInfo.Schema = &Schema{Type: "string", Format: "binary"}
 		} else {
-			schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
+			schema, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, r.cfg, nil)
 			respInfo.Schema = schema
 
 			// Wrapper/envelope specialisation: when the body flows through a
@@ -1925,7 +1925,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 				respInfo.Schema = &Schema{Type: "string"}
 			}
 		} else {
-			schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
+			schema, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, r.cfg, nil)
 			respInfo.Schema = schema
 		}
 	}
@@ -2173,7 +2173,7 @@ func (p *ParamPatternMatcherImpl) ExtractParam(node TrackerNodeInterface, route 
 			}
 		}
 
-		schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, paramType, route.Metadata, p.cfg, nil)
+		schema, _ := schemaForType(route.UsedTypes, paramType, nil, route.Metadata, p.cfg, nil)
 		param.Schema = schema
 	}
 

@@ -244,7 +244,7 @@ func specialiseWrapperSchema(baseSchema *Schema, overrides []wrapperFieldOverrid
 		if jsonName == "" {
 			continue
 		}
-		propSchema, discovered := mapGoTypeToOpenAPISchema(usedTypes, override.GoType, meta, cfg, nil)
+		propSchema, discovered := schemaForType(usedTypes, override.GoType, nil, meta, cfg, nil)
 		if propSchema == nil {
 			continue
 		}
