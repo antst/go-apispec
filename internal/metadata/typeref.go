@@ -386,6 +386,147 @@ func (t *TypeRef) Qualify(pkg string) {
 	}
 }
 
+// ParseTypeRef parses a Go-type string into a TypeRef — the inverse of String().
+// It accepts the canonical String() form and the equivalent variants the schema
+// pipeline produces: the "-->" package separator, short or bare package
+// qualifiers, and primitive scalars. Package-qualified names keep whatever
+// qualifier the string carried (typeByRef's name-only fallback resolves short
+// forms); the round-trip String(ParseTypeRef(s)) == s holds for canonical input.
+//
+// This lets every remaining string-only producer (origin-traced body/param
+// types, alias targets, config and wrapper-override type strings) reach the
+// TypeRef tree, so the string-based schema generator can be retired.
+func ParseTypeRef(s string) *TypeRef {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "-->", "."))
+	if s == "" {
+		return nil
+	}
+	switch {
+	case strings.HasPrefix(s, "*"):
+		return wrapElem(RefPointer, s[1:])
+	case strings.HasPrefix(s, "[]"):
+		return wrapElem(RefSlice, s[2:])
+	case strings.HasPrefix(s, "[...]"):
+		if e := ParseTypeRef(s[5:]); e != nil {
+			return &TypeRef{Kind: RefArray, Len: -1, Elem: e}
+		}
+		return nil
+	case strings.HasPrefix(s, "[") && !strings.HasPrefix(s, "["+"]"):
+		// [N]T fixed array — the bracket holds a decimal length.
+		if end := strings.IndexByte(s, ']'); end > 1 {
+			if n, err := strconv.Atoi(strings.TrimSpace(s[1:end])); err == nil {
+				if e := ParseTypeRef(s[end+1:]); e != nil {
+					return &TypeRef{Kind: RefArray, Len: n, Elem: e}
+				}
+			}
+		}
+		return nil
+	case strings.HasPrefix(s, "map["):
+		return parseMapRef(s)
+	case s == "interface{}" || s == "any":
+		return &TypeRef{Kind: RefInterface}
+	case s == "struct{}":
+		return &TypeRef{Kind: RefStruct}
+	case s == "func" || strings.HasPrefix(s, "func(") || strings.HasPrefix(s, "func "):
+		return &TypeRef{Kind: RefFunc}
+	case s == "chan" || strings.HasPrefix(s, "chan ") || strings.HasPrefix(s, "chan<-") || strings.HasPrefix(s, "<-chan"):
+		return &TypeRef{Kind: RefChan}
+	case IsPrimitiveType(s):
+		return &TypeRef{Kind: RefBasic, Name: s}
+	default:
+		return parseNamedRef(s)
+	}
+}
+
+// wrapElem parses elemStr and wraps it in a single-element container kind
+// (pointer or slice). Returns nil when the element does not parse.
+func wrapElem(kind RefKind, elemStr string) *TypeRef {
+	e := ParseTypeRef(elemStr)
+	if e == nil {
+		return nil
+	}
+	return &TypeRef{Kind: kind, Elem: e}
+}
+
+// parseMapRef parses "map[K]V", scanning balanced brackets to find the key's
+// closing "]" (so map[map[a]b]c keys parse correctly).
+func parseMapRef(s string) *TypeRef {
+	rest := s[len("map["):]
+	depth, end := 0, -1
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case '[':
+			depth++
+		case ']':
+			if depth == 0 {
+				end = i
+			} else {
+				depth--
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		return nil
+	}
+	key := ParseTypeRef(rest[:end])
+	val := ParseTypeRef(rest[end+1:])
+	if key == nil || val == nil {
+		return nil
+	}
+	return &TypeRef{Kind: RefMap, Key: key, Elem: val}
+}
+
+// parseNamedRef parses a (possibly generic, possibly package-qualified) named
+// type: "pkg/path.Name", "pkg.Name[Arg1,Arg2]", or a bare "Name".
+func parseNamedRef(s string) *TypeRef {
+	var args []*TypeRef
+	// A mid-string '[' opens a generic argument list (leading '[' was an array,
+	// handled earlier). Everything up to it is the base name.
+	if open := strings.IndexByte(s, '['); open > 0 && strings.HasSuffix(s, "]") {
+		for _, a := range splitTopLevelCommas(s[open+1 : len(s)-1]) {
+			ref := ParseTypeRef(a)
+			if ref == nil {
+				return nil
+			}
+			args = append(args, ref)
+		}
+		s = s[:open]
+	}
+	ref := &TypeRef{Kind: RefNamed, Name: s, Args: args}
+	// Split a package qualifier off the LAST dot (import paths contain dots, but
+	// the type name never does); a dotless string is an unqualified name.
+	if dot := strings.LastIndexByte(s, '.'); dot > 0 {
+		ref.Pkg = s[:dot]
+		ref.Name = s[dot+1:]
+	}
+	return ref
+}
+
+// splitTopLevelCommas splits generic arguments on commas that are not nested
+// inside a bracketed sub-argument (so Map[K,V] inside Outer[Map[K,V],T] stays
+// whole).
+func splitTopLevelCommas(s string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, strings.TrimSpace(s[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	return append(parts, strings.TrimSpace(s[start:]))
+}
+
 // String renders the TypeRef as the project's canonical metadata identifier:
 // dot-separated using the package's full import path, so a qualified type reads
 // "net/http.Header" (an import-path form, not literal Go source). Opaque kinds
