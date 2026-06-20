@@ -228,13 +228,23 @@ func TestSchemaForRefTree(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, &Schema{Type: "array", Items: userArrayItems}, s)
 
-	// Deferred forms: generic instantiation, map, alias leaf, slice-of-alias, nil.
+	// map[string]User → {object, additionalProperties:$ref}.
+	strKey := &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}
+	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: strKey, Elem: userRef()}, metaWithNamedTypes(), cfg, map[string]bool{})
+	require.True(t, ok)
+	assert.Equal(t, &Schema{Type: "object", AdditionalProperties: userArrayItems}, s)
+
+	// Deferred forms: generic instantiation, non-string-keyed map, alias leaf, nil.
 	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, metaWithNamedTypes(), cfg, map[string]bool{})
 	assert.False(t, ok)
-	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, Elem: userRef()}, metaWithNamedTypes(), cfg, map[string]bool{})
-	assert.False(t, ok)
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "int"}, Elem: userRef()}, metaWithNamedTypes(), cfg, map[string]bool{})
+	assert.False(t, ok) // non-string key → defer
 	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}}, metaWithNamedTypes(), cfg, map[string]bool{})
 	assert.False(t, ok) // alias leaf → defer
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: strKey, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}}, metaWithNamedTypes(), cfg, map[string]bool{})
+	assert.False(t, ok) // map with a deferring (alias) value → defer
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefFunc}, metaWithNamedTypes(), cfg, map[string]bool{})
+	assert.False(t, ok) // func/chan/basic → string path
 	_, _, ok = schemaForRefTree(map[string]*Schema{}, nil, metaWithNamedTypes(), cfg, map[string]bool{})
 	assert.False(t, ok)
 }

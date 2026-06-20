@@ -2620,8 +2620,19 @@ func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta 
 		s := &Schema{Type: "array", Items: items}
 		setFixedArrayLen(s, ref)
 		return s, schemas, true
+	case metadata.RefMap:
+		// Only string-keyed maps map cleanly to an OpenAPI object (matching
+		// schemaFromTypeRef and the string path); others defer.
+		if !isStringRef(ref.Key) {
+			return nil, nil, false
+		}
+		val, schemas, ok := schemaForRefTree(usedTypes, ref.Elem, meta, cfg, visitedTypes)
+		if !ok || val == nil {
+			return nil, nil, false
+		}
+		return &Schema{Type: "object", AdditionalProperties: val}, schemas, true
 	default:
-		return nil, nil, false // map / func / chan / basic → string path
+		return nil, nil, false // func / chan / basic → string path
 	}
 }
 
