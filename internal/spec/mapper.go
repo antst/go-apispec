@@ -2633,13 +2633,23 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 		if s := schemaFromTypeRef(ref); s != nil {
 			return s, map[string]*Schema{}
 		}
-		// Walk the tree for a named struct leaf, optionally wrapped in
-		// pointers/slices/arrays — looking metadata types up by the ref's own
+		// A caller that pre-resolved an alias/enum field to its underlying type
+		// (generateStructSchema's resolveUnderlyingType step) passes that underlying
+		// as goType while ref still names the alias. The underlying is the answer —
+		// resolve it structurally (inline, no component) and let the caller apply the
+		// field's enum, instead of fabricating a component for the alias.
+		if goType != "" && goType != ref.String() {
+			if pref := metadata.ParseTypeRef(goType); pref != nil {
+				if s := schemaFromTypeRef(pref); s != nil {
+					return s, map[string]*Schema{}
+				}
+			}
+		}
+		// Walk the tree for a named leaf, optionally wrapped in
+		// pointers/slices/arrays/maps — looking metadata types up by the ref's own
 		// Pkg/Name (no string parsing) and reusing the shared component machinery.
-		// schemaForRefTree defers (string path) for generics, maps, and alias/enum
-		// leaves, which the string path resolves with behaviour this does not
-		// reproduce yet.
-		if s, ns, ok := schemaForRefTree(usedTypes, ref, meta, cfg, visitedTypes); ok {
+		// schemaForRefTree defers (string path) only for generic instantiations.
+		if s, ns, ok := schemaForRefTree(usedTypes, ref, false, meta, cfg, visitedTypes); ok {
 			return s, ns
 		}
 		// The flattened string can be empty where getTypeName has a gap — most
@@ -2650,23 +2660,8 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 			goType = ref.String()
 		}
 	} else if goType != "" {
-		// String-only caller (no TypeRef): recover one by parsing the string so the
-		// structural and named cases resolve on the tree instead of the string
-		// generator. A direct named type registers under the ORIGINAL goType string
-		// (which may carry the metadata "-->" separator), so a consumer that looks
-		// the component up by that exact key — field-format inference — still finds
-		// it. Alias/generic/config leaves fall through regardless.
-		if pref := metadata.ParseTypeRef(goType); pref != nil {
-			if s := schemaFromTypeRef(pref); s != nil {
-				return s, map[string]*Schema{}
-			}
-			if pref.Kind == metadata.RefNamed && len(pref.Args) == 0 {
-				if s, ns, ok := schemaForNamedRef(usedTypes, pref, goType, meta, cfg, visitedTypes); ok {
-					return s, ns
-				}
-			} else if s, ns, ok := schemaForRefTree(usedTypes, pref, meta, cfg, visitedTypes); ok {
-				return s, ns
-			}
+		if s, ns, ok := schemaFromParsedString(usedTypes, goType, meta, cfg, visitedTypes); ok {
+			return s, ns
 		}
 	}
 	s, newSchemas := mapGoTypeToOpenAPISchema(usedTypes, goType, meta, cfg, visitedTypes)
@@ -2678,31 +2673,61 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 	return s, newSchemas
 }
 
+// schemaFromParsedString resolves a string-only caller's type (no TypeRef) by
+// parsing it back into a TypeRef and walking the tree, so its structural and named
+// cases bypass the string generator. A direct named type registers under the
+// ORIGINAL goType string (which may carry the metadata "-->" separator) so a
+// consumer that looks the component up by that exact key — field-format inference —
+// still finds it. Returns ok=false (defer to the string generator) for generic and
+// otherwise-unresolved leaves.
+func schemaFromParsedString(usedTypes map[string]*Schema, goType string, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
+	pref := metadata.ParseTypeRef(goType)
+	if pref == nil {
+		return nil, nil, false
+	}
+	if s := schemaFromTypeRef(pref); s != nil {
+		return s, map[string]*Schema{}, true
+	}
+	if pref.Kind == metadata.RefNamed && len(pref.Args) == 0 {
+		return schemaForNamedRef(usedTypes, pref, goType, meta, cfg, visitedTypes)
+	}
+	return schemaForRefTree(usedTypes, pref, false, meta, cfg, visitedTypes)
+}
+
 // schemaForRefTree walks a TypeRef whose leaf is a named struct — directly or
 // wrapped in pointers (transparent to the schema), slices, or fixed arrays — and
 // builds the schema from the tree, reusing schemaForNamedRef for the leaf. It is
 // the recursive completion of schemaFromTypeRef for the cases that need metadata
 // lookup and component generation (which the pure schemaFromTypeRef cannot do).
 //
-// It returns ok=false (deferring to the string path) for anything it does not yet
-// reproduce byte-for-byte: generic instantiations, maps, and alias/enum leaves
-// (the string path applies inline alias resolution and element enum detection).
+// It returns ok=false (deferring to the string path) for generic instantiations.
 // schemaFromTypeRef already handled every primitive-leaf container before this is
-// reached, so the slice/array cases here only ever wrap a named leaf.
-func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
+// reached, so the slice/array/map cases here only ever wrap a named leaf.
+//
+// inlineAlias selects the string path's path-dependent alias behaviour: a slice,
+// array, or map ELEMENT that is an alias-to-primitive is resolved inline (its
+// underlying primitive plus any enum), while a DIRECT alias (top level, or behind
+// a transparent pointer) is componentized via schemaForNamedRef. The flag is set
+// only when descending into a slice/array/map element.
+func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, inlineAlias bool, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
 	if ref == nil {
 		return nil, nil, false
 	}
 	switch ref.Kind {
 	case metadata.RefPointer:
-		return schemaForRefTree(usedTypes, ref.Elem, meta, cfg, visitedTypes) // transparent
+		return schemaForRefTree(usedTypes, ref.Elem, inlineAlias, meta, cfg, visitedTypes) // transparent
 	case metadata.RefNamed:
 		if len(ref.Args) != 0 {
 			return nil, nil, false // generic instantiation → string path
 		}
+		if inlineAlias {
+			if s := aliasInlineSchema(ref, meta); s != nil {
+				return s, map[string]*Schema{}, true
+			}
+		}
 		return schemaForNamedRef(usedTypes, ref, "", meta, cfg, visitedTypes)
 	case metadata.RefSlice, metadata.RefArray:
-		items, schemas, ok := schemaForRefTree(usedTypes, ref.Elem, meta, cfg, visitedTypes)
+		items, schemas, ok := schemaForRefTree(usedTypes, ref.Elem, true, meta, cfg, visitedTypes)
 		if !ok || items == nil {
 			return nil, nil, false
 		}
@@ -2715,7 +2740,7 @@ func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta 
 		if !isStringRef(ref.Key) {
 			return nil, nil, false
 		}
-		val, schemas, ok := schemaForRefTree(usedTypes, ref.Elem, meta, cfg, visitedTypes)
+		val, schemas, ok := schemaForRefTree(usedTypes, ref.Elem, true, meta, cfg, visitedTypes)
 		if !ok || val == nil {
 			return nil, nil, false
 		}
@@ -2723,6 +2748,30 @@ func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, meta 
 	default:
 		return nil, nil, false // func / chan / basic → string path
 	}
+}
+
+// aliasInlineSchema resolves a named alias-to-primitive to its inline schema — the
+// underlying primitive plus any enum constants — mirroring how the string path
+// inlines an alias element of a slice/array/map (resolveUnderlyingType +
+// detectEnumFromConstants). Returns nil for non-alias refs and aliases whose
+// underlying is not a primitive (those still componentize).
+func aliasInlineSchema(ref *metadata.TypeRef, meta *metadata.Metadata) *Schema {
+	typ := typeByRef(ref, meta)
+	if typ == nil || getStringFromPool(meta, typ.Kind) != "alias" {
+		return nil
+	}
+	underlying := getStringFromPool(meta, typ.Target)
+	if !metadata.IsPrimitiveType(underlying) {
+		return nil
+	}
+	s := schemaFromTypeRef(metadata.ParseTypeRef(underlying))
+	if s == nil {
+		return nil
+	}
+	if vals := detectEnumFromConstants(ref.String(), ref.Pkg, meta); len(vals) > 0 {
+		s.Enum = vals
+	}
+	return s
 }
 
 // schemaForNamedRef resolves a direct, non-generic named TypeRef to its schema by
@@ -2767,13 +2816,15 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 	if typ == nil {
 		return nil, nil, false // external/unfound: string path emits the short-named $ref
 	}
-	// Only structs are resolved on the tree here. An alias/enum field is resolved
-	// to its underlying type INLINE by the caller (resolveUnderlyingType in
-	// generateStructSchema) before this point — so goType arriving here is already
-	// the underlying primitive; deferring keeps that inline-with-enum result
-	// instead of fabricating a component $ref. Interface and other kinds likewise
-	// defer to the string path's handling (internal-alias tree resolution is T009).
-	if getStringFromPool(meta, typ.Kind) != "struct" {
+	// struct, alias, and interface kinds all resolve here via generateSchemaFromType
+	// (which dispatches to generateStructSchema / generateAliasSchema /
+	// generateInterfaceSchema). A DIRECT alias componentizes; an alias ELEMENT of a
+	// container was inlined upstream by schemaForRefTree (aliasInlineSchema) and
+	// never reaches this point. An alias FIELD was pre-resolved to its underlying by
+	// the caller, which schemaForType handles before calling here.
+	switch getStringFromPool(meta, typ.Kind) {
+	case "struct", "alias", "interface":
+	default:
 		return nil, nil, false
 	}
 

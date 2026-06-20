@@ -202,6 +202,27 @@ func TestBodyTypeFromMetadataRef(t *testing.T) {
 	assert.Equal(t, "", bodyTypeFromMetadataRef(nil, meta, &APISpecConfig{}))
 }
 
+// TestAliasInlineSchema covers the inline resolution of an alias-to-primitive
+// (used for slice/map/array elements), and the cases that defer to componentizing.
+func TestAliasInlineSchema(t *testing.T) {
+	meta := metaWithNamedTypes() // Status = alias→string, User = struct
+	sp := meta.StringPool
+	// Add an alias whose underlying is NOT primitive (alias→struct).
+	meta.Packages["main"].Files["types.go"].Types["Wrapper"] = &metadata.Type{
+		Name: sp.Get("Wrapper"), Kind: sp.Get("alias"), Target: sp.Get("main.User"),
+	}
+
+	// Alias→primitive → inline schema of the underlying.
+	assert.Equal(t, &Schema{Type: "string"},
+		aliasInlineSchema(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}, meta))
+	// Non-alias (struct) → nil (componentizes elsewhere).
+	assert.Nil(t, aliasInlineSchema(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User"}, meta))
+	// Alias→non-primitive → nil (componentizes).
+	assert.Nil(t, aliasInlineSchema(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Wrapper"}, meta))
+	// Unresolved → nil.
+	assert.Nil(t, aliasInlineSchema(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Missing"}, meta))
+}
+
 // TestTypeByRef covers the tree-based metadata lookup that replaces
 // typeByName(TypeParts(string)) on the named-type path.
 func TestTypeByRef(t *testing.T) {
@@ -244,9 +265,11 @@ func TestSchemaForNamedRef(t *testing.T) {
 	assert.Equal(t, refComponentsSchemasPrefix+"main.User", s.Ref)
 	assert.Contains(t, schemas, "main.User")
 
-	// Alias → deferred (ok=false): the caller's inline-resolved primitive wins.
+	// Direct alias → componentizes via generateAliasSchema (the underlying primitive
+	// as a named component). An alias FIELD is pre-resolved upstream so it never
+	// reaches here; an alias container ELEMENT is inlined by schemaForRefTree.
 	_, _, ok = schemaForNamedRef(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}, "", meta, &APISpecConfig{}, map[string]bool{})
-	assert.False(t, ok)
+	assert.True(t, ok)
 
 	// Not found → deferred (string path emits the short-named external $ref).
 	_, _, ok = schemaForNamedRef(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Missing"}, "", meta, &APISpecConfig{}, map[string]bool{})
@@ -283,38 +306,45 @@ func TestSchemaForRefTree(t *testing.T) {
 	userArrayItems := &Schema{Ref: refComponentsSchemasPrefix + "main.User"}
 
 	// []User → {array, items:$ref}.
-	s, _, ok := schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefSlice, Elem: userRef()}, metaWithNamedTypes(), cfg, map[string]bool{})
+	s, _, ok := schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefSlice, Elem: userRef()}, false, metaWithNamedTypes(), cfg, map[string]bool{})
 	require.True(t, ok)
 	assert.Equal(t, &Schema{Type: "array", Items: userArrayItems}, s)
 
 	// [3]User → {array, items:$ref, minItems==maxItems==3}.
-	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefArray, Len: 3, Elem: userRef()}, metaWithNamedTypes(), cfg, map[string]bool{})
+	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefArray, Len: 3, Elem: userRef()}, false, metaWithNamedTypes(), cfg, map[string]bool{})
 	require.True(t, ok)
 	assert.Equal(t, &Schema{Type: "array", Items: userArrayItems, MinItems: 3, MaxItems: 3}, s)
 
 	// []*User → pointer is transparent, same as []User.
-	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefPointer, Elem: userRef()}}, metaWithNamedTypes(), cfg, map[string]bool{})
+	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefPointer, Elem: userRef()}}, false, metaWithNamedTypes(), cfg, map[string]bool{})
 	require.True(t, ok)
 	assert.Equal(t, &Schema{Type: "array", Items: userArrayItems}, s)
 
 	// map[string]User → {object, additionalProperties:$ref}.
 	strKey := &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}
-	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: strKey, Elem: userRef()}, metaWithNamedTypes(), cfg, map[string]bool{})
+	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: strKey, Elem: userRef()}, false, metaWithNamedTypes(), cfg, map[string]bool{})
 	require.True(t, ok)
 	assert.Equal(t, &Schema{Type: "object", AdditionalProperties: userArrayItems}, s)
 
 	// Deferred forms: generic instantiation, non-string-keyed map, alias leaf, nil.
-	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, metaWithNamedTypes(), cfg, map[string]bool{})
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "User", Args: []*metadata.TypeRef{{Kind: metadata.RefBasic, Name: "int"}}}, false, metaWithNamedTypes(), cfg, map[string]bool{})
 	assert.False(t, ok)
-	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "int"}, Elem: userRef()}, metaWithNamedTypes(), cfg, map[string]bool{})
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "int"}, Elem: userRef()}, false, metaWithNamedTypes(), cfg, map[string]bool{})
 	assert.False(t, ok) // non-string key → defer
-	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}}, metaWithNamedTypes(), cfg, map[string]bool{})
-	assert.False(t, ok) // alias leaf → defer
-	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: strKey, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}}, metaWithNamedTypes(), cfg, map[string]bool{})
-	assert.False(t, ok) // map with a deferring (alias) value → defer
-	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefFunc}, metaWithNamedTypes(), cfg, map[string]bool{})
+	// A slice/map whose element is an alias-to-primitive INLINES the underlying
+	// (with any enum), rather than componentizing — matching the string path.
+	statusElem := func() *metadata.TypeRef {
+		return &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"}
+	}
+	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefSlice, Elem: statusElem()}, false, metaWithNamedTypes(), cfg, map[string]bool{})
+	require.True(t, ok)
+	assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "string"}}, s)
+	s, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefMap, Key: strKey, Elem: statusElem()}, false, metaWithNamedTypes(), cfg, map[string]bool{})
+	require.True(t, ok)
+	assert.Equal(t, &Schema{Type: "object", AdditionalProperties: &Schema{Type: "string"}}, s)
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, &metadata.TypeRef{Kind: metadata.RefFunc}, false, metaWithNamedTypes(), cfg, map[string]bool{})
 	assert.False(t, ok) // func/chan/basic → string path
-	_, _, ok = schemaForRefTree(map[string]*Schema{}, nil, metaWithNamedTypes(), cfg, map[string]bool{})
+	_, _, ok = schemaForRefTree(map[string]*Schema{}, nil, false, metaWithNamedTypes(), cfg, map[string]bool{})
 	assert.False(t, ok)
 }
 
@@ -332,7 +362,7 @@ func TestSchemaForType_FixedArrayLengthReapplied(t *testing.T) {
 
 	// Fixed array, known length: re-applied.
 	arr := &metadata.TypeRef{Kind: metadata.RefArray, Len: 5, Elem: named()}
-	got, _ := schemaForType(map[string]*Schema{}, "[]string", arr, meta, cfg, nil)
+	got, _ := schemaForType(map[string]*Schema{}, "", arr, meta, cfg, nil)
 	require.NotNil(t, got)
 	assert.Equal(t, "array", got.Type)
 	assert.Equal(t, 5, got.MinItems)
@@ -340,14 +370,14 @@ func TestSchemaForType_FixedArrayLengthReapplied(t *testing.T) {
 
 	// Slice element that also resolves to an array via the string path: no length.
 	sl := &metadata.TypeRef{Kind: metadata.RefSlice, Elem: named()}
-	gotSlice, _ := schemaForType(map[string]*Schema{}, "[]string", sl, meta, cfg, nil)
+	gotSlice, _ := schemaForType(map[string]*Schema{}, "", sl, meta, cfg, nil)
 	require.NotNil(t, gotSlice)
 	assert.Equal(t, 0, gotSlice.MinItems)
 	assert.Equal(t, 0, gotSlice.MaxItems)
 
 	// Inferred-length array ([...]T, Len -1): no constraint (Len < 0 guard).
 	inferred := &metadata.TypeRef{Kind: metadata.RefArray, Len: -1, Elem: named()}
-	gotInf, _ := schemaForType(map[string]*Schema{}, "[]string", inferred, meta, cfg, nil)
+	gotInf, _ := schemaForType(map[string]*Schema{}, "", inferred, meta, cfg, nil)
 	require.NotNil(t, gotInf)
 	assert.Equal(t, 0, gotInf.MinItems)
 	assert.Equal(t, 0, gotInf.MaxItems)
