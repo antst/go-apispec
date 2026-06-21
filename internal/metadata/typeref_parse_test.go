@@ -59,6 +59,29 @@ func TestParseTypeRef_RoundTrip(t *testing.T) {
 		t.Error("empty should be nil")
 	}
 
+	// SubstituteParams replaces RefParam nodes by name, including nested ones.
+	user := &TypeRef{Kind: RefNamed, Pkg: "main", Name: "User"}
+	order := &TypeRef{Kind: RefNamed, Pkg: "main", Name: "Order"}
+	binds := map[string]*TypeRef{"K": user, "V": order}
+	sub := func(in *TypeRef, want string) {
+		if got := in.SubstituteParams(binds).String(); got != want {
+			t.Errorf("SubstituteParams(%s) = %q, want %q", in.String(), got, want)
+		}
+	}
+	sub(&TypeRef{Kind: RefParam, Name: "K"}, "main.User")                                     // direct
+	sub(&TypeRef{Kind: RefSlice, Elem: &TypeRef{Kind: RefParam, Name: "K"}}, "[]main.User")   // []K
+	sub(&TypeRef{Kind: RefPointer, Elem: &TypeRef{Kind: RefParam, Name: "V"}}, "*main.Order") // *V
+	sub(&TypeRef{Kind: RefMap, Key: &TypeRef{Kind: RefParam, Name: "K"}, Elem: &TypeRef{Kind: RefParam, Name: "V"}}, "map[main.User]main.Order")
+	sub(&TypeRef{Kind: RefNamed, Name: "Outer", Args: []*TypeRef{{Kind: RefParam, Name: "K"}}}, "Outer[main.User]") // generic Args
+	sub(&TypeRef{Kind: RefParam, Name: "Z"}, "Z")                                                                   // unbound param preserved
+	sub(&TypeRef{Kind: RefBasic, Name: "int"}, "int")                                                               // non-param preserved
+	if (&TypeRef{Kind: RefParam, Name: "K"}).SubstituteParams(nil).Kind != RefParam {
+		t.Error("SubstituteParams with no bindings should be a no-op")
+	}
+	if (*TypeRef)(nil).SubstituteParams(binds) != nil {
+		t.Error("SubstituteParams(nil) should be nil")
+	}
+
 	// NamedLeaf unwraps containers to the named/basic leaf.
 	check := func(in, wantLeaf string) {
 		if leaf := ParseTypeRef(in).NamedLeaf(); leaf == nil || leaf.String() != wantLeaf {

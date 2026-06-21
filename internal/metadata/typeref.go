@@ -386,6 +386,34 @@ func (t *TypeRef) Qualify(pkg string) {
 	}
 }
 
+// SubstituteParams returns a copy of the tree with every RefParam node replaced by
+// its binding (keyed by parameter name); unbound params and all other nodes are
+// preserved. Used to instantiate a generic struct's field types with the concrete
+// type arguments — e.g. a field []K under bindings{K: User} becomes []User,
+// including params nested inside Elem/Key/Args (decision D3). A no-op when there
+// are no bindings.
+func (t *TypeRef) SubstituteParams(bindings map[string]*TypeRef) *TypeRef {
+	if t == nil || len(bindings) == 0 {
+		return t
+	}
+	if t.Kind == RefParam {
+		if b, ok := bindings[t.Name]; ok {
+			return b
+		}
+		return t
+	}
+	c := *t
+	c.Elem = t.Elem.SubstituteParams(bindings)
+	c.Key = t.Key.SubstituteParams(bindings)
+	if t.Args != nil {
+		c.Args = make([]*TypeRef, len(t.Args))
+		for i, a := range t.Args {
+			c.Args[i] = a.SubstituteParams(bindings)
+		}
+	}
+	return &c
+}
+
 // NamedLeaf unwraps pointer, slice, array, and map wrappers and returns the first
 // non-container node — the named/basic leaf a container ultimately holds (the map
 // value for a map). Returns the receiver for a leaf, nil for nil.

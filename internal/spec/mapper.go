@@ -821,20 +821,6 @@ func generateComponentSchemas(meta *metadata.Metadata, cfg *APISpecConfig, route
 	return components
 }
 
-// fieldTypeString returns the type string the schema pipeline works from,
-// preferring the lossless field.TypeRef (which preserves fixed-array lengths,
-// full package paths, multi-parameter generics, and interface/struct shapes)
-// over getTypeName's lossy flattened field.Type. Falls back to field.Type when
-// no TypeRef was built at analysis time. This is the field-path step of retiring
-// getTypeName from schema derivation (T011).
-// fieldTypeString returns the field's schema type from its lossless TypeRef.
-// Every struct field carries one (enforced by TestEveryStructFieldHasTypeRef), so
-// there is no getTypeName fallback; TypeRef.String() is "" only for a nil ref,
-// which the guard test forbids.
-func fieldTypeString(field metadata.Field) string {
-	return field.TypeRef.String()
-}
-
 // variableTypeString returns a variable's declared type, preferring the lossless
 // TypeRef and falling back to the getTypeName string only for an untyped
 // declaration (which carries no TypeRef).
@@ -1100,13 +1086,14 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 	schemas := map[string]*Schema{}
 
 	// The instantiation's concrete type arguments come straight off the parsed
-	// TypeRef (keyRef.Args), replacing TypeParts' string-split. Each is bound to the
-	// DECLARED type-parameter name (typ.TypeParams) — so Pair[K,V] substitutes K and
-	// V, not the positional T/U/V — falling back to the positional placeholder when
-	// the declared names are unavailable or fewer than the args (decision D3;
-	// FR-009/T019).
+	// TypeRef (keyRef.Args). Each is bound to the DECLARED type-parameter name
+	// (typ.TypeParams) — so Pair[K,V] binds K and V, not the positional T/U/V —
+	// falling back to the positional placeholder when the declared names are
+	// unavailable or fewer than the args (decision D3; FR-009/T019). Field types are
+	// then instantiated by substituting these bindings into each field's TypeRef
+	// (SubstituteParams), replacing the former string-pattern substitution.
 	keyRef := metadata.ParseTypeRef(key)
-	genericTypes := map[string]string{}
+	genericRefs := map[string]*metadata.TypeRef{}
 	if keyRef != nil && len(keyRef.Args) > 0 {
 		positional := []string{"T", "U", "V", "W", "X", "Y", "Z"}
 		for i, arg := range keyRef.Args {
@@ -1117,7 +1104,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			if i < len(typ.TypeParams) {
 				name = typ.TypeParams[i]
 			}
-			genericTypes[name] = arg.String()
+			genericRefs[name] = arg
 		}
 	}
 
@@ -1137,7 +1124,11 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 
 	for _, field := range typ.Fields {
 		fieldName := getStringFromPool(meta, field.Name)
-		fieldType := fieldTypeString(field)
+		// Instantiate the field's type by substituting the generic bindings into its
+		// TypeRef (a no-op for a non-generic struct), then work from the resulting
+		// canonical string and ref.
+		fieldRef := field.TypeRef.SubstituteParams(genericRefs)
+		fieldType := fieldRef.String()
 
 		// `_ struct{} `apispec:"..."`` is the convention for struct-level
 		// hints — it never serializes (zero-sized + unexported) but its tag
@@ -1152,33 +1143,6 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 		if fieldName == "_" {
 			structLevelTag = mergeStructLevelTag(structLevelTag, parseAPISpecTag(getStringFromPool(meta, field.Tag)))
 			continue
-		}
-
-		if genericType, ok := genericTypes[fieldType]; ok {
-			fieldType = genericType
-		} else {
-			// Substitute type params inside container types: []T, *T, map[K]V
-			// Only match when param is a complete token (not substring of another type).
-			for param, concrete := range genericTypes {
-				// Check common container patterns
-				if strings.HasPrefix(fieldType, "[]"+param) {
-					fieldType = "[]" + concrete + fieldType[2+len(param):]
-					break
-				}
-				if strings.HasPrefix(fieldType, "*"+param) {
-					fieldType = "*" + concrete + fieldType[1+len(param):]
-					break
-				}
-				if strings.HasPrefix(fieldType, "map["+param+"]") {
-					fieldType = "map[" + concrete + "]" + fieldType[4+len(param):]
-					break
-				}
-				// map value: map[X]T
-				if strings.Contains(fieldType, "]"+param) && strings.HasPrefix(fieldType, "map[") {
-					fieldType = strings.Replace(fieldType, "]"+param, "]"+concrete, 1)
-					break
-				}
-			}
 		}
 
 		// Check if fieldType is an alias/enum and resolve to underlying type
@@ -1217,7 +1181,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			// ([]struct{...}, [N]struct{...}), NestedType holds the element type;
 			// wrap the object back into an array so the items describe its
 			// properties. A fixed array also carries its length (decision D5/D7).
-			if ref := field.TypeRef; ref != nil && fieldSchema != nil &&
+			if ref := fieldRef; ref != nil && fieldSchema != nil &&
 				(ref.Kind == metadata.RefSlice || ref.Kind == metadata.RefArray) {
 				fieldSchema = &Schema{Type: "array", Items: fieldSchema}
 				setFixedArrayLen(fieldSchema, ref)
@@ -1248,7 +1212,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 				schemas[derivedFieldType] = bodySchema
 				markUsedType(usedTypes, derivedFieldType, bodySchema)
 			} else {
-				fieldSchema, newSchemas = schemaForType(usedTypes, derivedFieldType, field.TypeRef, meta, cfg, visitedTypes)
+				fieldSchema, newSchemas = schemaForType(usedTypes, derivedFieldType, fieldRef, meta, cfg, visitedTypes)
 				if canAddRefSchemaForType(derivedFieldType) {
 					schemas[derivedFieldType] = fieldSchema
 					fieldSchema = addRefSchemaForType(derivedFieldType)
@@ -1284,7 +1248,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 		// Only apply enum detection for custom types (not built-in types)
 		if fieldSchema != nil && len(fieldSchema.Enum) == 0 {
 			// Use the original field type before resolution for enum detection
-			originalFieldType := fieldTypeString(field)
+			originalFieldType := fieldRef.String()
 
 			// Only detect enums for custom types, not built-in types like string, int, etc.
 			if !metadata.IsPrimitiveType(originalFieldType) {
