@@ -1397,63 +1397,33 @@ func generateAliasSchema(usedTypes map[string]*Schema, typ *metadata.Type, meta 
 	return schema, schemas
 }
 
-// resolveUnderlyingType resolves the underlying type for alias/enum types
+// resolveUnderlyingType resolves an alias/enum type to its underlying type,
+// keyed on the parsed TypeRef (T009) rather than string-prefix stripping: it
+// unwraps slice/array/pointer wrappers to the named leaf, resolves that leaf via
+// typeByRef, and re-applies the outermost wrapper to the alias target. Returns ""
+// for non-alias or unresolved leaves.
 func resolveUnderlyingType(typeName string, meta *metadata.Metadata) string {
 	if meta == nil {
 		return ""
 	}
-
-	var hasArrayPrefix, hasMapPrefix, hasSlicePrefix, hasStarPrefix bool
-
-	if after, ok := strings.CutPrefix(typeName, "[]"); ok {
-		typeName = after
-		hasArrayPrefix = true
-	}
-	if after, ok := strings.CutPrefix(typeName, "map["); ok {
-		typeName = after
-		hasMapPrefix = true
-	}
-	if after, ok := strings.CutPrefix(typeName, "[]"); ok {
-		typeName = after
-		hasSlicePrefix = true
-	}
-	if after, ok := strings.CutPrefix(typeName, "*"); ok {
-		typeName = after
-		hasStarPrefix = true
-	}
-
-	// Find the type in metadata
-	typs := findTypesInMetadata(meta, typeName)
-	if len(typs) == 0 {
+	ref := metadata.ParseTypeRef(typeName)
+	leaf := ref.NamedLeaf()
+	if leaf == nil || leaf.Kind != metadata.RefNamed {
 		return ""
 	}
-
-	for _, typ := range typs {
-		if typ == nil {
-			continue
-		}
-
-		kind := getStringFromPool(meta, typ.Kind)
-		if kind == "alias" {
-			// Return the underlying type for alias types (like enums)
-			underlyingType := getStringFromPool(meta, typ.Target)
-			if hasArrayPrefix {
-				return "[]" + underlyingType
-			}
-			if hasMapPrefix {
-				return "map[" + underlyingType + "]" + underlyingType
-			}
-			if hasSlicePrefix {
-				return "[]" + underlyingType
-			}
-			if hasStarPrefix {
-				return "*" + underlyingType
-			}
-			return underlyingType
-		}
+	typ := typeByRef(leaf, meta)
+	if typ == nil || getStringFromPool(meta, typ.Kind) != "alias" {
+		return ""
 	}
-
-	return ""
+	underlying := getStringFromPool(meta, typ.Target)
+	switch ref.Kind {
+	case metadata.RefSlice, metadata.RefArray:
+		return "[]" + underlying
+	case metadata.RefPointer:
+		return "*" + underlying
+	default:
+		return underlying
+	}
 }
 
 func markUsedType(usedTypes map[string]*Schema, typeName string, markValue *Schema) bool {
