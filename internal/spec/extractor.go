@@ -1806,7 +1806,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		// prefer the lossless TypeRef string: its canonical fully-qualified form is
 		// what the field path uses, so the body references the same component. A
 		// literal needs no origin tracing, so taking it here is safe; external types
-		// (not in metadata) keep the string path's short alias (T009/T011).
+		// (not in metadata) keep their existing short-alias form (T009/T011).
 		if arg.GetKind() == metadata.KindCompositeLit && arg.TypeRef != nil && route.Metadata != nil {
 			if s := bodyTypeFromMetadataRef(arg.TypeRef, route.Metadata, r.cfg); s != "" {
 				bodyType = s

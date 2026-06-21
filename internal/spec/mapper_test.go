@@ -367,7 +367,7 @@ func TestMapGoTypeToOpenAPISchema_ExternalTypes(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
 			result, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if !reflect.DeepEqual(result, tt.expected) {
-				t.Errorf("mapGoTypeToOpenAPISchema() = %v, want %v", result, tt.expected)
+				t.Errorf("schemaForType() = %v, want %v", result, tt.expected)
 			}
 		})
 	}
@@ -1457,10 +1457,10 @@ func TestResolveUnderlyingType_CircularReference(t *testing.T) {
 	}
 }
 
-// TestMapGoTypeToOpenAPISchema_DeepCircularReference tests that mapGoTypeToOpenAPISchema
-// doesn't cause stack overflow when dealing with deep circular type references
-func TestMapGoTypeToOpenAPISchema_DeepCircularReference(t *testing.T) {
-	defer RecoverFromPanic(t, "TestMapGoTypeToOpenAPISchema_DeepCircularReference")
+// TestSchemaForType_DeepCircularReference tests that schemaForType doesn't cause
+// stack overflow when dealing with deep circular type references
+func TestSchemaForType_DeepCircularReference(t *testing.T) {
+	defer RecoverFromPanic(t, "TestSchemaForType_DeepCircularReference")
 
 	stringPool := metadata.NewStringPool()
 	meta := &metadata.Metadata{

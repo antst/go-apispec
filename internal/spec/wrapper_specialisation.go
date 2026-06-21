@@ -248,7 +248,7 @@ func specialiseWrapperSchema(baseSchema *Schema, overrides []wrapperFieldOverrid
 		if propSchema == nil {
 			continue
 		}
-		// mapGoTypeToOpenAPISchema returns the payload's $ref in propSchema but
+		// schemaForType returns the payload's $ref in propSchema but
 		// hands its freshly discovered component definitions back in
 		// `discovered` — the caller is responsible for registering them, or the
 		// `data` $ref we just produced can point at a component nothing ever

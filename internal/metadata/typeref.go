@@ -433,7 +433,8 @@ func (t *TypeRef) NamedLeaf() *TypeRef {
 //
 // This lets every remaining string-only producer (origin-traced body/param
 // types, alias targets, config and wrapper-override type strings) reach the
-// TypeRef tree, so the string-based schema generator can be retired.
+// TypeRef tree, so the string-based schema generator could be retired and every
+// schema now derives from the tree.
 //
 //nolint:gocyclo // one case per type-syntax form; a flat dispatch is clearest here
 func ParseTypeRef(s string) *TypeRef {

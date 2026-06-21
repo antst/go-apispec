@@ -18,11 +18,11 @@ import "testing"
 
 // TestEveryStructFieldHasTypeRef is the regression guard for the getTypeName
 // retirement: across the whole fixture corpus, every struct field must carry a
-// structured TypeRef. The schema pipeline derives field types from TypeRef
-// (fieldTypeString); a nil TypeRef would silently fall back to the lossy
-// getTypeName string, re-opening the gap this migration closed. If this ever
-// fails, a producer stopped attaching a TypeRef — fix the producer, do not widen
-// the fallback.
+// structured TypeRef. generateStructSchema derives field types from
+// field.TypeRef; a nil TypeRef would fall back to parsing the lossy
+// getTypeName-derived field.Type string, re-opening the gap this migration
+// closed. If this ever fails, a producer stopped attaching a TypeRef — fix the
+// producer, do not rely on the fallback.
 func TestEveryStructFieldHasTypeRef(t *testing.T) {
 	total, missing := 0, 0
 	for _, tc := range allFrameworks(t) {

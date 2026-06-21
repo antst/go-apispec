@@ -322,7 +322,7 @@ func TestSpecialiseWrapperSchema(t *testing.T) {
 			"common.go": {Types: map[string]*metadata.Type{"Envelope": wsEnvelopeType(meta)}},
 		},
 	}
-	// Register the payload type so mapGoTypeToOpenAPISchema discovers a
+	// Register the payload type so schemaForType discovers a
 	// component for it (exercising the discovered-registration loop).
 	meta.Packages["orders"] = &metadata.Package{
 		Files: map[string]*metadata.File{

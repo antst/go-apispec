@@ -549,7 +549,7 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 			// The decode target (&dto) carries a TypeRef whose named leaf is a type
 			// in metadata — its declared type IS the body type, no origin tracing
 			// needed. Use the canonical fully-qualified form (deref'd to match the
-			// string path) so the request body references the same component as a
+			// field path) so the request body references the same component as a
 			// field of that type. Generic/helper decode targets (leaf RefParam) get
 			// "" here and fall through to the resolution chain below (T009/T011).
 			bodyType = strings.TrimPrefix(s, "*")
@@ -1047,7 +1047,7 @@ func (b *BasePatternMatcher) findAssignmentFunction(arg *metadata.CallArgument) 
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
 func (r *RequestPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
-	// Request-specific: trace generic origin via TypeParts before shared logic
+	// Request-specific: trace generic origin through the type-param tree before shared logic
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
 		return resolvedType
 	}
@@ -1064,7 +1064,7 @@ func traceGenericOrigin(node TrackerNodeInterface, originalType string) string {
 	typeParams := node.GetTypeParamMap()
 
 	// The bare type name (a type parameter like T resolves through the call site's
-	// type-param map), obtained from the tree rather than TypeParts. Unwrap any
+	// type-param map), obtained from the tree. Unwrap any
 	// pointer/slice/array so a "*pkg.T" still keys on "T".
 	leaf := metadata.ParseTypeRef(originalType).NamedLeaf()
 	if len(typeParams) > 0 && leaf != nil && leaf.Name != "" {

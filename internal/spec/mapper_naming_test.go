@@ -657,7 +657,7 @@ func TestFindTypesInMetadata_GenericTypeWithBrackets(t *testing.T) {
 		},
 	}
 
-	// TypeParts for "models-->Response[T string]" should parse generics
+	// findTypesInMetadata should resolve the generic "models-->Response[T string]"
 	result := findTypesInMetadata(meta, "models-->Response")
 	require.NotNil(t, result)
 	assert.NotNil(t, result["models-->Response"])

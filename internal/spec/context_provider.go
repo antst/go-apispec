@@ -88,7 +88,7 @@ func (c *ContextProviderImpl) typeNameFromExpr(typeArg *metadata.CallArgument) s
 	default:
 		return c.callArgToString(typeArg, nil)
 	}
-	// TypeParts' bracket-generic parsing keys off the "." separator, so render
+	// ParseTypeRef's bracket-generic parsing keys off the "." separator, so render
 	// the base/args with "." rather than the internal TypeSep.
 	base := strings.ReplaceAll(c.callArgToString(typeArg.X, nil), TypeSep, ".")
 	if i := strings.IndexByte(base, '['); i >= 0 {

@@ -786,30 +786,6 @@ func TestDetermineLiteralType(t *testing.T) {
 // ---------------------------------------------------------------------------
 // 8. convertPathToOpenAPI
 // ---------------------------------------------------------------------------
-
-func TestQualifyElementType(t *testing.T) {
-	tests := []struct {
-		valueType string
-		pkg       string
-		expected  string
-	}{
-		{"Money", "gap.", "gap.Money"},
-		{"[]Money", "gap.", "[]gap.Money"},
-		{"*Money", "gap.", "*gap.Money"},
-		{"[]*Money", "gap.", "[]*gap.Money"},
-		{"[][]Money", "gap.", "[][]gap.Money"}, // nested slice → qualify base
-		{"string", "gap.", "string"},           // primitive untouched
-		{"int", "gap.", "int"},                 // primitive untouched
-		{"[][]int", "gap.", "[][]int"},         // nested slice of primitive untouched
-		{"other.T", "gap.", "other.T"},         // already qualified untouched
-		{"[]string", "gap.", "[]string"},       // slice of primitive untouched
-		{"", "gap.", ""},                       // empty untouched
-	}
-	for _, tt := range tests {
-		assert.Equal(t, tt.expected, qualifyElementType(tt.valueType, tt.pkg), "valueType=%q", tt.valueType)
-	}
-}
-
 func TestConvertPathToOpenAPI(t *testing.T) {
 	tests := []struct {
 		input    string

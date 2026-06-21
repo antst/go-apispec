@@ -2531,7 +2531,7 @@ func TestApplyValidationConstraints_Format_Mount(t *testing.T) {
 }
 
 // ===========================================================================
-// TypeParts — additional coverage
+// Type-string parsing (ParseTypeRef) — additional coverage
 // ===========================================================================
 // ===========================================================================
 // resolveUnderlyingType — additional coverage
@@ -2613,19 +2613,22 @@ func TestGenerateStructSchema_BasicStruct(t *testing.T) {
 		Kind: sp.Get("struct"),
 		Fields: []metadata.Field{
 			{
-				Name: sp.Get("ID"),
-				Type: sp.Get("int"),
-				Tag:  sp.Get(`json:"id"`),
+				Name:    sp.Get("ID"),
+				Type:    sp.Get("int"),
+				Tag:     sp.Get(`json:"id"`),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "int"},
 			},
 			{
-				Name: sp.Get("Name"),
-				Type: sp.Get("string"),
-				Tag:  sp.Get(`json:"name"`),
+				Name:    sp.Get("Name"),
+				Type:    sp.Get("string"),
+				Tag:     sp.Get(`json:"name"`),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"},
 			},
 			{
-				Name: sp.Get("Email"),
-				Type: sp.Get("string"),
-				Tag:  sp.Get(`json:"email,omitempty"`),
+				Name:    sp.Get("Email"),
+				Type:    sp.Get("string"),
+				Tag:     sp.Get(`json:"email,omitempty"`),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"},
 			},
 		},
 	}
@@ -2761,6 +2764,32 @@ func TestPromoteEmbeddedFields(t *testing.T) {
 	assert.NotEqual(t, "string", schema.Properties["id"].Type)
 }
 
+// TestGenerateStructSchema_FieldWithoutTypeInfo asserts the field-type
+// normalization tolerates a degenerate field that carries neither a TypeRef nor
+// a parseable pooled type string: ParseTypeRef yields nil and the loop must not
+// dereference it (the nil-guard before alias/enum resolution). Production never
+// reaches this — every field carries a TypeRef (TestEveryStructFieldHasTypeRef)
+// — so this is purely a malformed-metadata robustness check.
+func TestGenerateStructSchema_FieldWithoutTypeInfo(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+
+	typ := &metadata.Type{
+		Name: sp.Get("Degenerate"), Pkg: sp.Get("myapp"), Kind: sp.Get("struct"),
+		Fields: []metadata.Field{
+			// No TypeRef and an empty Type string: the bridge parses to nil.
+			{Name: sp.Get("Mystery"), Type: sp.Get(""), Tag: sp.Get(`json:"mystery"`)},
+		},
+	}
+	cfg := &APISpecConfig{Defaults: Defaults{ResponseContentType: "application/json"}}
+
+	schema, _ := generateStructSchema(map[string]*Schema{}, "myapp-->Degenerate", typ, meta, cfg, map[string]bool{})
+
+	require.NotNil(t, schema)
+	assert.Equal(t, "object", schema.Type)
+	assert.Contains(t, schema.Properties, "mystery")
+}
+
 func TestGenerateStructSchema_WithGenericTypes(t *testing.T) {
 	meta := newTestMeta()
 	sp := meta.StringPool
@@ -2877,7 +2906,7 @@ func TestGenerateStructSchema_FieldWithPointerType(t *testing.T) {
 }
 
 // ===========================================================================
-// mapGoTypeToOpenAPISchema — map type, slice type, existing usedTypes reference
+// schemaForType — map type, slice type, existing usedTypes reference
 // ===========================================================================
 
 func TestMapGoTypeToOpenAPISchema_SliceType(t *testing.T) {
@@ -3152,7 +3181,7 @@ func TestGenerateStructSchema_NestedType(t *testing.T) {
 }
 
 // ===========================================================================
-// mapGoTypeToOpenAPISchema — interface{} and any types
+// schemaForType — interface{} and any types
 // ===========================================================================
 
 func TestMapGoTypeToOpenAPISchema_Interface(t *testing.T) {
@@ -3503,7 +3532,7 @@ func TestMapMetadataToOpenAPI_EmptyInfoFallsBack(t *testing.T) {
 }
 
 // ===========================================================================
-// TypeParts — more edge cases
+// Type-string parsing (ParseTypeRef) — more edge cases
 // ===========================================================================
 // ===========================================================================
 // extractEnumValues — with non-const values
@@ -3539,7 +3568,7 @@ func TestCollectUsedTypesFromRoutes_WithRequest(t *testing.T) {
 }
 
 // ===========================================================================
-// mapGoTypeToOpenAPISchema — custom type found in metadata
+// schemaForType — custom type found in metadata
 // ===========================================================================
 
 func TestMapGoTypeToOpenAPISchema_CustomTypeFromMetadata(t *testing.T) {
@@ -3760,7 +3789,7 @@ func TestShortenAllRefs_NilComponents_Mount(_ *testing.T) {
 }
 
 // ===========================================================================
-// mapGoTypeToOpenAPISchema — generic struct instantiation (lines 1938-1950)
+// schemaForType — generic struct instantiation
 // ===========================================================================
 
 func TestMapGoTypeToOpenAPISchema_GenericStruct(t *testing.T) {
@@ -3790,7 +3819,7 @@ func TestMapGoTypeToOpenAPISchema_GenericStruct(t *testing.T) {
 	usedTypes := map[string]*Schema{}
 
 	// Generic struct instantiation with bracket syntax (dot separator, not TypeSep)
-	// TypeParts handles "myapp.APIResponse[myapp.User]" format
+	// schemaForType resolves the "myapp.APIResponse[myapp.User]" format via ParseTypeRef
 	schema, _ := schemaForType(usedTypes, "myapp.APIResponse[myapp.User]", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 }
