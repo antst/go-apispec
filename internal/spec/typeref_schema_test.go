@@ -223,6 +223,22 @@ func TestAliasInlineSchema(t *testing.T) {
 	assert.Nil(t, aliasInlineSchema(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Missing"}, meta))
 }
 
+// TestVariableTypeString covers the TypeRef-preferred variable type accessor and
+// its fallback for an untyped (no-TypeRef) declaration.
+func TestVariableTypeString(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{StringPool: sp}
+
+	typed := &metadata.Variable{
+		Type:    sp.Get("main.Status"),
+		TypeRef: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "main", Name: "Status"},
+	}
+	assert.Equal(t, "main.Status", variableTypeString(typed, meta))
+
+	untyped := &metadata.Variable{Type: sp.Get("string")} // no TypeRef
+	assert.Equal(t, "string", variableTypeString(untyped, meta))
+}
+
 // TestSchemaForUnresolved covers schemaForType's terminal fallback: external
 // config, a primitive arriving as a name, a dangling non-primitive ref, and the
 // no-schema cases.

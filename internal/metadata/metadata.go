@@ -1272,6 +1272,7 @@ func processVariables(file *ast.File, info *types.Info, pkgName string, fset *to
 					Pkg:        metadata.StringPool.Get(pkgName),
 					Tok:        metadata.StringPool.Get(tok),
 					Type:       metadata.StringPool.Get(getTypeName(vspec.Type, info)),
+					TypeRef:    TypeRefFromExpr(vspec.Type, info), // Phase 2: structured declared type (nil if untyped)
 					Position:   metadata.StringPool.Get(getVarPosition(name, fset)),
 					Comments:   metadata.StringPool.Get(comments),
 					GroupIndex: groupIndex,

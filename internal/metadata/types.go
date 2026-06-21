@@ -480,6 +480,10 @@ type Variable struct {
 	Position      int         `yaml:"position,omitempty"`
 	Comments      int         `yaml:"comments,omitempty"`
 	GroupIndex    int         `yaml:"group_index,omitempty"` // which const group this belongs to
+
+	// TypeRef is the structured declared type (Phase 2), built from the
+	// declaration's ast.Expr. Nil for an untyped declaration (e.g. `const x = 1`).
+	TypeRef *TypeRef `yaml:"type_ref,omitempty"`
 }
 
 // Selector represents a selector expression

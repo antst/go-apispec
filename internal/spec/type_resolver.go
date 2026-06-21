@@ -153,6 +153,9 @@ func (t *TypeResolverImpl) resolveIdentType(arg metadata.CallArgument) string {
 			for _, file := range pkg.Files {
 				varName := arg.GetName()
 				if variable, exists := file.Variables[varName]; exists {
+					if variable.TypeRef != nil {
+						return variable.TypeRef.String()
+					}
 					return t.getString(variable.Type)
 				}
 			}
@@ -184,6 +187,11 @@ func (t *TypeResolverImpl) resolveSelectorType(arg metadata.CallArgument) string
 					// Find the field
 					for _, field := range typ.Fields {
 						if t.getString(field.Name) == arg.Sel.GetName() {
+							// Prefer the lossless TypeRef (every field carries one —
+							// TestEveryStructFieldHasTypeRef) over the getTypeName string.
+							if field.TypeRef != nil {
+								return field.TypeRef.String()
+							}
 							return t.getString(field.Type)
 						}
 					}

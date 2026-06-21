@@ -319,11 +319,16 @@ func analyzeAssignmentValue(expr ast.Expr, info *types.Info, funcName string, pk
 			_, basePkg, baseType, _ := TraceVariableOrigin(ident.Name, funcName, pkgName, metadata)
 			return basePkg, baseType
 		}
-		// Fallback: just get type name
+		// Fallback: derive the type. Prefer the lossless TypeRef, falling back to
+		// getTypeName only for an expression it cannot model.
 		arg := NewCallArgument(metadata)
 		arg.SetKind(KindIdent)
-		arg.SetType(getTypeName(e, info))
 		arg.TypeRef = TypeRefFromExpr(e, info) // Phase 2: structured type from the AST selector
+		if arg.TypeRef != nil {
+			arg.SetType(arg.TypeRef.String())
+		} else {
+			arg.SetType(getTypeName(e, info))
+		}
 		return pkgName, arg
 
 	case *ast.CallExpr:

@@ -835,6 +835,16 @@ func fieldTypeString(field metadata.Field) string {
 	return field.TypeRef.String()
 }
 
+// variableTypeString returns a variable's declared type, preferring the lossless
+// TypeRef and falling back to the getTypeName string only for an untyped
+// declaration (which carries no TypeRef).
+func variableTypeString(variable *metadata.Variable, meta *metadata.Metadata) string {
+	if variable.TypeRef != nil {
+		return variable.TypeRef.String()
+	}
+	return getStringFromPool(meta, variable.Type)
+}
+
 // majorVersionInPath matches a Go module major-version path segment ("/v2.",
 // "/v3.", …) sitting between an import path and the type name.
 var majorVersionInPath = regexp.MustCompile(`/v[0-9]+\.`)
@@ -1834,7 +1844,7 @@ func detectEnumFromConstants(goType string, pkgName string, meta *metadata.Metad
 		for _, file := range pkg.Files {
 			for _, variable := range file.Variables {
 				if getStringFromPool(meta, variable.Tok) == "const" {
-					varType := getStringFromPool(meta, variable.Type)
+					varType := variableTypeString(variable, meta)
 					resolvedType := getStringFromPool(meta, variable.ResolvedType)
 					varName := getStringFromPool(meta, variable.Name)
 
@@ -2440,7 +2450,7 @@ func isInSameGroupAsTypedConstant(groupIndex int, targetType string, variables m
 	for _, variable := range variables {
 		if getStringFromPool(meta, variable.Tok) == "const" &&
 			variable.GroupIndex == groupIndex {
-			varType := getStringFromPool(meta, variable.Type)
+			varType := variableTypeString(variable, meta)
 			if typeMatches(varType, targetType, meta) {
 				return true
 			}

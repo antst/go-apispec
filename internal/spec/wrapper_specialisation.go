@@ -337,8 +337,13 @@ func wrapperFieldIsGeneric(meta *metadata.Metadata, wrapperType *metadata.Type, 
 		if meta.StringPool.GetString(field.Name) != structFieldName {
 			continue
 		}
-		declared := meta.StringPool.GetString(field.Type)
-		declared = strings.TrimPrefix(declared, "*")
+		// A generic placeholder field is interface{}/any — checked on the TypeRef
+		// (RefInterface, under any pointer) rather than the getTypeName string.
+		if field.TypeRef != nil {
+			leaf := field.TypeRef.NamedLeaf()
+			return leaf != nil && leaf.Kind == metadata.RefInterface
+		}
+		declared := strings.TrimPrefix(meta.StringPool.GetString(field.Type), "*")
 		return declared == "interface{}" || declared == "any"
 	}
 	return false
