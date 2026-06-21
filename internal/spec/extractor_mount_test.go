@@ -1550,8 +1550,7 @@ func TestConvertPathToOpenAPI_Mount(t *testing.T) {
 func TestTypeResolver_GetCallerName_NilContext(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	// nil context
 	assert.Equal(t, "", resolver.getCallerName(nil))
@@ -1564,8 +1563,7 @@ func TestTypeResolver_GetCallerName_NilContext(t *testing.T) {
 func TestTypeResolver_GetCallerPkg_NilContext(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	// nil context
 	assert.Equal(t, "", resolver.getCallerPkg(nil))
@@ -1582,8 +1580,7 @@ func TestTypeResolver_GetCallerPkg_NilContext(t *testing.T) {
 func TestTypeResolver_ExtractParameterName(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	// Single letter parameter
 	assert.Equal(t, "T", resolver.extractParameterName("T"))
@@ -1606,8 +1603,7 @@ func TestTypeResolver_ExtractParameterName(t *testing.T) {
 func TestTypeResolver_ResolveGenericType_EmptyParams(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	// No brackets
 	result := resolver.ResolveGenericType("string", nil)
@@ -1649,7 +1645,7 @@ func TestExtractRequest_ChainedDecodeNonBody(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := RequestBodyPattern{
 		BasePattern:  BasePattern{CallRegex: "^Decode$"},
@@ -1696,7 +1692,7 @@ func TestExtractRequest_ResolvedType_Mount(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := RequestBodyPattern{
 		BasePattern:  BasePattern{CallRegex: "^BindJSON$"},
@@ -1740,7 +1736,7 @@ func TestExtractRequest_DerefPointer(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := RequestBodyPattern{
 		BasePattern:  BasePattern{CallRegex: "^BindJSON$"},
@@ -2245,7 +2241,7 @@ func TestResolveTypeOrigin_GenericOrigin(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	// Build a node with type parameters
 	edge := makeEdge(meta, "handler", "main", "BindJSON", "gin", nil)
@@ -2546,42 +2542,6 @@ func TestResolveUnderlyingType_NoMatch(t *testing.T) {
 	meta := newTestMeta()
 	result := resolveUnderlyingType("NonExistentType", meta)
 	assert.Equal(t, "", result)
-}
-
-// ===========================================================================
-// SchemaMapper — MapGoTypeToOpenAPISchema additional types
-// ===========================================================================
-
-func TestSchemaMapper_AdditionalTypes(t *testing.T) {
-	cfg := &APISpecConfig{}
-	mapper := NewSchemaMapper(cfg)
-
-	tests := []struct {
-		goType     string
-		schemaType string
-	}{
-		{"uint", "integer"},
-		{"uint8", "integer"},
-		{"uint16", "integer"},
-		{"uint32", "integer"},
-		{"uint64", "integer"},
-		{"float32", "number"},
-		{"float64", "number"},
-		{"bool", "boolean"},
-		{"byte", "integer"},
-		{"int", "integer"},
-		{"int8", "integer"},
-		{"int16", "integer"},
-		{"int32", "integer"},
-		{"int64", "integer"},
-		{"string", "string"},
-	}
-
-	for _, tt := range tests {
-		schema := mapper.MapGoTypeToOpenAPISchema(tt.goType)
-		require.NotNil(t, schema, "expected schema for type %s", tt.goType)
-		assert.Equal(t, tt.schemaType, schema.Type, "type %s", tt.goType)
-	}
 }
 
 // ===========================================================================

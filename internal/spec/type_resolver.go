@@ -23,17 +23,15 @@ import (
 
 // TypeResolverImpl implements TypeResolver
 type TypeResolverImpl struct {
-	meta         *metadata.Metadata
-	cfg          *APISpecConfig
-	schemaMapper SchemaMapper
+	meta *metadata.Metadata
+	cfg  *APISpecConfig
 }
 
 // NewTypeResolver creates a new type resolver
-func NewTypeResolver(meta *metadata.Metadata, cfg *APISpecConfig, schemaMapper SchemaMapper) *TypeResolverImpl {
+func NewTypeResolver(meta *metadata.Metadata, cfg *APISpecConfig) *TypeResolverImpl {
 	return &TypeResolverImpl{
-		meta:         meta,
-		cfg:          cfg,
-		schemaMapper: schemaMapper,
+		meta: meta,
+		cfg:  cfg,
 	}
 }
 
@@ -314,11 +312,6 @@ func (t *TypeResolverImpl) resolveMapType(arg metadata.CallArgument) string {
 	valueType := t.resolveTypeFromArgument(*arg.Fun)
 
 	return fmt.Sprintf("map[%s]%s", keyType, valueType)
-}
-
-// MapToOpenAPISchema maps a Go type to OpenAPI schema
-func (t *TypeResolverImpl) MapToOpenAPISchema(goType string) *Schema {
-	return t.schemaMapper.MapGoTypeToOpenAPISchema(goType)
 }
 
 // Helper methods

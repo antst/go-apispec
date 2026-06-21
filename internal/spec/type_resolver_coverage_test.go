@@ -26,8 +26,7 @@ import (
 // helper to build a minimal TypeResolverImpl with a metadata that has a string pool
 func newTestResolver(meta *metadata.Metadata) *TypeResolverImpl {
 	cfg := DefaultAPISpecConfig()
-	schemaMapper := NewSchemaMapper(cfg)
-	return NewTypeResolver(meta, cfg, schemaMapper)
+	return NewTypeResolver(meta, cfg)
 }
 
 func newTypeResolverTestMeta() (*metadata.Metadata, *metadata.StringPool) {
@@ -576,82 +575,6 @@ func TestGenerateParameterName_Index27_WithNumber(t *testing.T) {
 
 	// index 27 => base = 27 % 26 = 1 => 'U', number = 27/26 = 1 => "U1"
 	assert.Equal(t, "U1", resolver.generateParameterName(27))
-}
-
-// ---------------------------------------------------------------------------
-// 7. MapToOpenAPISchema
-// ---------------------------------------------------------------------------
-
-func TestMapToOpenAPISchema_String(t *testing.T) {
-	meta, _ := newTypeResolverTestMeta()
-	resolver := newTestResolver(meta)
-
-	schema := resolver.MapToOpenAPISchema("string")
-	require.NotNil(t, schema)
-	assert.Equal(t, "string", schema.Type)
-}
-
-func TestMapToOpenAPISchema_Int(t *testing.T) {
-	meta, _ := newTypeResolverTestMeta()
-	resolver := newTestResolver(meta)
-
-	schema := resolver.MapToOpenAPISchema("int")
-	require.NotNil(t, schema)
-	assert.Equal(t, "integer", schema.Type)
-}
-
-func TestMapToOpenAPISchema_Bool(t *testing.T) {
-	meta, _ := newTypeResolverTestMeta()
-	resolver := newTestResolver(meta)
-
-	schema := resolver.MapToOpenAPISchema("bool")
-	require.NotNil(t, schema)
-	assert.Equal(t, "boolean", schema.Type)
-}
-
-func TestMapToOpenAPISchema_Float64(t *testing.T) {
-	meta, _ := newTypeResolverTestMeta()
-	resolver := newTestResolver(meta)
-
-	schema := resolver.MapToOpenAPISchema("float64")
-	require.NotNil(t, schema)
-	assert.Equal(t, "number", schema.Type)
-}
-
-func TestMapToOpenAPISchema_TimeTime(t *testing.T) {
-	meta, _ := newTypeResolverTestMeta()
-	resolver := newTestResolver(meta)
-
-	schema := resolver.MapToOpenAPISchema("time.Time")
-	require.NotNil(t, schema)
-	// time.Time is not special-cased, so it becomes a $ref to a schema component
-	assert.Contains(t, schema.Ref, "time.Time")
-}
-
-func TestMapToOpenAPISchema_Byte(t *testing.T) {
-	meta, _ := newTypeResolverTestMeta()
-	resolver := newTestResolver(meta)
-
-	schema := resolver.MapToOpenAPISchema("byte")
-	require.NotNil(t, schema)
-	assert.Equal(t, "integer", schema.Type)
-}
-
-func TestMapToOpenAPISchema_EmptyString(t *testing.T) {
-	meta, _ := newTypeResolverTestMeta()
-	resolver := newTestResolver(meta)
-
-	schema := resolver.MapToOpenAPISchema("")
-	assert.Nil(t, schema)
-}
-
-func TestMapToOpenAPISchema_InterfaceType(t *testing.T) {
-	meta, _ := newTypeResolverTestMeta()
-	resolver := newTestResolver(meta)
-
-	schema := resolver.MapToOpenAPISchema("interface{}")
-	require.NotNil(t, schema)
-	assert.Equal(t, "object", schema.Type)
 }
 
 // ---------------------------------------------------------------------------

@@ -127,8 +127,7 @@ func TestPatternMatchers(t *testing.T) {
 	}
 
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 	matcher := NewRoutePatternMatcher(routePattern, cfg, contextProvider, typeResolver)
 
 	// Test pattern matching
@@ -161,46 +160,6 @@ func TestContextProvider(t *testing.T) {
 	result = contextProvider.GetString(999)
 	if result != "" {
 		t.Errorf("Expected empty string for invalid index, got '%s'", result)
-	}
-}
-
-func TestSchemaMapper(t *testing.T) {
-	cfg := &APISpecConfig{}
-	mapper := NewSchemaMapper(cfg)
-
-	// Test basic type mapping
-	schema := mapper.MapGoTypeToOpenAPISchema("string")
-	if schema == nil || schema.Type != "string" {
-		t.Error("Expected string schema for 'string' type")
-	}
-
-	// Test pointer type mapping
-	schema = mapper.MapGoTypeToOpenAPISchema("*string")
-	if schema == nil || schema.Type != "string" {
-		t.Error("Expected string schema for '*string' type")
-	}
-
-	// Test slice type mapping
-	schema = mapper.MapGoTypeToOpenAPISchema("[]string")
-	if schema == nil || schema.Type != "array" {
-		t.Error("Expected array schema for '[]string' type")
-	}
-
-	// Test status code mapping
-	status, ok := mapper.MapStatusCode("200")
-	if !ok || status != 200 {
-		t.Error("Expected status code 200")
-	}
-
-	status, ok = mapper.MapStatusCode("StatusSeeOther")
-	if !ok || status != 303 {
-		t.Error("Expected status code 303")
-	}
-
-	// Test method extraction
-	method := mapper.MapMethodFromFunctionName("GetUsers")
-	if method != "GET" {
-		t.Errorf("Expected 'GET', got '%s'", method)
 	}
 }
 

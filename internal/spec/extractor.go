@@ -352,7 +352,7 @@ func (e *Extractor) checkContentTypePattern(node TrackerNodeInterface, route *Ro
 func NewExtractor(tree TrackerTreeInterface, cfg *APISpecConfig) *Extractor {
 	contextProvider := NewContextProvider(tree.GetMetadata())
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(tree.GetMetadata(), cfg, schemaMapper)
+	typeResolver := NewTypeResolver(tree.GetMetadata(), cfg)
 	overrideApplier := NewOverrideApplier(cfg)
 
 	extractor := &Extractor{

@@ -209,7 +209,7 @@ func TestCallArgToString_KindRaw(t *testing.T) {
 // pre-resolved type names through.
 func TestResolveGenericType_NoParams_UnparseableInput(t *testing.T) {
 	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg, NewSchemaMapper(cfg))
+	resolver := NewTypeResolver(nil, cfg)
 	// Empty input — extractBaseTypeAndParams returns "" base, no params.
 	got := resolver.ResolveGenericType("", nil)
 	assert.Equal(t, "", got)
@@ -221,7 +221,7 @@ func TestResolveGenericType_NoParams_UnparseableInput(t *testing.T) {
 // than partial garbage.
 func TestResolveGenericType_WithParams_UnparseableInput(t *testing.T) {
 	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg, NewSchemaMapper(cfg))
+	resolver := NewTypeResolver(nil, cfg)
 	got := resolver.ResolveGenericType("", map[string]string{"T": "int"})
 	assert.Equal(t, "", got, "empty input must round-trip even when type params are supplied")
 }
@@ -233,7 +233,7 @@ func TestResolveGenericType_WithParams_UnparseableInput(t *testing.T) {
 // collapse logic inside the typeParams branch.
 func TestResolveGenericType_WithParams_EmptyBrackets(t *testing.T) {
 	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg, NewSchemaMapper(cfg))
+	resolver := NewTypeResolver(nil, cfg)
 	got := resolver.ResolveGenericType("Foo[]", map[string]string{"T": "int"})
 	assert.Equal(t, "Foo", got, "empty param block collapses to base type")
 }
@@ -243,7 +243,7 @@ func TestResolveGenericType_WithParams_EmptyBrackets(t *testing.T) {
 // collapse, different whitespace path.
 func TestResolveGenericType_WithParams_WhitespaceBrackets(t *testing.T) {
 	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg, NewSchemaMapper(cfg))
+	resolver := NewTypeResolver(nil, cfg)
 	got := resolver.ResolveGenericType("Foo[   ]", map[string]string{"T": "int"})
 	assert.Equal(t, "Foo", got)
 }

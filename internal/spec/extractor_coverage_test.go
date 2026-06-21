@@ -1248,7 +1248,7 @@ func TestNewResponsePatternMatcher(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
 	contextProvider := NewContextProvider(meta)
-	typeResolver := NewTypeResolver(meta, cfg, NewSchemaMapper(cfg))
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := ResponsePattern{BasePattern: BasePattern{CallRegex: "^JSON$"}, DefaultStatus: 200}
 	matcher := NewResponsePatternMatcher(pattern, cfg, contextProvider, typeResolver)
@@ -1260,7 +1260,7 @@ func TestNewParamPatternMatcher(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
 	contextProvider := NewContextProvider(meta)
-	typeResolver := NewTypeResolver(meta, cfg, NewSchemaMapper(cfg))
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := ParamPattern{BasePattern: BasePattern{CallRegex: "^Param$"}, ParamIn: "path"}
 	matcher := NewParamPatternMatcher(pattern, cfg, contextProvider, typeResolver)

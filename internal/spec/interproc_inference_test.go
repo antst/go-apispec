@@ -583,7 +583,7 @@ func TestRefineBodyTypeThroughHelper(t *testing.T) {
 	meta := newTestMeta()
 	cfg := DefaultChiConfig()
 	matcher := NewRequestPatternMatcher(RequestBodyPattern{}, cfg, NewContextProvider(meta),
-		NewTypeResolver(meta, cfg, NewSchemaMapper(cfg)))
+		NewTypeResolver(meta, cfg))
 
 	// Nil node or no route metadata → returned unchanged.
 	concrete := &RequestInfo{BodyType: "pkg.Req", DecodeTargetVar: "body"}
