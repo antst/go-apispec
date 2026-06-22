@@ -323,7 +323,7 @@ func lookupWrapperType(meta *metadata.Metadata, goType string) *metadata.Type {
 	if meta == nil || goType == "" {
 		return nil
 	}
-	return typeByRef(metadata.ParseTypeRef(strings.TrimPrefix(goType, "*")), meta)
+	return typeByRefGated(metadata.ParseTypeRef(strings.TrimPrefix(goType, "*")), meta)
 }
 
 // wrapperFieldIsGeneric reports whether the declared type of the named struct

@@ -259,7 +259,7 @@ func lookupStructFields(bodyType string, meta *metadata.Metadata) map[string]str
 	if meta == nil {
 		return nil
 	}
-	typ := typeByRef(metadata.ParseTypeRef(strings.TrimPrefix(bodyType, "*")), meta)
+	typ := typeByRefGated(metadata.ParseTypeRef(strings.TrimPrefix(bodyType, "*")), meta)
 	if typ == nil {
 		return nil
 	}

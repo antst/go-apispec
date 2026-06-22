@@ -917,7 +917,7 @@ func findTypesInMetadata(meta *metadata.Metadata, typeName string) map[string]*m
 	// (US2), so the arguments surface as real component references where they are
 	// actually used.
 	if typeName != "" {
-		metaTypes[typeName] = typeByRef(metadata.ParseTypeRef(typeName), meta)
+		metaTypes[typeName] = typeByRefGated(metadata.ParseTypeRef(typeName), meta)
 	}
 
 	return metaTypes
@@ -945,7 +945,7 @@ func bodyTypeFromMetadataRef(ref *metadata.TypeRef, meta *metadata.Metadata, cfg
 	// downstream generic substitution. Gate on the leaf's own package being one we
 	// analyzed so an EXTERNAL type isn't mistaken for a same-named internal one via
 	// typeByRef's name-only fallback.
-	if leafPkgInMetadata(leaf, meta) && typeByRef(leaf, meta) != nil {
+	if typeByRefGated(leaf, meta) != nil {
 		return ref.String()
 	}
 	// A configured external type; generics are not external-configured.
@@ -1020,6 +1020,19 @@ func leafPkgInMetadata(ref *metadata.TypeRef, meta *metadata.Metadata) bool {
 	// Absent from metadata: reject only a path-like import qualifier; a short
 	// bare-identifier qualifier is an internal spelling typeByRef can still resolve.
 	return !strings.Contains(ref.Pkg, "/")
+}
+
+// typeByRefGated is typeByRef with the collision guard applied: it resolves a
+// named ref to its metadata type, but a path-like EXTERNAL qualifier (an import
+// path absent from the analyzed set) returns nil instead of borrowing a
+// same-named internal type via typeByRef's name-only fallback. Every site that
+// resolves a (possibly external) user-facing type uses this; bare typeByRef keeps
+// the lenient fallback for unqualified refs (TestTypeByRef).
+func typeByRefGated(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Type {
+	if !leafPkgInMetadata(ref, meta) {
+		return nil
+	}
+	return typeByRef(ref, meta)
 }
 
 const generateSchemaFromTypeKey = "generateSchemaFromType"
@@ -1308,7 +1321,7 @@ func promoteEmbeddedFields(schema *Schema, typ *metadata.Type, meta *metadata.Me
 				embedType = strings.TrimPrefix(ref.String(), "*")
 			}
 		}
-		et := typeByRef(metadata.ParseTypeRef(embedType), meta)
+		et := typeByRefGated(metadata.ParseTypeRef(embedType), meta)
 		if et == nil || getStringFromPool(meta, et.Kind) != "struct" {
 			continue
 		}
@@ -1380,7 +1393,7 @@ func resolveUnderlyingType(typeName string, meta *metadata.Metadata) string {
 	if leaf == nil || leaf.Kind != metadata.RefNamed {
 		return ""
 	}
-	typ := typeByRef(leaf, meta)
+	typ := typeByRefGated(leaf, meta)
 	if typ == nil || getStringFromPool(meta, typ.Kind) != "alias" {
 		return ""
 	}
@@ -2245,7 +2258,7 @@ func schemaForRefTree(usedTypes map[string]*Schema, ref *metadata.TypeRef, inlin
 // element. Returns nil for non-alias refs and aliases whose underlying is not a
 // primitive (those still componentize).
 func aliasInlineSchema(ref *metadata.TypeRef, meta *metadata.Metadata) *Schema {
-	typ := typeByRef(ref, meta)
+	typ := typeByRefGated(ref, meta)
 	if typ == nil || getStringFromPool(meta, typ.Kind) != "alias" {
 		return nil
 	}
@@ -2317,13 +2330,10 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 			}
 		}
 	}
-	// Gate the lookup on the ref's own package being analyzed: an external type
-	// (Pkg absent from metadata) must not borrow a same-named internal type via
-	// typeByRef's name-only fallback (it would bind the field to the wrong shape).
-	var typ *metadata.Type
-	if leafPkgInMetadata(ref, meta) {
-		typ = typeByRef(ref, meta)
-	}
+	// typeByRefGated: an external type (path-like Pkg absent from metadata) must
+	// not borrow a same-named internal type via typeByRef's name-only fallback (it
+	// would bind the field to the wrong shape).
+	typ := typeByRefGated(ref, meta)
 	if typ == nil {
 		// External/unfound named type with no component: emit a dangling $ref via
 		// addRefSchemaForType's raw replaced name (NOT schemaName), since there is

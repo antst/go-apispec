@@ -139,6 +139,25 @@ func TestLeafPkgInMetadata(t *testing.T) {
 	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "x"}, nil))
 }
 
+// TestTypeByRefGated locks the central collision chokepoint every resolver now
+// uses: a path-like external qualifier returns nil; an internal (in-metadata or
+// short) qualifier resolves.
+func TestTypeByRefGated(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+	meta.Packages = map[string]*metadata.Package{
+		"github.com/me/app/models": {Files: map[string]*metadata.File{"m.go": {Types: map[string]*metadata.Type{
+			"User": {Name: sp.Get("User"), Pkg: sp.Get("github.com/me/app/models")},
+		}}}},
+	}
+	// External path-like qualifier colliding on bare name -> nil (not borrowed).
+	assert.Nil(t, typeByRefGated(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "github.com/acme/extpkg", Name: "User"}, meta))
+	// Internal full-path qualifier -> resolves.
+	assert.NotNil(t, typeByRefGated(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "github.com/me/app/models", Name: "User"}, meta))
+	// Internal short qualifier -> resolves via the name fallback.
+	assert.NotNil(t, typeByRefGated(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "models", Name: "User"}, meta))
+}
+
 // TestShortPkgInternalTypeStillResolves locks the round-4 refinement: an INTERNAL
 // type referenced with a SHORT qualifier (what getTypeName emits when go/types
 // info is partial) must still resolve via typeByRef's name fallback, not be
