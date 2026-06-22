@@ -107,6 +107,8 @@ func TestParseTypeRef_RoundTrip(t *testing.T) {
 		"[...]",      // inferred array with no element
 		"[3]",        // fixed array with no element
 		"[x]int",     // non-numeric array length
+		"[-5]int",    // negative array length (not valid Go; Len<0 is the [...] sentinel)
+		"[-1]int",    // negative length must not masquerade as the inferred form
 		"map[string", // unterminated map key
 		"map[]int",   // empty map key
 		"[]*",        // slice of malformed element

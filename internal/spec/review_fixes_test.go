@@ -335,3 +335,58 @@ func TestOpaqueFuncChanFieldsOmitted(t *testing.T) {
 		assert.NotEmptyf(t, prop, "property %q must not be a nil schema", name)
 	}
 }
+
+// TestCanAddRefSchemaForType_OpaqueFuncChanSpellings locks the structural (not
+// exact-string) recognition of opaque func/chan leaves (local coder-review LOW
+// #1, PR #61). The struct-field path always sees the bare "func"/"chan" from
+// TypeRef.String(), but the body/param path passes raw getTypeName strings that
+// carry signatures/directions ("func(int) error", "chan<- int"). All must be
+// rejected as non-nameable so none emits a dangling $ref; legitimately-named
+// types that merely look similar must stay componentizable.
+func TestCanAddRefSchemaForType_OpaqueFuncChanSpellings(t *testing.T) {
+	for _, k := range []string{"func", "func(int) error", "func(a, b int) bool",
+		"chan", "chan int", "chan<- int", "<-chan int"} {
+		assert.Falsef(t, canAddRefSchemaForType(k), "opaque %q must not be componentizable", k)
+	}
+	// Look-alikes that ARE real, nameable types must remain componentizable.
+	for _, k := range []string{"Function", "Channel", "funcResult", "chanutil.Pool", "models.Func"} {
+		assert.Truef(t, canAddRefSchemaForType(k), "named type %q must stay componentizable", k)
+	}
+}
+
+// TestOpaqueFuncChanContainerFieldsOmitted extends the opaque-leaf fix to
+// CONTAINER fields whose element is opaque ([]func, map[string]chan, *func): the
+// element resolves to nil and the wrapper must not emit a dangling $ref or a
+// component — the field is omitted, like the bare case (coder-review follow-up).
+func TestOpaqueFuncChanContainerFieldsOmitted(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{StringPool: sp}
+	cfg := DefaultAPISpecConfig()
+
+	typ := &metadata.Type{
+		Name: sp.Get("Reg"),
+		Kind: sp.Get("struct"),
+		Fields: []metadata.Field{
+			{Name: sp.Get("Keep"), Type: sp.Get("string"),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, Tag: sp.Get(`json:"keep"`)},
+			{Name: sp.Get("Hooks"), Type: sp.Get("[]func"),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefFunc}}, Tag: sp.Get(`json:"hooks"`)},
+			{Name: sp.Get("Subs"), Type: sp.Get("map[string]chan"),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, Elem: &metadata.TypeRef{Kind: metadata.RefChan}}, Tag: sp.Get(`json:"subs"`)},
+			{Name: sp.Get("Cb"), Type: sp.Get("*func"),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefPointer, Elem: &metadata.TypeRef{Kind: metadata.RefFunc}}, Tag: sp.Get(`json:"cb"`)},
+		},
+	}
+
+	schema, extra := generateStructSchema(map[string]*Schema{}, "Reg", typ, meta, cfg, nil)
+
+	assert.Contains(t, schema.Properties, "keep", "serializable field stays")
+	for _, f := range []string{"hooks", "subs", "cb"} {
+		assert.NotContainsf(t, schema.Properties, f, "container-of-opaque field %q omitted", f)
+		assert.NotContainsf(t, schema.Required, f, "omitted field %q not in required", f)
+	}
+	for name := range extra {
+		assert.NotContainsf(t, name, "func", "no func component registered (got %q)", name)
+		assert.NotContainsf(t, name, "chan", "no chan component registered (got %q)", name)
+	}
+}

@@ -2459,13 +2459,18 @@ func canAddRefSchemaForType(key string) bool {
 	// instantiations start with the type NAME (e.g. "Pair[...]" or
 	// "Foo[map[string]int]"), so a HasPrefix check leaves them componentizable; a
 	// Contains check would wrongly reject any generic whose ARGUMENT is a map.
-	// "func"/"chan" are opaque leaves: TypeRef renders them as exactly these
-	// sentinels and documents them as having no schema. They are never nameable
-	// components — without this guard both schemaForUnresolved and the struct-field
-	// path emit a $ref to a "func"/"chan" component that is never generated (a
-	// dangling $ref / invalid OpenAPI).
-	if metadata.IsPrimitiveType(key) || strings.HasPrefix(key, "[") || strings.HasPrefix(key, "map[") ||
-		key == "func" || key == "chan" {
+	if metadata.IsPrimitiveType(key) || strings.HasPrefix(key, "[") || strings.HasPrefix(key, "map[") {
+		return false
+	}
+
+	// Opaque func/chan leaves are never nameable components: TypeRef documents them
+	// as having no schema, so a $ref to a "func"/"chan" component would dangle (it
+	// is never generated — invalid OpenAPI). Recognize them STRUCTURALLY via
+	// ParseTypeRef, covering every spelling ("func", "func(int) error", "chan",
+	// "chan<- int", "<-chan int"), so the body/param path (raw getTypeName strings
+	// that carry the signature/direction) is guarded too — not only the struct-field
+	// path (bare "func"/"chan" from TypeRef.String()).
+	if r := metadata.ParseTypeRef(key); r != nil && (r.Kind == metadata.RefFunc || r.Kind == metadata.RefChan) {
 		return false
 	}
 

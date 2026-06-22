@@ -26,6 +26,10 @@ type strings. This corrects several cases that were previously lossy:
 - Removed spurious orphan components for primitive generic arguments
   (`Pair[string,int]` no longer emits `T-string`/`U-int`).
 
+Each item above manifests only when the construct is present and ships with its
+own targeted fixtures; the existing framework golden corpus does not exercise
+these constructs, so it — and the determinism suite — stays byte-identical.
+
 ### Changed — internals (no output change beyond the improvements above)
 
 - The string-based schema generator (`mapGoTypeToOpenAPISchema`) and the

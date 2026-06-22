@@ -460,9 +460,12 @@ func ParseTypeRef(s string) *TypeRef {
 		}
 		return nil
 	case strings.HasPrefix(s, "[") && !strings.HasPrefix(s, "[]"):
-		// [N]T fixed array — the bracket holds a decimal length.
+		// [N]T fixed array — the bracket holds a non-negative decimal length.
+		// Reject n < 0: a negative length is not valid Go, and Len < 0 is already
+		// the reserved sentinel for the inferred-length form ("[...]T", Len -1), so
+		// accepting "[-5]int" would silently masquerade as an inferred-length array.
 		if end := strings.IndexByte(s, ']'); end > 1 {
-			if n, err := strconv.Atoi(strings.TrimSpace(s[1:end])); err == nil {
+			if n, err := strconv.Atoi(strings.TrimSpace(s[1:end])); err == nil && n >= 0 {
 				if e := ParseTypeRef(s[end+1:]); e != nil {
 					return &TypeRef{Kind: RefArray, Len: n, Elem: e}
 				}
