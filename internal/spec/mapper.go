@@ -977,8 +977,13 @@ func typeByRef(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Type {
 			}
 		}
 	}
-	for _, pkg := range meta.Packages {
-		for _, file := range pkg.Files {
+	// Unqualified fallback: a bare RefNamed (empty Pkg, or a Pkg absent from the
+	// metadata) can match a type name in more than one package. Iterate packages
+	// in a stable, sorted order so the choice is deterministic and never flaps
+	// between runs (a type name is unique within its own package, so the inner
+	// file order is immaterial).
+	for _, pkgName := range slices.Sorted(maps.Keys(meta.Packages)) {
+		for _, file := range meta.Packages[pkgName].Files {
 			if typ, exists := file.Types[ref.Name]; exists {
 				return typ
 			}
@@ -2237,17 +2242,21 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 
 	// A configured TypeMapping is applied by schemaForType before the tree walk;
 	// defer it (a direct caller of this function still gets that precedence).
-	for _, m := range cfg.TypeMapping {
-		if m.GoType == goType {
-			return nil, nil, false
+	// Guard cfg: schemaForType accepts a nil cfg, so a direct/recursive call can
+	// reach here with one (ranging a nil cfg's fields would panic).
+	if cfg != nil {
+		for _, m := range cfg.TypeMapping {
+			if m.GoType == goType {
+				return nil, nil, false
+			}
 		}
-	}
-	// A configured external type registers its component and references it.
-	for _, et := range cfg.ExternalTypes {
-		if et.Name == goType {
-			schemas := map[string]*Schema{goType: et.OpenAPIType}
-			markUsedType(usedTypes, goType, et.OpenAPIType)
-			return componentRef(), schemas, true
+		// A configured external type registers its component and references it.
+		for _, et := range cfg.ExternalTypes {
+			if et.Name == goType {
+				schemas := map[string]*Schema{goType: et.OpenAPIType}
+				markUsedType(usedTypes, goType, et.OpenAPIType)
+				return componentRef(), schemas, true
+			}
 		}
 	}
 	typ := typeByRef(ref, meta)
