@@ -398,6 +398,11 @@ func (t *TypeRef) SubstituteParams(bindings map[string]*TypeRef) *TypeRef {
 	}
 	if t.Kind == RefParam {
 		if b, ok := bindings[t.Name]; ok {
+			// INVARIANT: the binding pointer is returned as-is, so every occurrence
+			// of the same type parameter shares one *TypeRef node. Callers must treat
+			// a substituted tree as READ-ONLY (the schema pipeline only reads
+			// .String()) — mutating a node in place (e.g. Qualify) would corrupt every
+			// sibling that bound the same argument. Clone first if you need to mutate.
 			return b
 		}
 		return t

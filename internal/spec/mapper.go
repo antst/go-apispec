@@ -1356,8 +1356,15 @@ func resolveUnderlyingType(typeName string, meta *metadata.Metadata) string {
 	}
 	underlying := getStringFromPool(meta, typ.Target)
 	switch ref.Kind {
-	case metadata.RefSlice, metadata.RefArray:
+	case metadata.RefSlice:
 		return "[]" + underlying
+	case metadata.RefArray:
+		// Preserve the fixed-array length — collapsing [N]Alias to "[]underlying"
+		// dropped minItems/maxItems for a field whose element is an alias-to-primitive.
+		if ref.Len < 0 {
+			return "[...]" + underlying
+		}
+		return "[" + strconv.Itoa(ref.Len) + "]" + underlying
 	case metadata.RefPointer:
 		return "*" + underlying
 	default:
@@ -1992,7 +1999,16 @@ func schemaFromTypeRef(ref *metadata.TypeRef) *Schema {
 	case metadata.RefInterface:
 		return &Schema{Type: "object"}
 	case metadata.RefBasic:
-		return basicRefSchema(ref.Name)
+		// A go/types-built qualified primitive (time.Time) is RefBasic{Pkg:"time",
+		// Name:"Time"} while ParseTypeRef builds RefBasic{Name:"time.Time"};
+		// basicRefSchema keys on the whole "time.Time", so qualify with Pkg. Without
+		// this, a container element like []time.Time / map[string]time.Time resolved
+		// to nil and the property was silently dropped.
+		name := ref.Name
+		if ref.Pkg != "" {
+			name = ref.Pkg + "." + ref.Name
+		}
+		return basicRefSchema(name)
 	default:
 		return nil // named / generic / struct / func / chan — resolved by the caller
 	}
@@ -2025,6 +2041,9 @@ func basicRefSchema(name string) *Schema {
 	case "interface{}", "struct{}", "any":
 		return &Schema{Type: "object"}
 	default:
+		// error / rune / complex / nil are intentionally unmapped here (error->nil
+		// is asserted by TestSchemaForUnresolved / TestSchemaFromTypeRef_*); the
+		// caller applies its terminal fallback.
 		return nil
 	}
 }
@@ -2251,8 +2270,12 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 			}
 		}
 		// A configured external type registers its component and references it.
+		// Compare against the major-version-stripped goType: config Names use the
+		// stripped convention (matching bodyTypeFromMetadataRef and generateSchemas),
+		// so a versioned type (.../v2.Map) must strip before matching or its
+		// component is skipped and a dangling $ref is emitted below.
 		for _, et := range cfg.ExternalTypes {
-			if et.Name == goType {
+			if et.Name == stripMajorVersion(goType) {
 				schemas := map[string]*Schema{goType: et.OpenAPIType}
 				markUsedType(usedTypes, goType, et.OpenAPIType)
 				return componentRef(), schemas, true
@@ -2340,11 +2363,14 @@ func canAddRefSchemaForType(key string) bool {
 
 func addRefSchemaForType(goType string) *Schema {
 	// For custom types not found in metadata, create a reference.
-	// Note: short name shortening for $ref values is applied in a
-	// post-processing pass (disambiguateSchemaNames) to ensure
-	// consistency with component schema keys.
+	// Short-name shortening for $ref values is applied in the shortenAllRefs
+	// post-pass (gated behind UseShortNames). stripMajorVersion must be applied
+	// here too, though: component KEYS strip the module major-version segment
+	// (schemaName), so a versioned type's $ref must strip it as well or it dangles
+	// when ShortNames is false (no post-pass to reconcile). No-op for unversioned
+	// types.
 	goType = strings.TrimPrefix(goType, "*")
-	return &Schema{Ref: refComponentsSchemasPrefix + schemaComponentNameReplacer.Replace(goType)}
+	return &Schema{Ref: refComponentsSchemasPrefix + schemaComponentNameReplacer.Replace(stripMajorVersion(goType))}
 }
 
 // isInSameGroupAsTypedConstant checks if a constant is in the same group as a typed constant
