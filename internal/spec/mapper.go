@@ -994,14 +994,19 @@ func typeByRef(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Type {
 	return nil
 }
 
-// leafPkgInMetadata reports whether a named ref's package is one we actually
-// analyzed (or is unqualified). typeByRef has a name-only fallback that, for a
-// ref whose Pkg is NOT a metadata package — an EXTERNAL/unanalyzed type — would
-// borrow an unrelated INTERNAL type that happens to share the bare name, binding
-// a body/field schema to the wrong shape. Callers that resolve a qualified leaf
-// gate the lookup on this so an external type is treated as external, not as its
-// same-named internal namesake. typeByRef itself keeps the lenient fallback (it
-// is required for unqualified refs — see TestTypeByRef).
+// leafPkgInMetadata reports whether a named ref's package is one typeByRef may
+// resolve by name. typeByRef has a name-only fallback that, for a ref whose Pkg
+// is an EXTERNAL/unanalyzed IMPORT PATH, would borrow an unrelated INTERNAL type
+// that happens to share the bare name, binding a body/field schema to the wrong
+// shape. Callers gate the lookup on this so a genuinely external type is treated
+// as external, not as its same-named internal namesake.
+//
+// The reject is narrow on purpose: only a PATH-LIKE qualifier (an import path,
+// containing "/") absent from the analyzed set is external. A bare-identifier
+// qualifier (no "/") is a SHORT internal spelling that getTypeName emits for a
+// cross-package type when go/types info is partial — it must still resolve via
+// typeByRef's name fallback, so it is allowed (like an unqualified ref).
+// typeByRef itself keeps the lenient fallback (see TestTypeByRef).
 func leafPkgInMetadata(ref *metadata.TypeRef, meta *metadata.Metadata) bool {
 	if ref == nil || meta == nil {
 		return false
@@ -1009,8 +1014,12 @@ func leafPkgInMetadata(ref *metadata.TypeRef, meta *metadata.Metadata) bool {
 	if ref.Pkg == "" {
 		return true // unqualified/synthetic — allow name-based resolution
 	}
-	_, ok := meta.Packages[ref.Pkg]
-	return ok
+	if _, ok := meta.Packages[ref.Pkg]; ok {
+		return true // an analyzed package (full import-path key)
+	}
+	// Absent from metadata: reject only a path-like import qualifier; a short
+	// bare-identifier qualifier is an internal spelling typeByRef can still resolve.
+	return !strings.Contains(ref.Pkg, "/")
 }
 
 const generateSchemaFromTypeKey = "generateSchemaFromType"

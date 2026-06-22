@@ -125,16 +125,40 @@ func TestSchemaForNamedRef_NilVisitedTypesNoPanic(t *testing.T) {
 	}, "nil visitedTypes must not panic on the struct path")
 }
 
-// TestLeafPkgInMetadata covers the gate helper: unqualified or analyzed-package
-// refs pass; an external (unanalyzed) package does not.
+// TestLeafPkgInMetadata covers the gate helper: unqualified, analyzed-package,
+// and SHORT bare-identifier qualifiers pass; only a path-like import qualifier
+// absent from metadata (a genuinely external type) is rejected.
 func TestLeafPkgInMetadata(t *testing.T) {
 	meta := newTestMeta()
 	meta.Packages = map[string]*metadata.Package{"github.com/me/app": {}}
 	assert.True(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: ""}, meta), "unqualified allowed")
 	assert.True(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "github.com/me/app"}, meta), "analyzed package")
-	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "github.com/acme/extpkg"}, meta), "external package")
+	assert.True(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "models"}, meta), "short internal qualifier (no '/') allowed")
+	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "github.com/acme/extpkg"}, meta), "path-like external package rejected")
 	assert.False(t, leafPkgInMetadata(nil, meta))
 	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "x"}, nil))
+}
+
+// TestShortPkgInternalTypeStillResolves locks the round-4 refinement: an INTERNAL
+// type referenced with a SHORT qualifier (what getTypeName emits when go/types
+// info is partial) must still resolve via typeByRef's name fallback, not be
+// dropped as external by the collision gate.
+func TestShortPkgInternalTypeStillResolves(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+	meta.Packages = map[string]*metadata.Package{
+		"github.com/me/app/models": {Files: map[string]*metadata.File{"m.go": {Types: map[string]*metadata.Type{
+			"User": {
+				Name: sp.Get("User"), Pkg: sp.Get("github.com/me/app/models"), Kind: sp.Get("struct"),
+				Fields: []metadata.Field{{Name: sp.Get("Name"), Type: sp.Get("string")}},
+			},
+		}}}},
+	}
+	// "models" is the short spelling — NOT a meta.Packages key (those are full
+	// import paths) but a bare identifier, so it must still resolve.
+	shortRef := &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "models", Name: "User"}
+	assert.Equal(t, "models.User", bodyTypeFromMetadataRef(shortRef, meta, &APISpecConfig{}),
+		"internal type with a short qualifier still resolves (not dropped as external)")
 }
 
 // TestExternalCollisionNotBorrowed covers the collision fix at both sites: an
