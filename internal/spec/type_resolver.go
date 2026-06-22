@@ -178,8 +178,18 @@ func (t *TypeResolverImpl) resolveSelectorType(arg metadata.CallArgument) string
 	// For field access, try to find the field type in metadata
 	for pkgName, pkg := range t.meta.Packages {
 		for _, file := range pkg.Files {
-			// Try both with and without package prefix
+			// Try both with and without package prefix. baseType may now be a
+			// qualified TypeRef.String() ("github.com/x/app/models.User" — the
+			// receiver ident resolves through variable.TypeRef.String()), while
+			// file.Types is keyed by the BARE type name ("User"). Add the unqualified
+			// leaf so the field lookup still resolves instead of falling through to
+			// the bogus "<qualified>.Field" concatenation below.
 			typeNames := []string{baseType, pkgName + "." + baseType}
+			if r := metadata.ParseTypeRef(baseType); r != nil {
+				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType {
+					typeNames = append(typeNames, leaf.Name)
+				}
+			}
 			for _, typeName := range typeNames {
 				if typ, exists := file.Types[typeName]; exists {
 					// Find the field

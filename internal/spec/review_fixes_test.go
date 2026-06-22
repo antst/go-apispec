@@ -345,11 +345,16 @@ func TestOpaqueFuncChanFieldsOmitted(t *testing.T) {
 // types that merely look similar must stay componentizable.
 func TestCanAddRefSchemaForType_OpaqueFuncChanSpellings(t *testing.T) {
 	for _, k := range []string{"func", "func(int) error", "func(a, b int) bool",
-		"chan", "chan int", "chan<- int", "<-chan int"} {
+		"chan", "chan int", "chan<- int", "<-chan int",
+		// Pointer-wrapped opaque leaves reach here un-stripped on the body/param
+		// path; NamedLeaf must unwrap to the func/chan leaf and reject them.
+		"*func", "**func", "*chan", "*[]func", "*chan<- int"} {
 		assert.Falsef(t, canAddRefSchemaForType(k), "opaque %q must not be componentizable", k)
 	}
-	// Look-alikes that ARE real, nameable types must remain componentizable.
-	for _, k := range []string{"Function", "Channel", "funcResult", "chanutil.Pool", "models.Func"} {
+	// Look-alikes that ARE real, nameable types must remain componentizable —
+	// including pointers/slices of a NAMED leaf (NamedLeaf bottoms out at RefNamed).
+	for _, k := range []string{"Function", "Channel", "funcResult", "chanutil.Pool",
+		"models.Func", "*models.User", "Pair[func(),int]"} {
 		assert.Truef(t, canAddRefSchemaForType(k), "named type %q must stay componentizable", k)
 	}
 }
@@ -381,10 +386,15 @@ func TestOpaqueFuncChanContainerFieldsOmitted(t *testing.T) {
 	schema, extra := generateStructSchema(map[string]*Schema{}, "Reg", typ, meta, cfg, nil)
 
 	assert.Contains(t, schema.Properties, "keep", "serializable field stays")
+	assert.Len(t, schema.Properties, 1, "only the serializable field survives")
 	for _, f := range []string{"hooks", "subs", "cb"} {
 		assert.NotContainsf(t, schema.Properties, f, "container-of-opaque field %q omitted", f)
 		assert.NotContainsf(t, schema.Required, f, "omitted field %q not in required", f)
 	}
+	// No spurious component is registered for the opaque-container fields (the
+	// "keep" string is primitive, so nothing should be registered at all). An empty
+	// map asserts directly; the per-name guards below would be vacuous on their own.
+	assert.Empty(t, extra, "no component registered for opaque-container fields")
 	for name := range extra {
 		assert.NotContainsf(t, name, "func", "no func component registered (got %q)", name)
 		assert.NotContainsf(t, name, "chan", "no chan component registered (got %q)", name)

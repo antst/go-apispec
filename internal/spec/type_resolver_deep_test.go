@@ -688,6 +688,50 @@ func TestResolveSelectorType_WithFieldLookup(t *testing.T) {
 	assert.Equal(t, "string", result)
 }
 
+// TestResolveSelectorType_QualifiedReceiverResolvesField locks the fix for the
+// TypeRef-qualification regression (Copilot, PR #61). The receiver ident now
+// resolves through variable.TypeRef.String(), which is FULLY QUALIFIED
+// ("github.com/x/app/models.User"), while file.Types is keyed by the BARE type
+// name ("User"). Without normalizing the lookup key to the unqualified leaf, the
+// field lookup misses and resolveSelectorType returns the bogus
+// "...models.User.Name" concatenation instead of the field's type.
+func TestResolveSelectorType_QualifiedReceiverResolvesField(t *testing.T) {
+	meta, sp := newTypeResolverTestMeta()
+	meta.Packages = map[string]*metadata.Package{
+		"github.com/x/app/models": {
+			Files: map[string]*metadata.File{
+				"user.go": {
+					Types: map[string]*metadata.Type{
+						"User": { // keyed by the bare name, as the metadata builder does
+							Name: sp.Get("User"),
+							Kind: sp.Get("struct"),
+							Fields: []metadata.Field{
+								{Name: sp.Get("Name"), Type: sp.Get("string")},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	resolver := newTestResolver(meta)
+
+	sel := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) {
+		a.SetName("Name")
+	})
+	x := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) {
+		a.SetName("u")
+		a.SetType("github.com/x/app/models.User") // qualified, as TypeRef.String() yields
+	})
+	arg := makeArg(meta, metadata.KindSelector, func(a *metadata.CallArgument) {
+		a.Sel = &sel
+		a.X = &x
+	})
+
+	// Must resolve to the field's type, NOT the bogus "...models.User.Name".
+	assert.Equal(t, "string", resolver.resolveSelectorType(arg))
+}
+
 func TestResolveSelectorType_WithPkgPrefix(t *testing.T) {
 	meta, sp := newTypeResolverTestMeta()
 

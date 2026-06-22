@@ -2466,12 +2466,17 @@ func canAddRefSchemaForType(key string) bool {
 	// Opaque func/chan leaves are never nameable components: TypeRef documents them
 	// as having no schema, so a $ref to a "func"/"chan" component would dangle (it
 	// is never generated — invalid OpenAPI). Recognize them STRUCTURALLY via
-	// ParseTypeRef, covering every spelling ("func", "func(int) error", "chan",
-	// "chan<- int", "<-chan int"), so the body/param path (raw getTypeName strings
-	// that carry the signature/direction) is guarded too — not only the struct-field
-	// path (bare "func"/"chan" from TypeRef.String()).
-	if r := metadata.ParseTypeRef(key); r != nil && (r.Kind == metadata.RefFunc || r.Kind == metadata.RefChan) {
-		return false
+	// ParseTypeRef + NamedLeaf, covering every spelling ("func", "func(int) error",
+	// "chan<- int") AND every wrapper the prefix guards above don't catch: a
+	// POINTER-wrapped opaque leaf ("*func", "**func", "*[]func", "*chan") reaches
+	// here un-stripped on the body/param path and would otherwise dangle. NamedLeaf
+	// unwraps pointer/slice/array/map to the leaf; a func/chan leaf is non-nameable.
+	// (A named leaf with func/chan ARGS — Pair[func(),int] — is NOT unwrapped into
+	// its Args, so a real generic stays componentizable.)
+	if r := metadata.ParseTypeRef(key); r != nil {
+		if leaf := r.NamedLeaf(); leaf != nil && (leaf.Kind == metadata.RefFunc || leaf.Kind == metadata.RefChan) {
+			return false
+		}
 	}
 
 	// Exclude _nested types from reference schema generation
