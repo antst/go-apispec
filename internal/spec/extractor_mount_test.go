@@ -2270,7 +2270,7 @@ func TestResolveTypeOrigin_GenericOrigin(t *testing.T) {
 	route.Metadata = meta
 
 	// Call resolveTypeOrigin directly
-	result := matcher.resolveTypeOrigin(bodyArg, node, "T")
+	result, _ := matcher.resolveTypeOrigin(bodyArg, node, "T")
 	// Should resolve T to ConcreteType via type param map
 	assert.NotEmpty(t, result)
 }

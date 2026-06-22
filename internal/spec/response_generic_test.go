@@ -29,7 +29,7 @@ func TestResponseResolveTypeOrigin_ResolvedTypeWins(t *testing.T) {
 			cfg:             cfg,
 		},
 	}
-	got := matcher.resolveTypeOrigin(arg, node, "T")
+	got, _ := matcher.resolveTypeOrigin(arg, node, "T")
 	assert.Equal(t, "pkg.ConcreteType", got)
 }
 
@@ -44,7 +44,7 @@ func TestSharedResolveTypeOrigin_ResolvedTypeShortCircuit(t *testing.T) {
 	arg.SetResolvedType("pkg.Resolved")
 	node := makeTrackerNode(nil)
 
-	got := sharedResolveTypeOrigin(arg, node, "original", cp, false)
+	got, _ := sharedResolveTypeOrigin(arg, node, "original", cp, false)
 	assert.Equal(t, "pkg.Resolved", got)
 }
 
@@ -70,6 +70,6 @@ func TestResponseResolveTypeOrigin_GenericTypeParamSubstituted(t *testing.T) {
 			cfg:             cfg,
 		},
 	}
-	got := matcher.resolveTypeOrigin(arg, node, "T")
+	got, _ := matcher.resolveTypeOrigin(arg, node, "T")
 	assert.Equal(t, "pkg.ConcreteType", got)
 }

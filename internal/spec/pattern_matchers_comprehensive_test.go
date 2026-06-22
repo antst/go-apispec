@@ -1313,7 +1313,7 @@ func TestRequestPatternMatcher_resolveTypeOrigin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := matcher.resolveTypeOrigin(tt.arg, mockNode, tt.originalType)
+			result, _ := matcher.resolveTypeOrigin(tt.arg, mockNode, tt.originalType)
 			// Since the metadata setup is complex, we just verify the method doesn't panic
 			// and returns some reasonable value
 			if result == "" {
@@ -1387,7 +1387,7 @@ func TestTraceGenericOrigin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := traceGenericOrigin(mockNode, tt.typeString)
+			result, _ := traceGenericOrigin(mockNode, tt.typeString)
 			if result != tt.expected {
 				t.Errorf("Expected %s, got %s", tt.expected, result)
 			}

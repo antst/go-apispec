@@ -1995,7 +1995,7 @@ func TestResponseResolveTypeOrigin_GenericType(t *testing.T) {
 	edge.TypeParamMap = map[string]string{"T": "UserDTO"}
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "T")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "T")
 	assert.Equal(t, "UserDTO", result)
 }
 
@@ -2028,7 +2028,7 @@ func TestResponseResolveTypeOrigin_AssignmentMap(t *testing.T) {
 	}
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "interface{}")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "interface{}")
 	assert.Equal(t, "UserResponse", result)
 }
 
@@ -2053,7 +2053,7 @@ func TestResponseResolveTypeOrigin_Fallback(t *testing.T) {
 	edge := makeEdge(meta, "handler", "main", "Send", "lib", nil)
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "SomeType")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "SomeType")
 	assert.Equal(t, "SomeType", result)
 }
 
@@ -2084,7 +2084,7 @@ func TestParamResolveTypeOrigin_GenericType(t *testing.T) {
 	edge.TypeParamMap = map[string]string{"T": "int"}
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "T")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "T")
 	assert.Equal(t, "int", result)
 }
 
@@ -2114,7 +2114,7 @@ func TestParamResolveTypeOrigin_AssignmentMap(t *testing.T) {
 	}
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "interface{}")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "interface{}")
 	assert.Equal(t, "int64", result)
 }
 
@@ -2137,7 +2137,7 @@ func TestParamResolveTypeOrigin_Fallback(t *testing.T) {
 	edge := makeEdge(meta, "handler", "main", "GetParam", "lib", nil)
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "string")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "string")
 	assert.Equal(t, "string", result)
 }
 

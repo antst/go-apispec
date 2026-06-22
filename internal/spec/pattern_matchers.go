@@ -541,6 +541,7 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 	if r.pattern.TypeFromArg && len(edge.Args) > r.pattern.TypeArgIndex {
 		arg := edge.Args[r.pattern.TypeArgIndex]
 		bodyType := r.contextProvider.GetArgumentInfo(arg)
+		var bodyRef *metadata.TypeRef // resolution-emitted structured type (Phase 3)
 
 		// Check if this is a literal value - if so, determine appropriate type
 		if arg.GetKind() == metadata.KindLiteral {
@@ -565,7 +566,7 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 			}
 
 			// Trace type origin
-			bodyType = r.resolveTypeOrigin(arg, node, bodyType)
+			bodyType, bodyRef = r.resolveTypeOrigin(arg, node, bodyType)
 
 			// Apply dereferencing if needed
 			if r.pattern.Deref && strings.HasPrefix(bodyType, "*") {
@@ -582,7 +583,16 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		// target + field-inference frame onto the handler.
 		bodyType, fieldFrameBaseID = r.refineBodyTypeThroughHelper(node, reqInfo, bodyType, fieldFrameBaseID, route)
 
-		schema, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, r.cfg, nil)
+		// Phase 3: schema generation consumes the resolved type as a *TypeRef so the
+		// generator never re-parses. Use the resolution-emitted ref when it still
+		// matches the (possibly deref'd / helper-refined) body string; otherwise the
+		// string was transformed after resolution, so re-derive at this boundary.
+		// Either way ref == ParseTypeRef(bodyType), so output is byte-identical.
+		if bodyRef == nil || bodyRef.String() != bodyType {
+			bodyRef = metadata.ParseTypeRef(bodyType)
+		}
+		reqInfo.BodyTypeRef = bodyRef
+		schema, _ := schemaForType(route.UsedTypes, bodyType, bodyRef, route.Metadata, r.cfg, nil)
 		reqInfo.Schema = schema
 	}
 
@@ -1046,21 +1056,21 @@ func (b *BasePatternMatcher) findAssignmentFunction(arg *metadata.CallArgument) 
 }
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
-func (r *RequestPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
+func (r *RequestPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) (string, *metadata.TypeRef) {
 	// Request-specific: trace generic origin through the type-param tree before shared logic
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
-		return resolvedType
+		return resolvedType, arg.ResolvedTypeRef
 	}
 
-	if genericType := traceGenericOrigin(node, originalType); genericType != "" {
-		return genericType
+	if genericType, ref := traceGenericOrigin(node, originalType); genericType != "" {
+		return genericType, ref
 	}
 
 	// Delegate to shared logic (checkFuncLit=true to match original Request behavior)
 	return sharedResolveTypeOrigin(arg, node, originalType, r.contextProvider, true)
 }
 
-func traceGenericOrigin(node TrackerNodeInterface, originalType string) string {
+func traceGenericOrigin(node TrackerNodeInterface, originalType string) (string, *metadata.TypeRef) {
 	typeParams := node.GetTypeParamMap()
 
 	// The bare type name (a type parameter like T resolves through the call site's
@@ -1081,10 +1091,10 @@ func traceGenericOrigin(node TrackerNodeInterface, originalType string) string {
 		}
 		// Only return the concrete type if we found a mapping
 		if foundMapping {
-			return searchType
+			return searchType, metadata.ParseTypeRef(searchType)
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func (b *BasePatternMatcher) extractMethodFromFunctionNameWithConfig(funcName string, config *MethodExtractionConfig) string {

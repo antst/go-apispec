@@ -27,16 +27,23 @@ import (
 //  3. Whether the argument's variable has assignments with concrete types (for KindIdent,
 //     and optionally KindFuncLit when checkFuncLit is true)
 //  4. Falls back to originalType
-func sharedResolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string, contextProvider ContextProvider, checkFuncLit bool) string {
+//
+// It returns the resolved type both as the (naming) string and as a structured
+// *TypeRef (Phase 3). For the resolved-type branch the materialized
+// arg.ResolvedTypeRef is reused (it is kept in lockstep with the string by
+// SetResolvedType); the other branches parse their own resolved string at this
+// boundary (research D1). The ref always equals ParseTypeRef of the returned
+// string, so threading it into schemaForType is byte-identical to re-parsing.
+func sharedResolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string, contextProvider ContextProvider, checkFuncLit bool) (string, *metadata.TypeRef) {
 	// If the argument has resolved type information, use it
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
-		return resolvedType
+		return resolvedType, arg.ResolvedTypeRef
 	}
 
 	// If it's a generic type with a concrete resolution, use it
 	if arg.IsGenericType && arg.GenericTypeName != -1 {
 		if concreteType, exists := node.GetTypeParamMap()[arg.GetGenericTypeName()]; exists {
-			return concreteType
+			return concreteType, metadata.ParseTypeRef(concreteType)
 		}
 	}
 
@@ -49,12 +56,12 @@ func sharedResolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterfa
 				if assignment.ConcreteType != 0 {
 					concreteType := contextProvider.GetString(assignment.ConcreteType)
 					if concreteType != "" {
-						return concreteType
+						return concreteType, metadata.ParseTypeRef(concreteType)
 					}
 				}
 			}
 		}
 	}
 
-	return originalType
+	return originalType, metadata.ParseTypeRef(originalType)
 }
