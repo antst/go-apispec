@@ -139,6 +139,25 @@ func TestLeafPkgInMetadata(t *testing.T) {
 	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "x"}, nil))
 }
 
+// TestStripMajorVersion covers the version-strip helper at every position,
+// including the subpackage case (round-6 Copilot): a /vN/ segment mid-path is
+// stripped like a /vN. segment before the type, while non-version lookalikes are
+// left alone.
+func TestStripMajorVersion(t *testing.T) {
+	cases := map[string]string{
+		"github.com/gofiber/fiber/v2.Map": "github.com/gofiber/fiber.Map", // before the type
+		"github.com/x/lib/v2/sub.Type":    "github.com/x/lib/sub.Type",    // subpackage (the fix)
+		"github.com/x/lib/v10/a/b.Type":   "github.com/x/lib/a/b.Type",    // multi-digit, deep
+		"github.com/x/lib.Type":           "github.com/x/lib.Type",        // unversioned
+		"User":                            "User",                         // unqualified
+		"github.com/x/v1alpha1/p.T":       "github.com/x/v1alpha1/p.T",    // not a version segment
+		"github.com/x/v2pkg.T":            "github.com/x/v2pkg.T",         // digits then a letter
+	}
+	for in, want := range cases {
+		assert.Equal(t, want, stripMajorVersion(in), in)
+	}
+}
+
 // TestTypeByRefGated locks the central collision chokepoint every resolver now
 // uses: a path-like external qualifier returns nil; an internal (in-metadata or
 // short) qualifier resolves.

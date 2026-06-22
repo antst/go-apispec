@@ -797,21 +797,26 @@ func variableTypeString(variable *metadata.Variable, meta *metadata.Metadata) st
 	return getStringFromPool(meta, variable.Type)
 }
 
-// majorVersionInPath matches a Go module major-version path segment ("/v2.",
-// "/v3.", …) sitting between an import path and the type name.
-var majorVersionInPath = regexp.MustCompile(`/v[0-9]+\.`)
+// majorVersionInPath matches a Go module major-version path segment ("/v2",
+// "/v3", …) wherever it sits in an import path — immediately before the type
+// name ("/v2.Type") OR before a subpackage ("/v2/sub.Type"). The trailing
+// separator (. or /) is captured so the segment can be removed while keeping it.
+// The version digits must be followed by that separator, so "v1alpha1" or
+// "v2pkg" (digits then a letter) are correctly NOT treated as version segments.
+var majorVersionInPath = regexp.MustCompile(`/v[0-9]+([./])`)
 
 // stripMajorVersion removes the Go module major-version segment from an
 // import-path-qualified type string so a versioned external type names the same
 // as its unversioned form: "github.com/gofiber/fiber/v2.Map" ->
-// "github.com/gofiber/fiber.Map". This matches the historical naming (which
-// dropped the segment) and the way external-type config Names spell it. A no-op
-// for strings without a "/vN." segment.
+// "github.com/gofiber/fiber.Map", and "github.com/x/lib/v2/sub.Type" ->
+// "github.com/x/lib/sub.Type". This matches the historical naming (which dropped
+// the segment) and the way external-type config Names spell it. A no-op for
+// strings without a "/vN<sep>" segment.
 func stripMajorVersion(typeName string) string {
 	if !strings.Contains(typeName, "/v") {
 		return typeName
 	}
-	return majorVersionInPath.ReplaceAllString(typeName, ".")
+	return majorVersionInPath.ReplaceAllString(typeName, "$1")
 }
 
 // schemaName applies the standard name replacer and optionally shortens the type name.
