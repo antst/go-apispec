@@ -298,3 +298,40 @@ func TestVersionedExternalType_NoDanglingRef(t *testing.T) {
 		"external component must be emitted under the same name the $ref targets (else dangling)")
 	assert.Equal(t, "object", components.Schemas[wantName].Type, "emitted component is the configured external schema")
 }
+
+// TestOpaqueFuncChanFieldsOmitted locks the fix for the opaque-leaf dangling-$ref
+// bug (full max-effort review, PR #61). A struct field whose type is an opaque
+// func or chan leaf used to emit a $ref to a "func"/"chan" component that is never
+// generated (invalid OpenAPI). Such fields are non-serializable and must be
+// omitted entirely — not present in Properties, not listed in Required, and never
+// a dangling $ref. struct{}/interface{} are NOT opaque (they map to an object
+// schema) and stay present.
+func TestOpaqueFuncChanFieldsOmitted(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{StringPool: sp}
+	cfg := DefaultAPISpecConfig()
+
+	typ := &metadata.Type{
+		Name: sp.Get("Job"),
+		Kind: sp.Get("struct"),
+		Fields: []metadata.Field{
+			{Name: sp.Get("Name"), Type: sp.Get("string"),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, Tag: sp.Get(`json:"name"`)},
+			{Name: sp.Get("OnDone"), Type: sp.Get("func"),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefFunc}, Tag: sp.Get(`json:"onDone"`)},
+			{Name: sp.Get("Events"), Type: sp.Get("chan"),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefChan}, Tag: sp.Get(`json:"events"`)},
+		},
+	}
+
+	schema, _ := generateStructSchema(map[string]*Schema{}, "Job", typ, meta, cfg, nil)
+
+	assert.Contains(t, schema.Properties, "name", "serializable field stays")
+	assert.NotContains(t, schema.Properties, "onDone", "opaque func field omitted (not a dangling $ref)")
+	assert.NotContains(t, schema.Properties, "events", "opaque chan field omitted")
+	assert.NotContains(t, schema.Required, "onDone", "omitted field must not appear in required")
+	assert.NotContains(t, schema.Required, "events", "omitted field must not appear in required")
+	for name, prop := range schema.Properties {
+		assert.NotEmptyf(t, prop, "property %q must not be a nil schema", name)
+	}
+}

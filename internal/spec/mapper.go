@@ -1278,6 +1278,14 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			}
 		}
 
+		// A nil field schema means the type has no representable form — an opaque
+		// func/chan leaf (TypeRef marks these "no schema"). Omit the field entirely:
+		// a non-serializable field has no JSON representation, and keeping it would
+		// dangle a $ref AND add a `required` entry with no matching property.
+		if fieldSchema == nil {
+			continue
+		}
+
 		// Required inference composes (issue #48): a field is required by Go
 		// default when its json tag has no omitempty (the zero value is always
 		// serialized), and a `validate:"required"` constraint forces it. A
@@ -2451,7 +2459,13 @@ func canAddRefSchemaForType(key string) bool {
 	// instantiations start with the type NAME (e.g. "Pair[...]" or
 	// "Foo[map[string]int]"), so a HasPrefix check leaves them componentizable; a
 	// Contains check would wrongly reject any generic whose ARGUMENT is a map.
-	if metadata.IsPrimitiveType(key) || strings.HasPrefix(key, "[") || strings.HasPrefix(key, "map[") {
+	// "func"/"chan" are opaque leaves: TypeRef renders them as exactly these
+	// sentinels and documents them as having no schema. They are never nameable
+	// components — without this guard both schemaForUnresolved and the struct-field
+	// path emit a $ref to a "func"/"chan" component that is never generated (a
+	// dangling $ref / invalid OpenAPI).
+	if metadata.IsPrimitiveType(key) || strings.HasPrefix(key, "[") || strings.HasPrefix(key, "map[") ||
+		key == "func" || key == "chan" {
 		return false
 	}
 
