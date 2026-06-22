@@ -104,3 +104,45 @@ func TestSchemaForNamedRef_ExternalVersionedTypeMatches(t *testing.T) {
 		assert.NotContains(t, schema.Ref, "v2", "$ref strips the version to match the component key")
 	}
 }
+
+// TestLeafPkgInMetadata covers the gate helper: unqualified or analyzed-package
+// refs pass; an external (unanalyzed) package does not.
+func TestLeafPkgInMetadata(t *testing.T) {
+	meta := newTestMeta()
+	meta.Packages = map[string]*metadata.Package{"github.com/me/app": {}}
+	assert.True(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: ""}, meta), "unqualified allowed")
+	assert.True(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "github.com/me/app"}, meta), "analyzed package")
+	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "github.com/acme/extpkg"}, meta), "external package")
+	assert.False(t, leafPkgInMetadata(nil, meta))
+	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "x"}, nil))
+}
+
+// TestExternalCollisionNotBorrowed covers the collision fix at both sites: an
+// external type whose bare name matches an internal one must NOT resolve to the
+// internal type (via typeByRef's name-only fallback).
+func TestExternalCollisionNotBorrowed(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+	meta.Packages = map[string]*metadata.Package{
+		"github.com/me/app": {Files: map[string]*metadata.File{"a.go": {Types: map[string]*metadata.Type{
+			"User": {
+				Name: sp.Get("User"), Pkg: sp.Get("github.com/me/app"), Kind: sp.Get("struct"),
+				Fields: []metadata.Field{{Name: sp.Get("Secret"), Type: sp.Get("string")}},
+			},
+		}}}},
+	}
+	ext := &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "github.com/acme/extpkg", Name: "User"}
+	internal := &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "github.com/me/app", Name: "User"}
+
+	// bodyTypeFromMetadataRef: external must not borrow the internal type.
+	assert.Equal(t, "", bodyTypeFromMetadataRef(ext, meta, &APISpecConfig{}), "external not borrowed")
+	assert.Equal(t, "github.com/me/app.User", bodyTypeFromMetadataRef(internal, meta, &APISpecConfig{}), "internal still resolves")
+
+	// schemaForNamedRef: external yields a dangling $ref, NOT the internal struct.
+	schema, schemas, ok := schemaForNamedRef(map[string]*Schema{}, ext, "github.com/acme/extpkg.User", meta, &APISpecConfig{}, nil)
+	assert.True(t, ok)
+	assert.NotEmpty(t, schema.Ref, "external collision → dangling $ref")
+	for _, s := range schemas {
+		assert.NotContains(t, s.Properties, "secret", "must not emit the internal User's fields under the external name")
+	}
+}

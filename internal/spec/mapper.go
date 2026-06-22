@@ -942,8 +942,10 @@ func bodyTypeFromMetadataRef(ref *metadata.TypeRef, meta *metadata.Metadata, cfg
 	}
 	// In-metadata named leaf — including a generic instantiation, whose base type
 	// resolves by Pkg/Name and whose args ride along in ref.String() for
-	// downstream generic substitution.
-	if typeByRef(leaf, meta) != nil {
+	// downstream generic substitution. Gate on the leaf's own package being one we
+	// analyzed so an EXTERNAL type isn't mistaken for a same-named internal one via
+	// typeByRef's name-only fallback.
+	if leafPkgInMetadata(leaf, meta) && typeByRef(leaf, meta) != nil {
 		return ref.String()
 	}
 	// A configured external type; generics are not external-configured.
@@ -990,6 +992,25 @@ func typeByRef(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Type {
 		}
 	}
 	return nil
+}
+
+// leafPkgInMetadata reports whether a named ref's package is one we actually
+// analyzed (or is unqualified). typeByRef has a name-only fallback that, for a
+// ref whose Pkg is NOT a metadata package — an EXTERNAL/unanalyzed type — would
+// borrow an unrelated INTERNAL type that happens to share the bare name, binding
+// a body/field schema to the wrong shape. Callers that resolve a qualified leaf
+// gate the lookup on this so an external type is treated as external, not as its
+// same-named internal namesake. typeByRef itself keeps the lenient fallback (it
+// is required for unqualified refs — see TestTypeByRef).
+func leafPkgInMetadata(ref *metadata.TypeRef, meta *metadata.Metadata) bool {
+	if ref == nil || meta == nil {
+		return false
+	}
+	if ref.Pkg == "" {
+		return true // unqualified/synthetic — allow name-based resolution
+	}
+	_, ok := meta.Packages[ref.Pkg]
+	return ok
 }
 
 const generateSchemaFromTypeKey = "generateSchemaFromType"
@@ -2282,7 +2303,13 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 			}
 		}
 	}
-	typ := typeByRef(ref, meta)
+	// Gate the lookup on the ref's own package being analyzed: an external type
+	// (Pkg absent from metadata) must not borrow a same-named internal type via
+	// typeByRef's name-only fallback (it would bind the field to the wrong shape).
+	var typ *metadata.Type
+	if leafPkgInMetadata(ref, meta) {
+		typ = typeByRef(ref, meta)
+	}
 	if typ == nil {
 		// External/unfound named type with no component: emit a dangling $ref via
 		// addRefSchemaForType's raw replaced name (NOT schemaName), since there is
