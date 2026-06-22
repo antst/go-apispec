@@ -20,16 +20,12 @@ import (
 )
 
 func TestNewSchemaMapper(t *testing.T) {
-	cfg := &APISpecConfig{}
-	mapper := NewSchemaMapper(cfg)
+	// cfg is accepted for call-site symmetry but no longer stored (the mapper is
+	// stateless after the string-based generator was removed).
+	mapper := NewSchemaMapper(&APISpecConfig{})
 
 	if mapper == nil {
 		t.Fatal("NewSchemaMapper returned nil")
-		return
-	}
-
-	if mapper.cfg != cfg {
-		t.Error("SchemaMapper config not set correctly")
 	}
 }
 

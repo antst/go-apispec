@@ -19,16 +19,14 @@ import (
 	"strings"
 )
 
-// SchemaMapperImpl implements SchemaMapper
-type SchemaMapperImpl struct {
-	cfg *APISpecConfig
-}
+// SchemaMapperImpl implements SchemaMapper. It is now stateless — only status/
+// method mapping remains after the string-based schema generator was removed.
+type SchemaMapperImpl struct{}
 
-// NewSchemaMapper creates a new schema mapper
-func NewSchemaMapper(cfg *APISpecConfig) *SchemaMapperImpl {
-	return &SchemaMapperImpl{
-		cfg: cfg,
-	}
+// NewSchemaMapper creates a new schema mapper. cfg is accepted for call-site
+// symmetry but unused (the mapper no longer derives schemas from config).
+func NewSchemaMapper(_ *APISpecConfig) *SchemaMapperImpl {
+	return &SchemaMapperImpl{}
 }
 
 // HTTPStatusByName maps HTTP status code names to their numeric values.

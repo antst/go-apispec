@@ -24,14 +24,14 @@ import (
 // TypeResolverImpl implements TypeResolver
 type TypeResolverImpl struct {
 	meta *metadata.Metadata
-	cfg  *APISpecConfig
 }
 
-// NewTypeResolver creates a new type resolver
-func NewTypeResolver(meta *metadata.Metadata, cfg *APISpecConfig) *TypeResolverImpl {
+// NewTypeResolver creates a new type resolver. cfg is accepted for call-site
+// symmetry with the other constructors but is unused: type resolution reads only
+// the metadata model.
+func NewTypeResolver(meta *metadata.Metadata, _ *APISpecConfig) *TypeResolverImpl {
 	return &TypeResolverImpl{
 		meta: meta,
-		cfg:  cfg,
 	}
 }
 

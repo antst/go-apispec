@@ -1254,8 +1254,19 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			// explicit qualification pass here would never fire.
 
 			derivedFieldType := strings.TrimPrefix(fieldType, "*")
+			// An opaque func/chan leaf has no real component. If such a key is
+			// already in usedTypes (e.g. seeded as a body/return type), the
+			// already-seen branch below would $ref a "func"/"chan" component that is
+			// never generated — a dangling $ref. Route it to the else branch instead
+			// (parity with that branch's canAddRefSchemaForType guard), which omits it.
+			opaqueLeaf := false
+			if r := metadata.ParseTypeRef(derivedFieldType); r != nil {
+				if leaf := r.NamedLeaf(); leaf != nil && (leaf.Kind == metadata.RefFunc || leaf.Kind == metadata.RefChan) {
+					opaqueLeaf = true
+				}
+			}
 			// Check if this field type already exists in usedTypes
-			if bodySchema, ok := usedTypes[derivedFieldType]; !isPrimitive && ok {
+			if bodySchema, ok := usedTypes[derivedFieldType]; !isPrimitive && ok && !opaqueLeaf {
 				// Create a reference to the existing schema
 				fieldSchema = addRefSchemaForType(derivedFieldType)
 
