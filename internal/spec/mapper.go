@@ -646,6 +646,7 @@ func buildResponses(respInfo map[string]*ResponseInfo) map[string]Response {
 				if bodyResp.Schema != nil {
 					if statusResp.Schema == nil {
 						statusResp.BodyType = bodyResp.BodyType
+						statusResp.BodyTypeRef = bodyResp.BodyTypeRef
 						statusResp.Schema = bodyResp.Schema
 					} else if !schemasEqual(statusResp.Schema, bodyResp.Schema) {
 						statusResp.AlternativeSchemas = append(statusResp.AlternativeSchemas, bodyResp.Schema)

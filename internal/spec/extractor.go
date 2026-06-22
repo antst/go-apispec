@@ -1017,11 +1017,13 @@ func (e *Extractor) addResponse(route *RouteInfo, resp *ResponseInfo) {
 		resp.Schema = nil
 		resp.AlternativeSchemas = nil
 		resp.BodyType = ""
+		resp.BodyTypeRef = nil
 	}
 	key := fmt.Sprintf("%d", resp.StatusCode)
 	if existing, ok := route.Response[key]; ok && resp.Schema != nil {
 		if existing.Schema == nil {
 			existing.BodyType = resp.BodyType
+			existing.BodyTypeRef = resp.BodyTypeRef
 			existing.Schema = resp.Schema
 		} else {
 			isDuplicate := schemasEqual(existing.Schema, resp.Schema)
@@ -1969,6 +1971,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 					StatusCode:  st,
 					ContentType: respInfo.ContentType,
 					BodyType:    respInfo.BodyType,
+					BodyTypeRef: respInfo.BodyTypeRef,
 					Schema:      respInfo.Schema,
 					Branch:      respInfo.Branch,
 				})
@@ -2262,6 +2265,7 @@ func (o *OverrideApplierImpl) ApplyOverrides(routeInfo *RouteInfo) {
 			if override.ResponseType != "" && routeInfo.Response != nil {
 				for _, key := range slices.Sorted(maps.Keys(routeInfo.Response)) {
 					routeInfo.Response[key].BodyType = preprocessingBodyType(override.ResponseType)
+					routeInfo.Response[key].BodyTypeRef = metadata.ParseTypeRef(override.ResponseType)
 				}
 			}
 			if len(override.Tags) > 0 {
