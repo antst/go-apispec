@@ -838,7 +838,13 @@ func generateSchemas(usedTypes map[string]*Schema, cfg *APISpecConfig, component
 		// Check external types
 		if cfg != nil {
 			for _, externalType := range cfg.ExternalTypes {
-				if externalType.Name == strings.ReplaceAll(typeName, TypeSep, ".") {
+				// Match the major-version-stripped key. The component is emitted under
+				// schemaName (which strips the version), and schemaForNamedRef matches
+				// ExternalTypes by the stripped name while emitting the field $ref under
+				// schemaName too. Matching the RAW (versioned) key here would skip a
+				// versioned external type's component (".../v2.Map") even though its
+				// $ref — stripped to ".../Map" — is still emitted: a dangling $ref.
+				if externalType.Name == stripMajorVersion(strings.ReplaceAll(typeName, TypeSep, ".")) {
 					components.Schemas[schemaName(typeName, cfg)] = externalType.OpenAPIType
 					continue
 				}

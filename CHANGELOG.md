@@ -26,7 +26,7 @@ type strings. This corrects several cases that were previously lossy:
 - Removed spurious orphan components for primitive generic arguments
   (`Pair[string,int]` no longer emits `T-string`/`U-int`).
 
-### Changed — internals (no output change)
+### Changed — internals (no output change beyond the improvements above)
 
 - The string-based schema generator (`mapGoTypeToOpenAPISchema`) and the
   type-string parsing helpers (`TypeParts`, `typeByName`) were deleted; all schema

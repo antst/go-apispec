@@ -259,3 +259,42 @@ func TestExternalCollisionNotBorrowed(t *testing.T) {
 		assert.NotContains(t, s.Properties, "secret", "must not emit the internal User's fields under the external name")
 	}
 }
+
+// TestVersionedExternalType_NoDanglingRef locks the fix for the cross-function
+// dangling-$ref bug (full max-effort review, PR #61). A versioned external type
+// configured by its stripped Name (the documented convention) matches in
+// schemaForNamedRef (which strips before comparing) and gets a $ref under the
+// stripped component name (schemaName also strips). generateSchemas, however,
+// used to match ExternalTypes by the RAW (versioned) key, so it never emitted
+// the component — leaving the $ref dangling. The match there now strips too,
+// consistent with the schemaName-based emission on the same line.
+func TestVersionedExternalType_NoDanglingRef(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{StringPool: sp}
+	cfg := DefaultAPISpecConfig()
+	cfg.ExternalTypes = []ExternalType{
+		{Name: "github.com/gofiber/fiber.Map", OpenAPIType: &Schema{Type: "object"}},
+	}
+
+	ref := &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "github.com/gofiber/fiber/v2", Name: "Map"}
+	key := "github.com/gofiber/fiber/v2.Map"
+
+	usedTypes := map[string]*Schema{}
+	schema, schemas, ok := schemaForNamedRef(usedTypes, ref, key, meta, cfg, nil)
+	if !assert.True(t, ok, "versioned external type should match config by stripped Name") {
+		return
+	}
+	wantRef := refComponentsSchemasPrefix + schemaName(key, cfg)
+	assert.Equal(t, wantRef, schema.Ref, "field $ref targets the stripped component name")
+
+	for k, v := range schemas {
+		markUsedType(usedTypes, k, v)
+	}
+	components := Components{Schemas: map[string]*Schema{}}
+	generateSchemas(usedTypes, cfg, components, meta)
+
+	wantName := schemaName(key, cfg)
+	assert.Contains(t, components.Schemas, wantName,
+		"external component must be emitted under the same name the $ref targets (else dangling)")
+	assert.Equal(t, "object", components.Schemas[wantName].Type, "emitted component is the configured external schema")
+}
