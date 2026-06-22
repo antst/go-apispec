@@ -70,7 +70,7 @@ func TestArgReferencesRequest(t *testing.T) {
 func TestDecodeReadsRequestBody(t *testing.T) {
 	meta := pmcTestMeta()
 	matcher := &RequestPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(pmcTestCfg(), NewContextProvider(meta), nil),
+		BasePatternMatcher: NewBasePatternMatcher(pmcTestCfg(), NewContextProvider(meta)),
 	}
 
 	// nil edge → nothing to filter.
@@ -103,7 +103,7 @@ func TestDecodeSourceTracesToRequest(t *testing.T) {
 	meta := pmcTestMeta()
 	sp := meta.StringPool
 	matcher := &RequestPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(pmcTestCfg(), NewContextProvider(meta), nil),
+		BasePatternMatcher: NewBasePatternMatcher(pmcTestCfg(), NewContextProvider(meta)),
 	}
 
 	// A handler function whose `body` local is assigned io.ReadAll(r.Body),

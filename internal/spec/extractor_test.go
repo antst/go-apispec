@@ -127,8 +127,7 @@ func TestPatternMatchers(t *testing.T) {
 	}
 
 	cfg := &APISpecConfig{}
-	typeResolver := NewTypeResolver(meta, cfg)
-	matcher := NewRoutePatternMatcher(routePattern, cfg, contextProvider, typeResolver)
+	matcher := NewRoutePatternMatcher(routePattern, cfg, contextProvider)
 
 	// Test pattern matching
 	if matcher.GetPriority() <= 0 {

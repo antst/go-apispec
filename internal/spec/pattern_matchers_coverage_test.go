@@ -100,7 +100,7 @@ func newRoutePatternMatcher(meta *metadata.Metadata, pattern RoutePattern) *Rout
 	cfg := pmcTestCfg()
 	cp := NewContextProvider(meta)
 	return &RoutePatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            pattern,
 	}
 }
@@ -110,7 +110,7 @@ func newRequestPatternMatcher(meta *metadata.Metadata, pattern RequestBodyPatter
 	cfg := pmcTestCfg()
 	cp := NewContextProvider(meta)
 	return &RequestPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            pattern,
 	}
 }
@@ -860,7 +860,7 @@ func TestExtractRoute_WithMetadata(t *testing.T) {
 func TestBaseMatchPattern_Match(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	assert.True(t, base.matchPattern(`^HandleFunc$`, "HandleFunc"))
 }
@@ -868,7 +868,7 @@ func TestBaseMatchPattern_Match(t *testing.T) {
 func TestBaseMatchPattern_NoMatch(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	assert.False(t, base.matchPattern(`^GET$`, "HandleFunc"))
 }
@@ -876,7 +876,7 @@ func TestBaseMatchPattern_NoMatch(t *testing.T) {
 func TestBaseMatchPattern_EmptyPattern(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	assert.False(t, base.matchPattern("", "anything"))
 }
@@ -884,7 +884,7 @@ func TestBaseMatchPattern_EmptyPattern(t *testing.T) {
 func TestBaseMatchPattern_InvalidRegex(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	assert.False(t, base.matchPattern("[invalid", "test"))
 }
@@ -896,7 +896,7 @@ func TestBaseMatchPattern_InvalidRegex(t *testing.T) {
 func TestExtractMethodFromFunctionName_EmptyName(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	result := base.extractMethodFromFunctionNameWithConfig("", nil)
 	assert.Equal(t, "", result)
@@ -905,7 +905,7 @@ func TestExtractMethodFromFunctionName_EmptyName(t *testing.T) {
 func TestExtractMethodFromFunctionName_NilConfig_UsesDefault(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	result := base.extractMethodFromFunctionNameWithConfig("getUserProfile", nil)
 	// Default config has UsePrefix and UseContains enabled, should detect "get" -> "GET"
@@ -915,7 +915,7 @@ func TestExtractMethodFromFunctionName_NilConfig_UsesDefault(t *testing.T) {
 func TestExtractMethodFromFunctionName_CaseSensitive(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	config := &MethodExtractionConfig{
 		MethodMappings: []MethodMapping{
@@ -937,7 +937,7 @@ func TestExtractMethodFromFunctionName_CaseSensitive(t *testing.T) {
 func TestExtractMethodFromFunctionName_PriorityOrdering(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	config := &MethodExtractionConfig{
 		MethodMappings: []MethodMapping{
@@ -956,7 +956,7 @@ func TestExtractMethodFromFunctionName_PriorityOrdering(t *testing.T) {
 func TestExtractMethodFromFunctionName_ContainsMatch(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	config := &MethodExtractionConfig{
 		MethodMappings: []MethodMapping{
@@ -973,7 +973,7 @@ func TestExtractMethodFromFunctionName_ContainsMatch(t *testing.T) {
 func TestExtractMethodFromFunctionName_DefaultFallback(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	config := &MethodExtractionConfig{
 		MethodMappings: []MethodMapping{
@@ -996,7 +996,7 @@ func TestTraceVariable_NoContextImpl(t *testing.T) {
 	cfg := pmcTestCfg()
 	// Use a minimal mock that satisfies ContextProvider but is not ContextProviderImpl
 	mockCP := &mockContextProvider{}
-	base := NewBasePatternMatcher(cfg, mockCP, nil)
+	base := NewBasePatternMatcher(cfg, mockCP)
 
 	originVar, originPkg, originType, originFunc := base.traceVariable("x", "main", "main")
 	assert.Equal(t, "x", originVar)
@@ -1009,7 +1009,7 @@ func TestTraceVariable_WithContextProviderImpl(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
 	cp := NewContextProvider(meta)
-	base := NewBasePatternMatcher(cfg, cp, nil)
+	base := NewBasePatternMatcher(cfg, cp)
 
 	// traceVariable with empty metadata should return the inputs unchanged
 	originVar, originPkg, originType, _ := base.traceVariable("handler", "main", "main")
@@ -1662,7 +1662,7 @@ func TestMountMatchNode_NilNode(t *testing.T) {
 	cfg := pmcTestCfg()
 	cp := NewContextProvider(meta)
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            MountPattern{BasePattern: BasePattern{CallRegex: ".*"}, IsMount: true},
 	}
 	assert.False(t, m.MatchNode(nil))
@@ -1673,7 +1673,7 @@ func TestMountMatchNode_NilEdge(t *testing.T) {
 	cfg := pmcTestCfg()
 	cp := NewContextProvider(meta)
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            MountPattern{BasePattern: BasePattern{CallRegex: ".*"}, IsMount: true},
 	}
 	node := &TrackerNode{}
@@ -1689,7 +1689,7 @@ func TestMountMatchNode_CallRegexMatch(t *testing.T) {
 	node := buildTrackerNode(edge)
 
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            MountPattern{BasePattern: BasePattern{CallRegex: `^Mount$`}, IsMount: true},
 	}
 	assert.True(t, m.MatchNode(node))
@@ -1704,7 +1704,7 @@ func TestMountMatchNode_IsMountFalse(t *testing.T) {
 	node := buildTrackerNode(edge)
 
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            MountPattern{BasePattern: BasePattern{CallRegex: `^Mount$`}, IsMount: false},
 	}
 	// Even though CallRegex matches, IsMount is false so returns false
@@ -1720,7 +1720,7 @@ func TestMountMatchNode_FunctionNameRegex(t *testing.T) {
 	node := buildTrackerNode(edge)
 
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            MountPattern{BasePattern: BasePattern{FunctionNameRegex: `^setup.*$`}, IsMount: true},
 	}
 	assert.True(t, m.MatchNode(node))
@@ -1735,7 +1735,7 @@ func TestMountMatchNode_FunctionNameRegexNoMatch(t *testing.T) {
 	node := buildTrackerNode(edge)
 
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            MountPattern{BasePattern: BasePattern{FunctionNameRegex: `^setup.*$`}, IsMount: true},
 	}
 	assert.False(t, m.MatchNode(node))
@@ -1752,7 +1752,7 @@ func TestMountMatchNode_RecvTypeRegex(t *testing.T) {
 	node := buildTrackerNode(edge)
 
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            MountPattern{BasePattern: BasePattern{RecvTypeRegex: `^chi\.Mux$`}, IsMount: true},
 	}
 	assert.True(t, m.MatchNode(node))
@@ -1769,7 +1769,7 @@ func TestMountMatchNode_RecvTypeExact(t *testing.T) {
 	node := buildTrackerNode(edge)
 
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            MountPattern{BasePattern: BasePattern{RecvType: "chi.Mux"}, IsMount: true},
 	}
 	assert.True(t, m.MatchNode(node))
@@ -1786,7 +1786,7 @@ func TestMountMatchNode_RecvTypeExactNoMatch(t *testing.T) {
 	node := buildTrackerNode(edge)
 
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            MountPattern{BasePattern: BasePattern{RecvType: "chi.Mux"}, IsMount: true},
 	}
 	assert.False(t, m.MatchNode(node))
@@ -1798,7 +1798,7 @@ func TestMountPatternMatcher_GetPriority(t *testing.T) {
 	cp := NewContextProvider(meta)
 
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            MountPattern{BasePattern: BasePattern{CallRegex: "x", FunctionNameRegex: "y", RecvType: "z"}},
 	}
 	assert.Equal(t, 18, m.GetPriority())
@@ -1811,7 +1811,7 @@ func TestMountPatternMatcher_GetPattern_Coverage(t *testing.T) {
 
 	pattern := MountPattern{BasePattern: BasePattern{CallRegex: "Mount"}, IsMount: true}
 	m := &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, cp),
 		pattern:            pattern,
 	}
 	result := m.GetPattern()
@@ -1848,7 +1848,7 @@ func TestIsValidHTTPMethod_Coverage(t *testing.T) {
 func TestIsLetter(t *testing.T) {
 	meta := pmcTestMeta()
 	cfg := pmcTestCfg()
-	base := NewBasePatternMatcher(cfg, NewContextProvider(meta), nil)
+	base := NewBasePatternMatcher(cfg, NewContextProvider(meta))
 
 	assert.True(t, base.isLetter('a'))
 	assert.True(t, base.isLetter('Z'))

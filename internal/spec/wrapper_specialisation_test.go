@@ -87,7 +87,7 @@ func wsMeta() *metadata.Metadata {
 func wsMatcher(meta *metadata.Metadata) *ResponsePatternMatcherImpl {
 	cp := NewContextProvider(meta)
 	return &ResponsePatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(pmcTestCfg(), cp, nil),
+		BasePatternMatcher: NewBasePatternMatcher(pmcTestCfg(), cp),
 		pattern:            ResponsePattern{},
 	}
 }
