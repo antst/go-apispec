@@ -2370,9 +2370,12 @@ func TestCanAddRefSchemaForTypeWithMap(t *testing.T) {
 			expected: false,
 		},
 		{
-			name:     "map type with package prefix",
-			key:      "pkg.map[string]int",
-			expected: false,
+			// A generic INSTANTIATED with a map argument is a nameable component —
+			// it starts with the type name, not "map[". (The old Contains("map[")
+			// check wrongly rejected these.)
+			name:     "generic with a map type argument",
+			key:      "Foo[map[string]int]",
+			expected: true,
 		},
 		{
 			name:     "nested type",

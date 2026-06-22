@@ -52,6 +52,11 @@ func TestResolveUnderlyingType_FixedArrayAliasKeepsLength(t *testing.T) {
 	assert.Equal(t, "[3]float64", resolveUnderlyingType("[3]ex.Celsius", meta), "fixed-array length preserved")
 	assert.Equal(t, "[]float64", resolveUnderlyingType("[]ex.Celsius", meta), "slice stays a slice")
 	assert.Equal(t, "float64", resolveUnderlyingType("ex.Celsius", meta), "scalar alias unwrapped")
+	assert.Equal(t, "*float64", resolveUnderlyingType("*ex.Celsius", meta), "pointer kept")
+	// Nested wrappers must ALL survive (the re-apply-outermost-only bug dropped the inner one).
+	assert.Equal(t, "*[]float64", resolveUnderlyingType("*[]ex.Celsius", meta), "pointer-to-slice keeps both layers")
+	assert.Equal(t, "map[string]float64", resolveUnderlyingType("map[string]ex.Celsius", meta), "map value resolved, map kept")
+	assert.Equal(t, "[2]*float64", resolveUnderlyingType("[2]*ex.Celsius", meta), "array-of-pointer keeps both")
 }
 
 // TestWrapperFieldIsGeneric_ContainerNotPlaceholder covers SW1: only interface{}/
@@ -130,10 +135,11 @@ func TestSchemaForNamedRef_NilVisitedTypesNoPanic(t *testing.T) {
 // absent from metadata (a genuinely external type) is rejected.
 func TestLeafPkgInMetadata(t *testing.T) {
 	meta := newTestMeta()
-	meta.Packages = map[string]*metadata.Package{"github.com/me/app": {}}
+	meta.Packages = map[string]*metadata.Package{"github.com/me/app/models": {}}
 	assert.True(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: ""}, meta), "unqualified allowed")
-	assert.True(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "github.com/me/app"}, meta), "analyzed package")
-	assert.True(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "models"}, meta), "short internal qualifier (no '/') allowed")
+	assert.True(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "github.com/me/app/models"}, meta), "analyzed package (full path)")
+	assert.True(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "models"}, meta), "short qualifier = a package's last segment")
+	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "uuid"}, meta), "dotless EXTERNAL package (no matching last segment) rejected")
 	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "github.com/acme/extpkg"}, meta), "path-like external package rejected")
 	assert.False(t, leafPkgInMetadata(nil, meta))
 	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "x"}, nil))
@@ -156,15 +162,14 @@ func TestSchemaForType_FixedArrayBridgeKeepsLength(t *testing.T) {
 	}
 }
 
-// TestStripMajorVersion covers the version-strip helper at every position,
-// including the subpackage case (round-6 Copilot): a /vN/ segment mid-path is
-// stripped like a /vN. segment before the type, while non-version lookalikes are
-// left alone.
+// TestStripMajorVersion locks that only a TRAILING /vN. (before the type name) is
+// stripped — a /vN/ subpackage segment is left intact, so distinct API-version
+// subpackages do NOT collapse onto one component name (the round-6 over-strip
+// regression).
 func TestStripMajorVersion(t *testing.T) {
 	cases := map[string]string{
-		"github.com/gofiber/fiber/v2.Map": "github.com/gofiber/fiber.Map", // before the type
-		"github.com/x/lib/v2/sub.Type":    "github.com/x/lib/sub.Type",    // subpackage (the fix)
-		"github.com/x/lib/v10/a/b.Type":   "github.com/x/lib/a/b.Type",    // multi-digit, deep
+		"github.com/gofiber/fiber/v2.Map": "github.com/gofiber/fiber.Map", // versioned module type → stripped
+		"github.com/x/lib/v2/sub.Type":    "github.com/x/lib/v2/sub.Type", // subpackage → NOT stripped (kept)
 		"github.com/x/lib.Type":           "github.com/x/lib.Type",        // unversioned
 		"User":                            "User",                         // unqualified
 		"github.com/x/v1alpha1/p.T":       "github.com/x/v1alpha1/p.T",    // not a version segment
@@ -173,6 +178,11 @@ func TestStripMajorVersion(t *testing.T) {
 	for in, want := range cases {
 		assert.Equal(t, want, stripMajorVersion(in), in)
 	}
+
+	// The point of keeping subpackage versions: two API versions stay DISTINCT.
+	v1 := stripMajorVersion("myapp/api/v1/users.Request")
+	v2 := stripMajorVersion("myapp/api/v2/users.Request")
+	assert.NotEqual(t, v1, v2, "distinct API-version subpackages must not collapse to one component name")
 }
 
 // TestTypeByRefGated locks the central collision chokepoint every resolver now
@@ -192,6 +202,10 @@ func TestTypeByRefGated(t *testing.T) {
 	assert.NotNil(t, typeByRefGated(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "github.com/me/app/models", Name: "User"}, meta))
 	// Internal short qualifier -> resolves via the name fallback.
 	assert.NotNil(t, typeByRefGated(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "models", Name: "User"}, meta))
+	// DOTLESS external package colliding on the bare name -> nil (NOT borrowed):
+	// "uuid" is no analyzed package's last segment, so it is treated as external —
+	// the leaky "any dotless Pkg is internal" rule let this through before.
+	assert.Nil(t, typeByRefGated(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "uuid", Name: "User"}, meta))
 }
 
 // TestShortPkgInternalTypeStillResolves locks the round-4 refinement: an INTERNAL

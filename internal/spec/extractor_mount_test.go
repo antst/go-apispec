@@ -3347,9 +3347,10 @@ func TestResolveUnderlyingType_MapAlias(t *testing.T) {
 	}
 
 	// A well-formed map whose value is an alias resolves the value's underlying
-	// type (the tree keys on the named leaf). A malformed/incomplete map string —
+	// type while KEEPING the map wrapper (the re-apply-outermost-only bug dropped
+	// the map and returned a bare "string"). A malformed/incomplete map string —
 	// which production never emits — yields "".
-	assert.Equal(t, "string", resolveUnderlyingType("map[string]myapp-->Status", meta))
+	assert.Equal(t, "map[string]string", resolveUnderlyingType("map[string]myapp-->Status", meta))
 	assert.Equal(t, "", resolveUnderlyingType("map[myapp-->Status", meta))
 }
 

@@ -797,26 +797,31 @@ func variableTypeString(variable *metadata.Variable, meta *metadata.Metadata) st
 	return getStringFromPool(meta, variable.Type)
 }
 
-// majorVersionInPath matches a Go module major-version path segment ("/v2",
-// "/v3", …) wherever it sits in an import path — immediately before the type
-// name ("/v2.Type") OR before a subpackage ("/v2/sub.Type"). The trailing
-// separator (. or /) is captured so the segment can be removed while keeping it.
-// The version digits must be followed by that separator, so "v1alpha1" or
-// "v2pkg" (digits then a letter) are correctly NOT treated as version segments.
-var majorVersionInPath = regexp.MustCompile(`/v[0-9]+([./])`)
+// majorVersionInPath matches a Go module major-version path segment that sits
+// immediately before the TYPE name ("/v2.", "/v3.", …) — the conventional form of
+// a versioned-module type ("github.com/gofiber/fiber/v2.Map").
+//
+// It deliberately does NOT match a "/vN/" segment in the middle of a path (a
+// subpackage of a versioned module): stripping that collapses DISTINCT
+// API-version subpackages onto one component name and silently overwrites it
+// (e.g. ".../api/v1/users.Request" and ".../api/v2/users.Request" both becoming
+// "users.Request", a real concern for k8s-style layouts). Keeping the subpackage
+// version preserves those as separate components; the only cost is that a
+// subpackage-versioned EXTERNAL type configured in ExternalTypes by a
+// version-stripped Name won't match — a far narrower, config-only edge.
+var majorVersionInPath = regexp.MustCompile(`/v[0-9]+\.`)
 
-// stripMajorVersion removes the Go module major-version segment from an
+// stripMajorVersion removes the trailing Go module major-version segment from an
 // import-path-qualified type string so a versioned external type names the same
 // as its unversioned form: "github.com/gofiber/fiber/v2.Map" ->
-// "github.com/gofiber/fiber.Map", and "github.com/x/lib/v2/sub.Type" ->
-// "github.com/x/lib/sub.Type". This matches the historical naming (which dropped
-// the segment) and the way external-type config Names spell it. A no-op for
-// strings without a "/vN<sep>" segment.
+// "github.com/gofiber/fiber.Map". This matches the historical naming (which
+// dropped the segment) and the way external-type config Names spell it. A no-op
+// for strings without a trailing "/vN." segment (including subpackage "/vN/").
 func stripMajorVersion(typeName string) string {
 	if !strings.Contains(typeName, "/v") {
 		return typeName
 	}
-	return majorVersionInPath.ReplaceAllString(typeName, "$1")
+	return majorVersionInPath.ReplaceAllString(typeName, ".")
 }
 
 // schemaName applies the standard name replacer and optionally shortens the type name.
@@ -1001,17 +1006,20 @@ func typeByRef(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Type {
 
 // leafPkgInMetadata reports whether a named ref's package is one typeByRef may
 // resolve by name. typeByRef has a name-only fallback that, for a ref whose Pkg
-// is an EXTERNAL/unanalyzed IMPORT PATH, would borrow an unrelated INTERNAL type
-// that happens to share the bare name, binding a body/field schema to the wrong
-// shape. Callers gate the lookup on this so a genuinely external type is treated
-// as external, not as its same-named internal namesake.
+// is EXTERNAL/unanalyzed, would borrow an unrelated INTERNAL type that happens to
+// share the bare name, binding a body/field schema to the wrong shape. Callers
+// gate the lookup on this so a genuinely external type is treated as external,
+// not as its same-named internal namesake.
 //
-// The reject is narrow on purpose: only a PATH-LIKE qualifier (an import path,
-// containing "/") absent from the analyzed set is external. A bare-identifier
-// qualifier (no "/") is a SHORT internal spelling that getTypeName emits for a
-// cross-package type when go/types info is partial — it must still resolve via
-// typeByRef's name fallback, so it is allowed (like an unqualified ref).
-// typeByRef itself keeps the lenient fallback (see TestTypeByRef).
+// Resolution by Pkg form:
+//   - "" (unqualified): allow — no package to disambiguate by, name fallback runs.
+//   - a full import-path KEY: allow — it is an analyzed package.
+//   - a path-like qualifier (contains "/") absent from metadata: reject — external.
+//   - a bare-identifier qualifier (no "/"): allow ONLY if it is the last path
+//     segment of some analyzed package — i.e. a SHORT spelling getTypeName emits
+//     for an internal cross-package type. A dotless EXTERNAL package (uuid, bytes,
+//     time) matches no segment and is correctly rejected — the earlier "any
+//     dotless Pkg is internal" rule leaked exactly these.
 func leafPkgInMetadata(ref *metadata.TypeRef, meta *metadata.Metadata) bool {
 	if ref == nil || meta == nil {
 		return false
@@ -1022,9 +1030,28 @@ func leafPkgInMetadata(ref *metadata.TypeRef, meta *metadata.Metadata) bool {
 	if _, ok := meta.Packages[ref.Pkg]; ok {
 		return true // an analyzed package (full import-path key)
 	}
-	// Absent from metadata: reject only a path-like import qualifier; a short
-	// bare-identifier qualifier is an internal spelling typeByRef can still resolve.
-	return !strings.Contains(ref.Pkg, "/")
+	if strings.Contains(ref.Pkg, "/") {
+		return false // a path-like import qualifier absent from metadata → external
+	}
+	// A bare-identifier qualifier resolves only if it is the short spelling of an
+	// analyzed package (its last path segment); a dotless external package matches
+	// nothing here.
+	for pkgPath := range meta.Packages {
+		if lastPathSegment(pkgPath) == ref.Pkg {
+			return true
+		}
+	}
+	return false
+}
+
+// lastPathSegment returns the final "/"-separated segment of an import path
+// (the conventional source-level package qualifier): "github.com/x/app/models"
+// -> "models"; a segment-less string is returned unchanged.
+func lastPathSegment(p string) string {
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
 }
 
 // typeByRefGated is typeByRef with the collision guard applied: it resolves a
@@ -1386,9 +1413,10 @@ func generateAliasSchema(usedTypes map[string]*Schema, typ *metadata.Type, meta 
 
 // resolveUnderlyingType resolves an alias/enum type to its underlying type,
 // keyed on the parsed TypeRef (T009) rather than string-prefix stripping: it
-// unwraps slice/array/pointer wrappers to the named leaf, resolves that leaf via
-// typeByRef, and re-applies the outermost wrapper to the alias target. Returns ""
-// for non-alias or unresolved leaves.
+// unwraps slice/array/pointer/map wrappers to the named leaf, resolves that leaf
+// via typeByRef, and re-applies EVERY wrapper around the alias target (a
+// pointer-to-slice or map-valued alias must keep its inner container, not just
+// the outermost). Returns "" for non-alias or unresolved leaves.
 func resolveUnderlyingType(typeName string, meta *metadata.Metadata) string {
 	if meta == nil {
 		return ""
@@ -1402,21 +1430,33 @@ func resolveUnderlyingType(typeName string, meta *metadata.Metadata) string {
 	if typ == nil || getStringFromPool(meta, typ.Kind) != "alias" {
 		return ""
 	}
-	underlying := getStringFromPool(meta, typ.Target)
-	switch ref.Kind {
-	case metadata.RefSlice:
-		return "[]" + underlying
-	case metadata.RefArray:
-		// Preserve the fixed-array length — collapsing [N]Alias to "[]underlying"
-		// dropped minItems/maxItems for a field whose element is an alias-to-primitive.
-		if ref.Len < 0 {
-			return "[...]" + underlying
-		}
-		return "[" + strconv.Itoa(ref.Len) + "]" + underlying
-	case metadata.RefPointer:
-		return "*" + underlying
-	default:
+	return rewrapUnderlying(ref, getStringFromPool(meta, typ.Target))
+}
+
+// rewrapUnderlying rebuilds the full wrapper chain of ref around `underlying`,
+// substituting it for the named leaf NamedLeaf() found. Recurses through every
+// pointer/slice/array/map layer (NamedLeaf unwraps all of them), so
+// "*[]Alias"/"map[string]Alias" become "*[]<underlying>"/"map[string]<underlying>"
+// rather than dropping the inner container. The map KEY is kept as-is (it is not
+// the resolved leaf).
+func rewrapUnderlying(ref *metadata.TypeRef, underlying string) string {
+	if ref == nil {
 		return underlying
+	}
+	switch ref.Kind {
+	case metadata.RefPointer:
+		return "*" + rewrapUnderlying(ref.Elem, underlying)
+	case metadata.RefSlice:
+		return "[]" + rewrapUnderlying(ref.Elem, underlying)
+	case metadata.RefArray:
+		if ref.Len < 0 {
+			return "[...]" + rewrapUnderlying(ref.Elem, underlying)
+		}
+		return "[" + strconv.Itoa(ref.Len) + "]" + rewrapUnderlying(ref.Elem, underlying)
+	case metadata.RefMap:
+		return "map[" + ref.Key.String() + "]" + rewrapUnderlying(ref.Elem, underlying)
+	default:
+		return underlying // the named leaf
 	}
 }
 
@@ -2400,11 +2440,12 @@ func setFixedArrayLen(s *Schema, ref *metadata.TypeRef) {
 }
 
 func canAddRefSchemaForType(key string) bool {
-	// A leading "[" marks an array or slice ("[]T" or a fixed-length "[N]T") —
-	// never a nameable component (generic instantiations start with the type
-	// name, e.g. "Pair[...]", so they are unaffected). Matching only "[]" missed
-	// fixed arrays, which getTypeName used to hide by flattening "[N]T" to "[]T".
-	if metadata.IsPrimitiveType(key) || strings.HasPrefix(key, "[") || strings.Contains(key, "map[") {
+	// A leading "[" marks an array or slice ("[]T" or a fixed-length "[N]T"), and a
+	// leading "map[" marks a map — neither is a nameable component. Generic
+	// instantiations start with the type NAME (e.g. "Pair[...]" or
+	// "Foo[map[string]int]"), so a HasPrefix check leaves them componentizable; a
+	// Contains check would wrongly reject any generic whose ARGUMENT is a map.
+	if metadata.IsPrimitiveType(key) || strings.HasPrefix(key, "[") || strings.HasPrefix(key, "map[") {
 		return false
 	}
 
