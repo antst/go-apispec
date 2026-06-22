@@ -748,10 +748,15 @@ func (r *ResponsePatternMatcherImpl) resolveParamArgType(node TrackerNodeInterfa
 			continue
 		}
 		if arg, exists := parentEdge.ParamArgMap[paramName]; exists {
-			// Use GetArgumentInfo first — it produces the fully-qualified type
-			// (e.g., "error_helpers.User" instead of just "User"). Parse the
-			// resolved string at this boundary (research D6: sourcing arg.TypeRef
-			// directly is deferred).
+			// D6 (Phase 4): the bound arg carries its own structured type — source the
+			// ref directly, no re-parse, when it resolves to a concrete named type.
+			if arg.TypeRef != nil {
+				if s := arg.TypeRef.String(); s != "" && s != "interface{}" && s != "any" {
+					return s, arg.TypeRef
+				}
+			}
+			// Otherwise fall back to GetArgumentInfo's (fully-qualified) string and
+			// parse it at this boundary.
 			if info := r.contextProvider.GetArgumentInfo(&arg); info != "" && info != "interface{}" && info != "any" {
 				return info, metadata.ParseTypeRef(info)
 			}

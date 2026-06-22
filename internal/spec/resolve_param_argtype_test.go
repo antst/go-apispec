@@ -53,6 +53,23 @@ func TestResolveParamArgType_RefBranches(t *testing.T) {
 		}
 	})
 
+	// Branch D6 (Phase 4): when the bound arg carries its own structured TypeRef,
+	// resolveParamArgType sources it directly — the returned ref is that very
+	// pointer (no re-parse), and the string is its rendering.
+	t.Run("typeref branch sources the ref natively", func(t *testing.T) {
+		tr := metadata.ParseTypeRef("svc.Account")
+		arg := makeIdentArg(meta, "u", "shadowed.ByTypeRef")
+		arg.TypeRef = tr
+		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
+		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
+		child := makeTrackerNode(&childEdge)
+		child.Parent = makeTrackerNode(&parent)
+
+		got, ref := m.resolveParamArgType(child, "p")
+		assert.Equal(t, "svc.Account", got, "string comes from arg.TypeRef, not GetArgumentInfo")
+		assert.Same(t, tr, ref, "ref is the arg's own TypeRef pointer — native, not re-parsed")
+	})
+
 	// Branch 2 (Phase-3 fallback ref): GetArgumentInfo returns "" for a
 	// KindKeyValue arg, so resolution falls through to the raw GetType() and now
 	// also materializes a ref from it.
