@@ -18,6 +18,20 @@ import (
 	"github.com/antst/go-apispec/internal/metadata"
 )
 
+// derefPointerRef unwraps one pointer layer from ref to stay in lockstep with a
+// body/param STRING from which the caller has just stripped a leading "*"
+// (pattern.Deref). ParseTypeRef("*X") is RefPointer{Elem}, so the unwrapped Elem
+// renders to the stripped string — keeping ref == ParseTypeRef(string) without a
+// re-parse. Returns ref unchanged when it is not a pointer (the string had no "*"
+// to strip, or resolution produced no ref), so callers can apply it
+// unconditionally after the string strip.
+func derefPointerRef(ref *metadata.TypeRef) *metadata.TypeRef {
+	if ref != nil && ref.Kind == metadata.RefPointer && ref.Elem != nil {
+		return ref.Elem
+	}
+	return ref
+}
+
 // sharedResolveTypeOrigin consolidates the common type origin resolution logic
 // used by RequestPatternMatcherImpl, ResponsePatternMatcherImpl, and ParamPatternMatcherImpl.
 //

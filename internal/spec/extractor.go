@@ -1839,10 +1839,15 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		// (T009/T011).
 		if arg.TypeRef != nil {
 			rawArgType = arg.TypeRef.String()
+			// Phase 4: baseline the ref from the arg's own structured type — native,
+			// no parse. resolveTypeOrigin / literal / deref below refine it in
+			// lockstep with bodyType where they change the string.
+			bodyRef = arg.TypeRef
 		}
 		if strings.Contains(rawArgType, "[") && !strings.HasPrefix(rawArgType, "[]") && !strings.HasPrefix(rawArgType, "map[") {
 			if !genericArgsAreConcrete(bodyType) {
 				bodyType = rawArgType
+				bodyRef = arg.TypeRef // rawArgType == arg.TypeRef.String()
 			}
 		}
 
@@ -1850,15 +1855,17 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		if arg.GetKind() == metadata.KindLiteral {
 			// For literal values, determine the appropriate type based on the value
 			bodyType = determineLiteralType(bodyType)
+			bodyRef = metadata.ParseTypeRef(bodyType) // literal-type boundary (Phase 4)
 		} else if !strings.Contains(bodyType, "[") || strings.HasPrefix(bodyType, "[]") || strings.HasPrefix(bodyType, "map[") {
 			// Trace type origin for non-literal, non-generic arguments.
 			// Skip type resolution for generic types (e.g., "APIResponse[User]")
 			// to preserve the wrapper type and enable generic struct instantiation.
 			bodyType, bodyRef = r.resolveTypeOrigin(arg, node, bodyType)
 
-			// Apply dereferencing if needed
+			// Apply dereferencing if needed — unwrap the ref's pointer in lockstep.
 			if r.pattern.Deref && strings.HasPrefix(bodyType, "*") {
 				bodyType = strings.TrimPrefix(bodyType, "*")
+				bodyRef = derefPointerRef(bodyRef)
 			}
 		}
 
@@ -1881,15 +1888,14 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		// in from the caller's ParamArgMap arg instead (issue #27).
 		if strings.Contains(bodyType, "invalid type") {
 			bodyType = ""
+			bodyRef = nil
 		}
 
 		respInfo.BodyType = preprocessingBodyType(bodyType)
-		// Phase 3: reconcile the resolution-emitted ref with the final (possibly
-		// transformed) body string so the schema generator never re-parses;
-		// ref == ParseTypeRef(bodyType) keeps output byte-identical.
-		if bodyRef == nil || bodyRef.String() != bodyType {
-			bodyRef = metadata.ParseTypeRef(bodyType)
-		}
+		// Phase 4: bodyRef is kept in lockstep with bodyType through every transform
+		// above (arg.TypeRef baseline, resolveTypeOrigin, resolveParamArgType, literal
+		// boundary, deref unwrap, invalid-type clear), so the schema generator
+		// consumes it directly — no reconcile re-parse.
 		respInfo.BodyTypeRef = bodyRef
 
 		// In response-writer context, []byte means raw binary content.
@@ -2181,21 +2187,21 @@ func (p *ParamPatternMatcherImpl) ExtractParam(node TrackerNodeInterface, route 
 		if arg.GetKind() == metadata.KindLiteral {
 			// For literal values, determine the appropriate type based on the value
 			paramType = determineLiteralType(paramType)
+			paramRef = metadata.ParseTypeRef(paramType) // literal-type boundary (Phase 4)
 		} else {
-			// Trace type origin for non-literal arguments
+			// Trace type origin for non-literal arguments (sets paramRef in lockstep)
 			paramType, paramRef = p.resolveTypeOrigin(arg, node, paramType)
 
-			// Apply dereferencing if needed
+			// Apply dereferencing if needed — unwrap the ref's pointer in lockstep.
 			if p.pattern.Deref && strings.HasPrefix(paramType, "*") {
 				paramType = strings.TrimPrefix(paramType, "*")
+				paramRef = derefPointerRef(paramRef)
 			}
 		}
 
-		// Phase 3: reconcile the resolution ref with the final param string so the
-		// schema generator never re-parses (ref == ParseTypeRef(paramType)).
-		if paramRef == nil || paramRef.String() != paramType {
-			paramRef = metadata.ParseTypeRef(paramType)
-		}
+		// Phase 4: paramRef is kept in lockstep with paramType (resolveTypeOrigin,
+		// literal boundary, deref unwrap), so the schema generator consumes it
+		// directly — no reconcile re-parse.
 		schema, _ := schemaForType(route.UsedTypes, paramType, paramRef, route.Metadata, p.cfg, nil)
 		param.Schema = schema
 	}

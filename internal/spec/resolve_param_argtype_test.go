@@ -17,8 +17,9 @@ package spec
 import (
 	"testing"
 
-	"github.com/antst/go-apispec/internal/metadata"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/antst/go-apispec/internal/metadata"
 )
 
 // TestResolveParamArgType_RefBranches exercises every return path of

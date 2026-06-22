@@ -544,6 +544,10 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		// Check if this is a literal value - if so, determine appropriate type
 		if arg.GetKind() == metadata.KindLiteral {
 			bodyType = determineLiteralType(bodyType)
+			// The literal type is a freshly-determined primitive string — parse it
+			// once here, at the boundary where it originates (Phase 4: keep bodyRef
+			// in lockstep so the schema path never re-derives it).
+			bodyRef = metadata.ParseTypeRef(bodyType)
 		} else if s := bodyTypeFromMetadataRef(arg.TypeRef, route.Metadata, r.cfg); s != "" {
 			// The decode target (&dto) carries a TypeRef whose named leaf is a type
 			// in metadata — its declared type IS the body type, no origin tracing
@@ -552,6 +556,7 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 			// field of that type. Generic/helper decode targets (leaf RefParam) get
 			// "" here and fall through to the resolution chain below (T009/T011).
 			bodyType = strings.TrimPrefix(s, "*")
+			bodyRef = metadata.ParseTypeRef(bodyType)
 		} else {
 			// Check for resolved type information in the CallArgument
 			if resolvedType := arg.GetResolvedType(); resolvedType != "" {
@@ -563,12 +568,14 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 				}
 			}
 
-			// Trace type origin
+			// Trace type origin (sets bodyRef in lockstep with bodyType)
 			bodyType, bodyRef = r.resolveTypeOrigin(arg, node, bodyType)
 
-			// Apply dereferencing if needed
+			// Apply dereferencing if needed — unwrap the ref's pointer layer in
+			// lockstep with the string strip (Phase 4).
 			if r.pattern.Deref && strings.HasPrefix(bodyType, "*") {
 				bodyType = strings.TrimPrefix(bodyType, "*")
+				bodyRef = derefPointerRef(bodyRef)
 			}
 		}
 
@@ -579,16 +586,12 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		// extracted (possibly shared or generic) helper, recover the concrete
 		// type from the route handler's call site and re-anchor the decode
 		// target + field-inference frame onto the handler.
-		bodyType, fieldFrameBaseID = r.refineBodyTypeThroughHelper(node, reqInfo, bodyType, fieldFrameBaseID, route)
+		bodyType, fieldFrameBaseID, bodyRef = r.refineBodyTypeThroughHelper(node, reqInfo, bodyType, fieldFrameBaseID, bodyRef, route)
 
-		// Phase 3: schema generation consumes the resolved type as a *TypeRef so the
-		// generator never re-parses. Use the resolution-emitted ref when it still
-		// matches the (possibly deref'd / helper-refined) body string; otherwise the
-		// string was transformed after resolution, so re-derive at this boundary.
-		// Either way ref == ParseTypeRef(bodyType), so output is byte-identical.
-		if bodyRef == nil || bodyRef.String() != bodyType {
-			bodyRef = metadata.ParseTypeRef(bodyType)
-		}
+		// Phase 4: bodyRef has been kept in lockstep with bodyType through every
+		// transform above (resolution, deref, literal/metadata-ref boundary, helper
+		// refinement), so the schema generator consumes the structure directly with
+		// no re-parse. TestBodyTypeRefInLockstep proves bodyRef.String() == bodyType.
 		reqInfo.BodyTypeRef = bodyRef
 		schema, _ := schemaForType(route.UsedTypes, bodyType, bodyRef, route.Metadata, r.cfg, nil)
 		reqInfo.Schema = schema
@@ -732,23 +735,28 @@ func argReferencesRequest(arg *metadata.CallArgument) bool {
 //
 // reqInfo is mutated in place; the returned (bodyType, fieldFrameBaseID) replace
 // the caller's locals for schema generation and field inference.
-func (r *RequestPatternMatcherImpl) refineBodyTypeThroughHelper(node TrackerNodeInterface, reqInfo *RequestInfo, bodyType, fieldFrameBaseID string, route *RouteInfo) (string, string) {
+// refineBodyTypeThroughHelper returns the (possibly interprocedurally refined)
+// body type, its field-inference frame, and a *TypeRef kept in lockstep with the
+// returned string (Phase 4): when the call-site recovery replaces the body type,
+// the ref is re-derived from the new concrete string at that boundary; otherwise
+// the caller's existing bodyRef passes through unchanged.
+func (r *RequestPatternMatcherImpl) refineBodyTypeThroughHelper(node TrackerNodeInterface, reqInfo *RequestInfo, bodyType, fieldFrameBaseID string, bodyRef *metadata.TypeRef, route *RouteInfo) (string, string, *metadata.TypeRef) {
 	if node == nil || route == nil || route.Metadata == nil {
-		return bodyType, fieldFrameBaseID
+		return bodyType, fieldFrameBaseID, bodyRef
 	}
 	edge := node.GetEdge()
 	if edge == nil {
-		return bodyType, fieldFrameBaseID
+		return bodyType, fieldFrameBaseID, bodyRef
 	}
 	// Inline decode: the decode call sits directly in the route handler, so the
 	// frame is already correct — nothing to resolve across a call boundary.
 	if edgeCallerIsRouteHandler(edge, route) {
-		return bodyType, fieldFrameBaseID
+		return bodyType, fieldFrameBaseID, bodyRef
 	}
 
 	resolved, varName, frameBaseID := resolveBodyTypeThroughCallSite(node, reqInfo.DecodeTargetVar, route, r.contextProvider)
 	if resolved == "" {
-		return bodyType, fieldFrameBaseID
+		return bodyType, fieldFrameBaseID, bodyRef
 	}
 
 	reqInfo.DecodeTargetVar = varName
@@ -757,8 +765,9 @@ func (r *RequestPatternMatcherImpl) refineBodyTypeThroughHelper(node TrackerNode
 	if isFreeFormBodyType(reqInfo.BodyType) && !isFreeFormBodyType(resolved) {
 		reqInfo.BodyType = preprocessingBodyType(resolved)
 		bodyType = resolved
+		bodyRef = metadata.ParseTypeRef(bodyType)
 	}
-	return bodyType, fieldFrameBaseID
+	return bodyType, fieldFrameBaseID, bodyRef
 }
 
 // maxCallSiteDepth bounds how far up the tracker tree resolveBodyTypeThroughCallSite
