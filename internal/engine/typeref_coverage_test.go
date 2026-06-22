@@ -29,8 +29,13 @@ func TestEveryStructFieldHasTypeRef(t *testing.T) {
 		cfg := DefaultEngineConfig()
 		cfg.InputDir = tc.inputDir
 		meta, err := NewEngine(cfg).GenerateMetadataOnly()
-		if err != nil || meta == nil {
-			continue
+		// Fail loudly rather than continue: a metadata-generation failure here
+		// would silently make the guard pass vacuously (it would scan no fields).
+		if err != nil {
+			t.Fatalf("%s: GenerateMetadataOnly failed: %v", tc.name, err)
+		}
+		if meta == nil {
+			t.Fatalf("%s: GenerateMetadataOnly returned nil metadata", tc.name)
 		}
 		for _, pkg := range meta.Packages {
 			for _, file := range pkg.Files {

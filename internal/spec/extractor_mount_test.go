@@ -2748,6 +2748,7 @@ func TestGenerateStructSchema_FieldWithoutTypeInfo(t *testing.T) {
 	require.NotNil(t, schema)
 	assert.Equal(t, "object", schema.Type)
 	assert.Contains(t, schema.Properties, "mystery")
+	assert.NotNil(t, schema.Properties["mystery"], "the field must map to a non-nil schema, not just be present")
 }
 
 func TestGenerateStructSchema_WithGenericTypes(t *testing.T) {
