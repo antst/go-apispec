@@ -139,6 +139,23 @@ func TestLeafPkgInMetadata(t *testing.T) {
 	assert.False(t, leafPkgInMetadata(&metadata.TypeRef{Pkg: "x"}, nil))
 }
 
+// TestSchemaForType_FixedArrayBridgeKeepsLength confirms the round-1 Copilot
+// concern is closed by the D1 fix: after resolveUnderlyingType yields "[3]string"
+// for a [3]alias field, schemaForType's goType!=ref.String() bridge must still
+// carry minItems/maxItems (schemaFromParsedString re-parses the length-bearing
+// string), not return an unconstrained slice.
+func TestSchemaForType_FixedArrayBridgeKeepsLength(t *testing.T) {
+	meta := &metadata.Metadata{Packages: map[string]*metadata.Package{}}
+	ref := &metadata.TypeRef{Kind: metadata.RefArray, Len: 3,
+		Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "ex", Name: "Status"}}
+	s, _ := schemaForType(map[string]*Schema{}, "[3]string", ref, meta, &APISpecConfig{}, nil)
+	if assert.NotNil(t, s) {
+		assert.Equal(t, "array", s.Type)
+		assert.Equal(t, 3, s.MinItems, "fixed-array length must survive the bridge")
+		assert.Equal(t, 3, s.MaxItems)
+	}
+}
+
 // TestStripMajorVersion covers the version-strip helper at every position,
 // including the subpackage case (round-6 Copilot): a /vN/ segment mid-path is
 // stripped like a /vN. segment before the type, while non-version lookalikes are

@@ -102,9 +102,11 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 	// Prefer the fully-resolved go/types type when available: it is the single
 	// source of truth (resolves aliases, instantiations, and package import
 	// paths) and guarantees TypeRefFromExpr and TypeRefFromType agree for the
-	// same type. Fall back to the AST only when type info is absent or the type
-	// is unresolved (external fragments, undefined identifiers). This also lets
-	// the constructor handle value expressions, whose type comes from info.
+	// same type. Fall back to the AST when type info is absent, the type is
+	// unresolved (external fragments, undefined identifiers), OR go/types returns
+	// a shape TypeRefFromType intentionally does not represent (tuples and other
+	// default-arm kinds, for which it returns nil). This also lets the constructor
+	// handle value expressions, whose type comes from info.
 	if e != nil && info != nil {
 		if t := info.TypeOf(e); t != nil {
 			if ref := TypeRefFromType(t); ref != nil {
@@ -559,9 +561,9 @@ func splitTopLevelCommas(s string) []string {
 	depth, start := 0, 0
 	for i := 0; i < len(s); i++ {
 		switch s[i] {
-		case '[':
+		case '[', '(', '{':
 			depth++
-		case ']':
+		case ']', ')', '}':
 			depth--
 		case ',':
 			if depth == 0 {

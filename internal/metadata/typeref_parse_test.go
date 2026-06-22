@@ -117,3 +117,31 @@ func TestParseTypeRef_RoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestParseTypeRef_FuncTypeGenericArg covers splitTopLevelCommas tracking ()/{}
+// nesting (round-6 Copilot): a generic instantiated with a func-type argument
+// whose parameter list contains commas must NOT be mis-split into broken parts.
+func TestParseTypeRef_FuncTypeGenericArg(t *testing.T) {
+	// The func type is a single generic argument despite its inner comma.
+	r := ParseTypeRef("Outer[func(int, int) error]")
+	if r == nil {
+		t.Fatal("ParseTypeRef(Outer[func(int, int) error]) = nil; the inner comma was mis-split")
+	}
+	if r.Kind != RefNamed || r.Name != "Outer" {
+		t.Fatalf("got kind=%v name=%q, want RefNamed Outer", r.Kind, r.Name)
+	}
+	if len(r.Args) != 1 {
+		t.Fatalf("got %d args, want 1 (the func is one arg, not split on its inner comma)", len(r.Args))
+	}
+
+	// A real second arg after a func arg is still split correctly.
+	r = ParseTypeRef("Map[string,func(a, b int) bool]")
+	if r == nil || len(r.Args) != 2 {
+		t.Fatalf("Map[string,func(a, b int) bool]: want 2 args, got %v", r)
+	}
+
+	// Direct split: the func's internal commas stay inside one part.
+	if got := splitTopLevelCommas("string, func(a, b int) bool"); len(got) != 2 {
+		t.Errorf("splitTopLevelCommas split a func's inner comma: %q", got)
+	}
+}
