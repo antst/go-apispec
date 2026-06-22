@@ -478,7 +478,12 @@ func ParseTypeRef(s string) *TypeRef {
 		return &TypeRef{Kind: RefInterface}
 	case s == "struct{}":
 		return &TypeRef{Kind: RefStruct}
-	case s == "func" || strings.HasPrefix(s, "func(") || strings.HasPrefix(s, "func "):
+	case s == "func" || strings.HasPrefix(s, "func(") || strings.HasPrefix(s, "func ") || strings.HasPrefix(s, "func["):
+		// "func[" is a GENERIC function type ("func[T any](T) T"); the analysis
+		// elsewhere already treats the "func[" prefix as a function (tracker.go,
+		// context_provider.go). Recognize it here too so an opaque generic func is
+		// classified RefFunc, not misparsed as a nameable RefNamed (which would let
+		// canAddRefSchemaForType emit a dangling $ref).
 		return &TypeRef{Kind: RefFunc}
 	case s == "chan" || strings.HasPrefix(s, "chan ") || strings.HasPrefix(s, "chan<-") || strings.HasPrefix(s, "<-chan"):
 		return &TypeRef{Kind: RefChan}

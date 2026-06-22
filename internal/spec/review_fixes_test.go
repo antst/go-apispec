@@ -348,7 +348,10 @@ func TestCanAddRefSchemaForType_OpaqueFuncChanSpellings(t *testing.T) {
 		"chan", "chan int", "chan<- int", "<-chan int",
 		// Pointer-wrapped opaque leaves reach here un-stripped on the body/param
 		// path; NamedLeaf must unwrap to the func/chan leaf and reject them.
-		"*func", "**func", "*chan", "*[]func", "*chan<- int"} {
+		"*func", "**func", "*chan", "*[]func", "*chan<- int",
+		// Generic function types start with "func[" — ParseTypeRef must classify
+		// them as RefFunc, not a nameable RefNamed.
+		"func[T any](T) T", "*func[T any](T) T"} {
 		assert.Falsef(t, canAddRefSchemaForType(k), "opaque %q must not be componentizable", k)
 	}
 	// Look-alikes that ARE real, nameable types must remain componentizable —

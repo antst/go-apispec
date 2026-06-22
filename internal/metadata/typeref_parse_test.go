@@ -147,3 +147,28 @@ func TestParseTypeRef_FuncTypeGenericArg(t *testing.T) {
 		t.Errorf("splitTopLevelCommas split a func's inner comma: %q", got)
 	}
 }
+
+// TestParseTypeRef_OpaqueFuncChanKinds asserts every func/chan spelling — bare,
+// signatured, directional, and GENERIC ("func[T any]...") — parses to the opaque
+// RefFunc/RefChan kind, not a nameable RefNamed. The generic "func[" form was
+// previously misclassified (PR #61 Copilot), letting canAddRefSchemaForType emit
+// a dangling $ref for it.
+func TestParseTypeRef_OpaqueFuncChanKinds(t *testing.T) {
+	funcs := []string{"func", "func(int) error", "func(a, b int) bool",
+		"func[T any](T) T", "func[K comparable, V any](map[K]V) V"}
+	for _, s := range funcs {
+		if r := ParseTypeRef(s); r == nil || r.Kind != RefFunc {
+			t.Errorf("ParseTypeRef(%q).Kind = %v, want RefFunc", s, r)
+		}
+	}
+	chans := []string{"chan", "chan int", "chan<- int", "<-chan int"}
+	for _, s := range chans {
+		if r := ParseTypeRef(s); r == nil || r.Kind != RefChan {
+			t.Errorf("ParseTypeRef(%q).Kind = %v, want RefChan", s, r)
+		}
+	}
+	// A real generic NAMED type must stay RefNamed (not be swept up by "func[").
+	if r := ParseTypeRef("Pair[int,string]"); r == nil || r.Kind != RefNamed {
+		t.Errorf("ParseTypeRef(Pair[int,string]).Kind = %v, want RefNamed", r)
+	}
+}

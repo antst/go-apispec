@@ -1091,6 +1091,53 @@ func TestResolveSelectorReturnType_FieldLookup(t *testing.T) {
 	assert.Equal(t, "string", result)
 }
 
+// TestResolveSelectorReturnType_QualifiedReceiver locks the sibling of the
+// resolveSelectorType qualification fix (PR #61 sweep). When the receiver
+// variable's type is a fully-qualified import path (getTypeName qualifies a
+// cross-package selector) but File.Types is keyed by the bare name, the lookup
+// must still resolve the field via the unqualified leaf rather than returning the
+// bogus "<qualified>.Field" concatenation.
+func TestResolveSelectorReturnType_QualifiedReceiver(t *testing.T) {
+	meta := makeTestMeta()
+	pkgName := "github.com/x/app/models"
+
+	meta.Packages[pkgName] = &Package{
+		Files: map[string]*File{
+			"user.go": {
+				Types: map[string]*Type{
+					"User": { // keyed by the bare name, as the builder does
+						Name: meta.StringPool.Get("User"),
+						Fields: []Field{
+							{Name: meta.StringPool.Get("Name"), Type: meta.StringPool.Get("string")},
+						},
+					},
+				},
+				Variables: map[string]*Variable{
+					"u": {
+						Name: meta.StringPool.Get("u"),
+						Type: meta.StringPool.Get("github.com/x/app/models.User"), // qualified
+					},
+				},
+				Functions: map[string]*Function{},
+			},
+		},
+	}
+
+	rv := makeTestArg(meta)
+	rv.SetKind(KindSelector)
+	xArg := makeTestArg(meta)
+	xArg.SetKind(KindIdent)
+	xArg.SetName("u")
+	rv.X = xArg
+	selArg := makeTestArg(meta)
+	selArg.SetKind(KindIdent)
+	selArg.SetName("Name")
+	rv.Sel = selArg
+
+	// Must resolve to the field's type, NOT the bogus "...models.User.Name".
+	assert.Equal(t, "string", meta.resolveSelectorReturnType(rv, pkgName))
+}
+
 // --- resolveCallReturnType ---
 
 func TestResolveCallReturnType_NilFun(t *testing.T) {

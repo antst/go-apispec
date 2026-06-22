@@ -1383,8 +1383,18 @@ func (m *Metadata) resolveSelectorReturnType(returnVar *CallArgument, pkgName st
 	// Try to find the field type in metadata
 	for pkgName, pkg := range m.Packages {
 		for _, file := range pkg.Files {
-			// Try both with and without package prefix
+			// Try both with and without package prefix. baseType may be a qualified
+			// type string (getTypeName import-path-qualifies a cross-package
+			// selector), while file.Types is keyed by the BARE type name. Add the
+			// unqualified leaf so the field lookup resolves instead of falling
+			// through to the bogus "<qualified>.Field" concatenation below. (Twin of
+			// the spec.resolveSelectorType fix; same package, ParseTypeRef is local.)
 			typeNames := []string{baseType, pkgName + "." + baseType}
+			if r := ParseTypeRef(baseType); r != nil {
+				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType {
+					typeNames = append(typeNames, leaf.Name)
+				}
+			}
 			for _, typeName := range typeNames {
 				if typ, exists := file.Types[typeName]; exists {
 					// Find the field
