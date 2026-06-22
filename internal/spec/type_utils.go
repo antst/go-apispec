@@ -34,6 +34,12 @@ import (
 // SetResolvedType); the other branches parse their own resolved string at this
 // boundary (research D1). The ref always equals ParseTypeRef of the returned
 // string, so threading it into schemaForType is byte-identical to re-parsing.
+//
+// SC-001 (spec 008): these ParseTypeRef calls are the resolution boundary where
+// the parse LIVES — moved off the schema path, not added. Each call here lets the
+// downstream schemaForType consume the tree directly instead of re-parsing the
+// resolved string (mapper.go schemaFromParsedString documents the retained-parse
+// counterpart).
 func sharedResolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string, contextProvider ContextProvider, checkFuncLit bool) (string, *metadata.TypeRef) {
 	// If the argument has resolved type information, use it
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {

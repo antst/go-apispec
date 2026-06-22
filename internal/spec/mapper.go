@@ -2580,6 +2580,24 @@ func schemaForUnresolved(goType string, cfg *APISpecConfig) (*Schema, map[string
 // separator) so a consumer that looks the component up by that exact key —
 // field-format inference — still finds it. Returns ok=false for generic and
 // otherwise-unresolved leaves (the caller applies its terminal fallback).
+//
+// SC-001 boundary (Phase 3, spec 008): this ParseTypeRef is the schema layer's
+// sole remaining re-parse, and it is NOT reached for a resolved body/param/return
+// type. Those positions now thread a structured ref (RequestInfo/ResponseInfo
+// BodyTypeRef, or a param-local) materialized at the resolution boundary
+// (type_utils.go sharedResolveTypeOrigin, extractor.go resolveParamArgType — the
+// parse MOVED there per research D1, not duplicated). When that ref is present and
+// canonical (goType == ref.String()), schemaForType walks it via schemaForRefTree
+// parse-free and never calls here. schemaFromParsedString is entered only for
+//   - genuine string-only callers (ref == nil): struct-field recursion, named
+//     underlying-type expansion, and config overrides; and
+//   - the goType != ref.String() divergence (alias pre-resolved to its underlying,
+//     or a generic RefParam substituted to its concrete arg) where goType — not the
+//     placeholder ref — carries the answer (schemaForType:2061, research D1).
+//
+// The other resolution-layer ParseTypeRef is traceGenericOrigin's generic-origin
+// unwrap (pattern_matchers.go), a structural boundary parse (FR-001), not a
+// resolved-type re-parse. Enforced by TestResolvedPathThreadsTypeRef.
 func schemaFromParsedString(usedTypes map[string]*Schema, goType string, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
 	pref := metadata.ParseTypeRef(goType)
 	if pref == nil {
