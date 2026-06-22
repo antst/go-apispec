@@ -457,7 +457,7 @@ func ParseTypeRef(s string) *TypeRef {
 			return &TypeRef{Kind: RefArray, Len: -1, Elem: e}
 		}
 		return nil
-	case strings.HasPrefix(s, "[") && !strings.HasPrefix(s, "["+"]"):
+	case strings.HasPrefix(s, "[") && !strings.HasPrefix(s, "[]"):
 		// [N]T fixed array — the bracket holds a decimal length.
 		if end := strings.IndexByte(s, ']'); end > 1 {
 			if n, err := strconv.Atoi(strings.TrimSpace(s[1:end])); err == nil {

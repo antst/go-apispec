@@ -2267,6 +2267,11 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 	// type string (which may carry the metadata "-->" separator) so the component
 	// registers under the exact spelling other consumers — field-format inference —
 	// look it up by. Recursive (tree) callers pass "" to use the canonical form.
+	// Self-guard the cycle map: schemaForType seeds it, but a direct/test caller
+	// can pass nil, and the struct path writes to it (would panic on a nil map).
+	if visitedTypes == nil {
+		visitedTypes = map[string]bool{}
+	}
 	goType := key
 	if goType == "" {
 		goType = ref.String()

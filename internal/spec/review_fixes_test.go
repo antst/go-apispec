@@ -105,6 +105,26 @@ func TestSchemaForNamedRef_ExternalVersionedTypeMatches(t *testing.T) {
 	}
 }
 
+// TestSchemaForNamedRef_NilVisitedTypesNoPanic covers the cycle-map self-guard:
+// a direct caller passing nil visitedTypes must not panic on the struct path
+// (which writes the cycle key).
+func TestSchemaForNamedRef_NilVisitedTypesNoPanic(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+	meta.Packages = map[string]*metadata.Package{
+		"app": {Files: map[string]*metadata.File{"a.go": {Types: map[string]*metadata.Type{
+			"User": {
+				Name: sp.Get("User"), Pkg: sp.Get("app"), Kind: sp.Get("struct"),
+				Fields: []metadata.Field{{Name: sp.Get("Name"), Type: sp.Get("string")}},
+			},
+		}}}},
+	}
+	ref := &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "app", Name: "User"}
+	assert.NotPanics(t, func() {
+		_, _, _ = schemaForNamedRef(map[string]*Schema{}, ref, "app.User", meta, &APISpecConfig{}, nil)
+	}, "nil visitedTypes must not panic on the struct path")
+}
+
 // TestLeafPkgInMetadata covers the gate helper: unqualified or analyzed-package
 // refs pass; an external (unanalyzed) package does not.
 func TestLeafPkgInMetadata(t *testing.T) {
