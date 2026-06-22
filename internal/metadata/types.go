@@ -572,6 +572,13 @@ type CallArgument struct {
 	// TypeRef is the structured type for this argument/return (Phase 2).
 	TypeRef *TypeRef `yaml:"type_ref,omitempty"`
 
+	// ResolvedTypeRef is the structured RESOLVED type (Phase 3) — the concrete
+	// type after call-graph resolution, parsed from ResolvedType. Distinct from
+	// TypeRef (the declared type), which differs for indirectly-typed positions.
+	// A directly-readable `*TypeRef` (unlike the pooled-int ResolvedType), so the
+	// spec layer reads it without an accessor.
+	ResolvedTypeRef *TypeRef `yaml:"resolved_type_ref,omitempty"`
+
 	ReceiverType *CallArgument `yaml:"receiver_type,omitempty"` // The type of the receiver
 
 	// Reference to metadata for StringPool access
@@ -724,6 +731,9 @@ func (a *CallArgument) SetResolvedType(resolvedType string) {
 	if a.Meta.StringPool != nil {
 		a.ResolvedType = a.Meta.StringPool.Get(resolvedType)
 	}
+	// Phase 3: keep the structured resolved type in lockstep with the string.
+	// ParseTypeRef("") is nil, so an empty resolved type leaves the ref unset.
+	a.ResolvedTypeRef = ParseTypeRef(resolvedType)
 }
 
 func (a *CallArgument) SetGenericTypeName(genericTypeName string) {

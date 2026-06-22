@@ -498,6 +498,30 @@ func TestTypeRef_YAMLRoundTrip(t *testing.T) {
 	assert.Equal(t, orig.String(), back.String()) // and renders identically
 }
 
+func TestCallArgument_ResolvedTypeRef(t *testing.T) {
+	// Phase 3: SetResolvedType keeps the structured ResolvedTypeRef in lockstep
+	// with the resolved-type string, and the field round-trips like the declared
+	// TypeRef (default struct marshaling, no pooling).
+	meta := &Metadata{StringPool: NewStringPool()}
+	arg := &CallArgument{Meta: meta, Kind: -1, Name: -1, Value: -1, Raw: -1, Pkg: -1, Type: -1, Position: -1, ResolvedType: -1, GenericTypeName: -1}
+
+	arg.SetResolvedType("pkg.User")
+	assert.Equal(t, "pkg.User", arg.GetResolvedType())
+	require.NotNil(t, arg.ResolvedTypeRef)
+	assert.Equal(t, ParseTypeRef("pkg.User"), arg.ResolvedTypeRef)
+
+	data, err := yaml.Marshal(arg)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "resolved_type_ref:")
+	var back CallArgument
+	require.NoError(t, yaml.Unmarshal(data, &back))
+	assert.Equal(t, arg.ResolvedTypeRef, back.ResolvedTypeRef)
+
+	// An empty resolved type leaves the ref unset (omitempty / graceful degradation).
+	arg.SetResolvedType("")
+	assert.Nil(t, arg.ResolvedTypeRef)
+}
+
 func TestTypeRef_StringNil(t *testing.T) {
 	var t0 *TypeRef
 	assert.Equal(t, "", t0.String())

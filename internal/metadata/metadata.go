@@ -2154,7 +2154,7 @@ func applyTypeParameterResolutionToArgument(arg *CallArgument, typeParamMap map[
 	if arg.Type != -1 {
 		// Check if the type is a generic type parameter (e.g., "TRequest", "TData")
 		if concreteType, exists := typeParamMap[arg.GetType()]; exists || len(arg.TypeParamMap) > 0 {
-			arg.ResolvedType = arg.Meta.StringPool.Get(concreteType)
+			arg.SetResolvedType(concreteType) // also populates ResolvedTypeRef (Phase 3)
 			arg.IsGenericType = true
 			arg.GenericTypeName = arg.Type
 		}
