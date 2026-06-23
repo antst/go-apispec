@@ -49,10 +49,13 @@
         "type": "object",
         "properties": {
           "hash": {
-            "type": "string",
-            "format": "byte",
-            "minLength": 24,
-            "maxLength": 24
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "minItems": 16,
+            "maxItems": 16
           },
           "scores": {
             "type": "array",

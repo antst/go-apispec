@@ -1020,18 +1020,18 @@ func testMapGoTypeToOpenAPISchemaArrayTypes(t *testing.T) {
 		description       string
 	}{
 		{
-			goType:            "[16]byte",
-			expectedType:      "string",
-			expectedFormat:    "byte",
-			expectedMaxLength: func() *int { size := 24; return &size }(), // 16 bytes -> 24 base64 chars
-			description:       "Fixed-size byte array -> base64 string of fixed ENCODED length",
+			goType:           "[16]byte",
+			expectedType:     "array",
+			expectedMaxItems: func() *int { size := 16; return &size }(),
+			expectedMinItems: func() *int { size := 16; return &size }(),
+			description:      "Fixed byte ARRAY -> array of 16 integers (only a []byte SLICE is base64)",
 		},
 		{
-			goType:            "[32]byte",
-			expectedType:      "string",
-			expectedFormat:    "byte",
-			expectedMaxLength: func() *int { size := 44; return &size }(), // 32 bytes -> 44 base64 chars
-			description:       "32-byte array -> base64 string of fixed encoded length 44",
+			goType:           "[32]byte",
+			expectedType:     "array",
+			expectedMaxItems: func() *int { size := 32; return &size }(),
+			expectedMinItems: func() *int { size := 32; return &size }(),
+			description:      "32-byte array -> array of 32 integers",
 		},
 		{
 			goType:           "[5]int",

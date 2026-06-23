@@ -2911,13 +2911,15 @@ func TestMapGoTypeToOpenAPISchema_FixedArray(t *testing.T) {
 	visitedTypes := map[string]bool{}
 	meta := newTestMeta()
 
-	// [16]byte → base64 string of FIXED encoded length 24 (not the raw byte count).
+	// [16]byte → a JSON array of 16 integers (a byte ARRAY marshals as ints; only a
+	// []byte SLICE is a base64 string).
 	schema, _ := schemaForType(usedTypes, "[16]byte", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
-	assert.Equal(t, "string", schema.Type)
-	assert.Equal(t, "byte", schema.Format)
-	assert.Equal(t, 24, schema.MaxLength, "16 bytes base64-encode to 24 chars")
-	assert.Equal(t, 24, schema.MinLength, "fixed length: min == max")
+	assert.Equal(t, "array", schema.Type)
+	require.NotNil(t, schema.Items)
+	assert.Equal(t, "integer", schema.Items.Type)
+	assert.Equal(t, 16, schema.MinItems)
+	assert.Equal(t, 16, schema.MaxItems)
 }
 
 func TestMapGoTypeToOpenAPISchema_FixedArrayInt(t *testing.T) {

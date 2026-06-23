@@ -15,7 +15,6 @@
 package spec
 
 import (
-	"encoding/base64"
 	"fmt"
 	"go/types"
 	"maps"
@@ -2194,22 +2193,11 @@ func schemaFromTypeRef(ref *metadata.TypeRef, cfg *APISpecConfig) *Schema {
 		}
 		return &Schema{Type: "array", Items: items}
 	case metadata.RefArray:
-		// A fixed-length array: byte arrays become a base64 string of FIXED encoded
-		// length; others an array with minItems == maxItems. Len -1 (inferred/
-		// unresolved) carries no constraint.
-		if isByteRef(ref.Elem) {
-			s := &Schema{Type: "string", Format: "byte"}
-			if ref.Len >= 0 {
-				// `format: byte` is base64; min/maxLength constrain the ENCODED
-				// string length, not the raw byte count. An N-byte array encodes to
-				// EXACTLY base64.StdEncoding.EncodedLen(N) chars (e.g. [16]byte -> 24),
-				// so pin both bounds — `maxLength: N` would wrongly reject valid base64.
-				n := base64.StdEncoding.EncodedLen(ref.Len)
-				s.MinLength = n
-				s.MaxLength = n
-			}
-			return s
-		}
+		// A fixed-length array [N]T is a JSON array with minItems == maxItems == N
+		// (setFixedArrayLen below). NB: a [N]byte ARRAY is NOT special-cased to a
+		// base64 string — unlike a []byte SLICE (handled above), Go's encoding/json
+		// marshals a byte ARRAY as a JSON array of integers, so its element resolves
+		// like any other (byte -> integer). Len -1 (inferred) carries no constraint.
 		items := schemaFromTypeRef(ref.Elem, cfg)
 		if items == nil {
 			return nil

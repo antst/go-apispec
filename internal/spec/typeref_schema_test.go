@@ -50,7 +50,7 @@ func TestSchemaFromTypeRef_MatchesSchemaForType(t *testing.T) {
 		slice(ptr(b("int"))), // []*int
 		{Kind: metadata.RefMap, Key: b("string"), Elem: b("int")},
 		{Kind: metadata.RefArray, Len: 3, Elem: b("int")},   // [3]int -> minItems == maxItems
-		{Kind: metadata.RefArray, Len: 16, Elem: b("byte")}, // [16]byte -> string/byte/maxLength
+		{Kind: metadata.RefArray, Len: 16, Elem: b("byte")}, // [16]byte -> array of integers (a byte ARRAY, not a base64 []byte slice)
 	}
 	for _, ref := range cases {
 		got := schemaFromTypeRef(ref, nil)
@@ -70,7 +70,9 @@ func TestSchemaFromTypeRef_MatchesSchemaForType(t *testing.T) {
 	// Inferred-length arrays ([...]T, Len -1) carry no length constraint.
 	assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "integer"}},
 		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: -1, Elem: b("int")}, nil))
-	assert.Equal(t, &Schema{Type: "string", Format: "byte"},
+	// A byte ARRAY (even inferred-length) is an array of integers, NOT a base64
+	// string — only a []byte SLICE is base64.
+	assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "integer", Minimum: floatPtr(0)}},
 		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: -1, Elem: b("byte")}, nil))
 
 	// Forms schemaFromTypeRef does not handle directly (named/generic/struct).
