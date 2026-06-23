@@ -1070,16 +1070,29 @@ func typeByRefGated(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Ty
 	if !leafPkgInMetadata(ref, meta) {
 		return nil
 	}
-	// A BARE qualifier ("models.User") names one specific package, not "any package
-	// with a User". typeByRef's lenient name-only fallback would scan every package
-	// and could borrow a same-named type from an unrelated one. When ref.Pkg is a
-	// bare segment (not a full-path key, no "/"), restrict resolution to packages
-	// whose last path segment matches. A full-path or unqualified ref keeps
-	// typeByRef's normal resolution.
-	if ref != nil && meta != nil && ref.Pkg != "" && !strings.Contains(ref.Pkg, "/") {
-		if _, isFullPathKey := meta.Packages[ref.Pkg]; !isFullPathKey {
+	// A QUALIFIED ref names one specific package, not "any package with a User".
+	// typeByRef's lenient name-only fallback would scan every package and could
+	// borrow a same-named type from an unrelated one on a name-miss, so scope a
+	// qualified ref to its own package(s):
+	//   - a full-path key ("github.com/x/models") → that exact package only;
+	//   - a bare segment ("models") → packages whose last path segment matches.
+	// On a miss within that scope, return nil (don't borrow). Only an UNQUALIFIED
+	// ref (empty Pkg) keeps typeByRef's lenient global scan.
+	if ref != nil && meta != nil && ref.Pkg != "" {
+		if pkg, isFullPathKey := meta.Packages[ref.Pkg]; isFullPathKey {
+			for _, file := range pkg.Files {
+				if typ, exists := file.Types[ref.Name]; exists {
+					return typ
+				}
+			}
+			return nil
+		}
+		if !strings.Contains(ref.Pkg, "/") {
 			return typeByRefInSegment(ref, meta)
 		}
+		// A path-like qualifier absent from metadata is external — leafPkgInMetadata
+		// already rejected it above, so this is a defensive no-borrow.
+		return nil
 	}
 	return typeByRef(ref, meta)
 }

@@ -16,6 +16,8 @@ package spec
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/antst/go-apispec/internal/metadata"
@@ -175,8 +177,12 @@ func (t *TypeResolverImpl) resolveSelectorType(arg metadata.CallArgument) string
 		return arg.Sel.GetName()
 	}
 
-	// For field access, try to find the field type in metadata
-	for pkgName, pkg := range t.meta.Packages {
+	// For field access, try to find the field type in metadata. Iterate packages in
+	// sorted order so resolution is deterministic (a same-named type in another
+	// package can never win by map-iteration chance — and the scoping below confines
+	// the bare-leaf candidate to its own package anyway).
+	for _, pkgName := range slices.Sorted(maps.Keys(t.meta.Packages)) {
+		pkg := t.meta.Packages[pkgName]
 		for _, file := range pkg.Files {
 			// Try both with and without package prefix. baseType may now be a
 			// qualified TypeRef.String() ("github.com/x/app/models.User" — the

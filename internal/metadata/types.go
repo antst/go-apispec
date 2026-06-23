@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1380,8 +1381,12 @@ func (m *Metadata) resolveSelectorReturnType(returnVar *CallArgument, pkgName st
 	baseType := m.determineResolvedTypeFromReturnVar(returnVar.X, pkgName, "")
 	fieldName := returnVar.Sel.GetName()
 
-	// Try to find the field type in metadata
-	for pkgName, pkg := range m.Packages {
+	// Try to find the field type in metadata. Iterate packages in sorted order so
+	// resolution is deterministic (a same-named type elsewhere can't win by
+	// map-iteration chance; the scoping below confines the bare-leaf candidate to
+	// its own package anyway).
+	for _, pkgName := range slices.Sorted(maps.Keys(m.Packages)) {
+		pkg := m.Packages[pkgName]
 		for _, file := range pkg.Files {
 			// Try both with and without package prefix. baseType may be a qualified
 			// type string (getTypeName import-path-qualifies a cross-package
