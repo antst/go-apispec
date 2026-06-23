@@ -403,3 +403,38 @@ func TestOpaqueFuncChanContainerFieldsOmitted(t *testing.T) {
 		assert.NotContainsf(t, name, "chan", "no chan component registered (got %q)", name)
 	}
 }
+
+// TestTypeByRefGated_BareQualifierScopedToSegment locks the cross-package
+// over-match fix (CodeRabbit, PR #61). A bare qualifier ("models.User") passes the
+// leafPkgInMetadata gate when SOME analyzed package's last segment is "models",
+// but typeByRef's lenient name-only fallback would then borrow a same-named "User"
+// from an UNRELATED package. typeByRefGated now restricts a bare qualifier to
+// packages whose last segment matches, so it must not borrow across segments.
+func TestTypeByRefGated_BareQualifierScopedToSegment(t *testing.T) {
+	sp := metadata.NewStringPool()
+	meta := &metadata.Metadata{StringPool: sp, Packages: map[string]*metadata.Package{
+		"github.com/a/models": {Files: map[string]*metadata.File{"m.go": {Types: map[string]*metadata.Type{
+			"Account": {Name: sp.Get("Account"), Kind: sp.Get("struct")}, // models has Account, NOT User
+		}}}},
+		"github.com/b/other": {Files: map[string]*metadata.File{"o.go": {Types: map[string]*metadata.Type{
+			"User": {Name: sp.Get("User"), Kind: sp.Get("struct")}, // a same-named type in an unrelated pkg
+		}}}},
+	}}
+
+	// Bare "models.User": gate passes (a */models package exists), but User lives
+	// only in */other — must NOT be borrowed across the segment boundary.
+	ref := &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "models", Name: "User"}
+	assert.Nil(t, typeByRefGated(ref, meta), "bare models.User must not borrow */other User")
+
+	// Bare "models.Account": resolves within the matching-segment package.
+	got := typeByRefGated(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "models", Name: "Account"}, meta)
+	if assert.NotNil(t, got, "models.Account resolves within */models") {
+		assert.Equal(t, "Account", getStringFromPool(meta, got.Name))
+	}
+
+	// Bare "other.User": resolves within its own segment (positive control).
+	got = typeByRefGated(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "other", Name: "User"}, meta)
+	if assert.NotNil(t, got, "other.User resolves within */other") {
+		assert.Equal(t, "User", getStringFromPool(meta, got.Name))
+	}
+}

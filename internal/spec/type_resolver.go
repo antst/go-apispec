@@ -183,10 +183,13 @@ func (t *TypeResolverImpl) resolveSelectorType(arg metadata.CallArgument) string
 			// receiver ident resolves through variable.TypeRef.String()), while
 			// file.Types is keyed by the BARE type name ("User"). Add the unqualified
 			// leaf so the field lookup still resolves instead of falling through to
-			// the bogus "<qualified>.Field" concatenation below.
+			// the bogus "<qualified>.Field" concatenation below — but ONLY while
+			// scanning the leaf's own package, so a same-named type in an unrelated
+			// package can't be borrowed first.
 			typeNames := []string{baseType, pkgName + "." + baseType}
 			if r := metadata.ParseTypeRef(baseType); r != nil {
-				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType {
+				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType &&
+					lastPathSegment(pkgName) == lastPathSegment(leaf.Pkg) {
 					typeNames = append(typeNames, leaf.Name)
 				}
 			}

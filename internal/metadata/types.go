@@ -1387,11 +1387,14 @@ func (m *Metadata) resolveSelectorReturnType(returnVar *CallArgument, pkgName st
 			// type string (getTypeName import-path-qualifies a cross-package
 			// selector), while file.Types is keyed by the BARE type name. Add the
 			// unqualified leaf so the field lookup resolves instead of falling
-			// through to the bogus "<qualified>.Field" concatenation below. (Twin of
-			// the spec.resolveSelectorType fix; same package, ParseTypeRef is local.)
+			// through to the bogus "<qualified>.Field" concatenation below — but ONLY
+			// while scanning the leaf's own package, so a same-named type in an
+			// unrelated package can't be borrowed first. (Twin of the
+			// spec.resolveSelectorType fix; same package, ParseTypeRef is local.)
 			typeNames := []string{baseType, pkgName + "." + baseType}
 			if r := ParseTypeRef(baseType); r != nil {
-				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType {
+				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType &&
+					lastPathSegment(pkgName) == lastPathSegment(leaf.Pkg) {
 					typeNames = append(typeNames, leaf.Name)
 				}
 			}
@@ -1410,6 +1413,16 @@ func (m *Metadata) resolveSelectorReturnType(returnVar *CallArgument, pkgName st
 
 	// Fallback to concatenated form
 	return baseType + "." + fieldName
+}
+
+// lastPathSegment returns the final "/"-separated segment of an import path
+// (the conventional source-level package qualifier): "github.com/x/app/models"
+// -> "models"; a segment-less string is returned unchanged.
+func lastPathSegment(p string) string {
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
 }
 
 // resolveCallReturnType resolves the type of a function call return value

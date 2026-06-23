@@ -732,6 +732,41 @@ func TestResolveSelectorType_QualifiedReceiverResolvesField(t *testing.T) {
 	assert.Equal(t, "string", resolver.resolveSelectorType(arg))
 }
 
+// TestResolveSelectorType_QualifiedReceiverScopedToPackage locks the scoping
+// refinement (CodeRabbit, PR #61): the bare leaf candidate ("User") is added only
+// while scanning the leaf's OWN package, so a same-named "User" in an unrelated
+// package can't be borrowed first (which would resolve the wrong field type).
+func TestResolveSelectorType_QualifiedReceiverScopedToPackage(t *testing.T) {
+	meta, sp := newTypeResolverTestMeta()
+	meta.Packages = map[string]*metadata.Package{
+		"github.com/x/app/models": {Files: map[string]*metadata.File{"user.go": {Types: map[string]*metadata.Type{
+			"User": {Name: sp.Get("User"), Kind: sp.Get("struct"), Fields: []metadata.Field{
+				{Name: sp.Get("Name"), Type: sp.Get("string")},
+			}},
+		}}}},
+		"github.com/x/other": {Files: map[string]*metadata.File{"user.go": {Types: map[string]*metadata.Type{
+			"User": {Name: sp.Get("User"), Kind: sp.Get("struct"), Fields: []metadata.Field{
+				{Name: sp.Get("Name"), Type: sp.Get("int")}, // same field name, DIFFERENT type
+			}},
+		}}}},
+	}
+	resolver := newTestResolver(meta)
+
+	sel := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) { a.SetName("Name") })
+	x := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) {
+		a.SetName("u")
+		a.SetType("github.com/x/app/models.User") // receiver is the models.User
+	})
+	arg := makeArg(meta, metadata.KindSelector, func(a *metadata.CallArgument) {
+		a.Sel = &sel
+		a.X = &x
+	})
+
+	// Must resolve models.User.Name ("string"), never other.User.Name ("int"),
+	// regardless of map iteration order.
+	assert.Equal(t, "string", resolver.resolveSelectorType(arg))
+}
+
 func TestResolveSelectorType_WithPkgPrefix(t *testing.T) {
 	meta, sp := newTypeResolverTestMeta()
 

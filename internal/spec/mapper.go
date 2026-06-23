@@ -1070,7 +1070,35 @@ func typeByRefGated(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Ty
 	if !leafPkgInMetadata(ref, meta) {
 		return nil
 	}
+	// A BARE qualifier ("models.User") names one specific package, not "any package
+	// with a User". typeByRef's lenient name-only fallback would scan every package
+	// and could borrow a same-named type from an unrelated one. When ref.Pkg is a
+	// bare segment (not a full-path key, no "/"), restrict resolution to packages
+	// whose last path segment matches. A full-path or unqualified ref keeps
+	// typeByRef's normal resolution.
+	if ref != nil && meta != nil && ref.Pkg != "" && !strings.Contains(ref.Pkg, "/") {
+		if _, isFullPathKey := meta.Packages[ref.Pkg]; !isFullPathKey {
+			return typeByRefInSegment(ref, meta)
+		}
+	}
 	return typeByRef(ref, meta)
+}
+
+// typeByRefInSegment resolves a bare-qualified named ref against only the packages
+// whose last path segment equals ref.Pkg (deterministic, sorted order), so a short
+// qualifier cannot borrow a same-named type from an unrelated package.
+func typeByRefInSegment(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Type {
+	for _, pkgName := range slices.Sorted(maps.Keys(meta.Packages)) {
+		if lastPathSegment(pkgName) != ref.Pkg {
+			continue
+		}
+		for _, file := range meta.Packages[pkgName].Files {
+			if typ, exists := file.Types[ref.Name]; exists {
+				return typ
+			}
+		}
+	}
+	return nil
 }
 
 const generateSchemaFromTypeKey = "generateSchemaFromType"
@@ -2246,7 +2274,16 @@ func schemaForUnresolved(goType string, cfg *APISpecConfig) (*Schema, map[string
 	if metadata.IsPrimitiveType(goType) || !canAddRefSchemaForType(goType) {
 		return nil, schemas
 	}
-	return addRefSchemaForType(goType), schemas // dangling ref, raw name (see schemaForNamedRef)
+	// Deliberate, golden-neutral tradeoff (kept consciously; parallels
+	// schemaForNamedRef): a non-primitive name the analyzer can neither find in
+	// metadata nor map via ExternalTypes/TypeMapping is emitted as a $ref by its
+	// raw name. The referenced component is never generated — technically a
+	// dangling $ref — but it keeps the unresolved type VISIBLE by name rather than
+	// silently dropping the field. No fixture exercises this path (returning nil
+	// here is byte-identical across the corpus), so the choice is about behavior for
+	// genuinely-unresolvable types, not test output. A reviewer proposing nil here
+	// should change schemaForNamedRef in lockstep to keep the two consistent.
+	return addRefSchemaForType(goType), schemas
 }
 
 // schemaFromParsedString resolves a string-only caller's type (no TypeRef) by
