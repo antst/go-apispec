@@ -1368,7 +1368,10 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 				markUsedType(usedTypes, derivedFieldType, bodySchema)
 			} else {
 				fieldSchema, newSchemas = schemaForType(usedTypes, derivedFieldType, fieldRef, meta, cfg, visitedTypes)
-				if canAddRefSchemaForType(derivedFieldType) {
+				// Only register a component and point a $ref at it when there is a
+				// real schema to store — never store a nil component and then emit a
+				// $ref dangling against it (e.g. a "" key → "#/components/schemas/").
+				if fieldSchema != nil && canAddRefSchemaForType(derivedFieldType) {
 					schemas[derivedFieldType] = fieldSchema
 					fieldSchema = addRefSchemaForType(derivedFieldType)
 				}
@@ -1377,12 +1380,20 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			}
 		}
 
-		// A nil field schema means the type has no representable form — an opaque
-		// func/chan leaf (TypeRef marks these "no schema"). Omit the field entirely:
-		// a non-serializable field has no JSON representation, and keeping it would
-		// dangle a $ref AND add a `required` entry with no matching property.
+		// A nil field schema means the type produced no representable form, in one of
+		// two cases:
+		//   - the type is KNOWN but non-serializable (an opaque func/chan leaf): omit
+		//     the field — a non-serializable field has no JSON representation, and
+		//     keeping it would dangle a $ref and add a `required` entry with no
+		//     matching property;
+		//   - the type is entirely UNKNOWN (no TypeRef and an empty type string): keep
+		//     the declared field visible as an empty {} schema (any JSON) rather than
+		//     silently dropping it or emitting a $ref to the empty component name "".
 		if fieldSchema == nil {
-			continue
+			if fieldType != "" {
+				continue
+			}
+			fieldSchema = &Schema{}
 		}
 
 		// The json `,string` option makes encoding/json marshal a string/number/

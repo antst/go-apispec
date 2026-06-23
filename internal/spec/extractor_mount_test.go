@@ -2743,12 +2743,19 @@ func TestGenerateStructSchema_FieldWithoutTypeInfo(t *testing.T) {
 	}
 	cfg := &APISpecConfig{Defaults: Defaults{ResponseContentType: "application/json"}}
 
-	schema, _ := generateStructSchema(map[string]*Schema{}, "myapp-->Degenerate", typ, meta, cfg, map[string]bool{})
+	schemas := map[string]*Schema{}
+	schema, _ := generateStructSchema(schemas, "myapp-->Degenerate", typ, meta, cfg, map[string]bool{})
 
 	require.NotNil(t, schema)
 	assert.Equal(t, "object", schema.Type)
 	assert.Contains(t, schema.Properties, "mystery")
-	assert.NotNil(t, schema.Properties["mystery"], "the field must map to a non-nil schema, not just be present")
+	mystery := schema.Properties["mystery"]
+	require.NotNil(t, mystery, "a field with no type info must stay visible, not be dropped")
+	// It must be a valid empty {} schema (any JSON) — NOT a $ref dangling against an
+	// empty component name, and NOT a nil component registered under "".
+	assert.Empty(t, mystery.Ref, "a typeless field must not emit a dangling $ref")
+	assert.Empty(t, mystery.Type, "a typeless field is an open {} schema")
+	assert.NotContains(t, schemas, "", "no nil component may be registered under an empty name")
 }
 
 func TestGenerateStructSchema_WithGenericTypes(t *testing.T) {
