@@ -60,6 +60,21 @@ func TestResolveUnderlyingType_FixedArrayAliasKeepsLength(t *testing.T) {
 	assert.Equal(t, "[2]*float64", resolveUnderlyingType("[2]*ex.Celsius", meta), "array-of-pointer keeps both")
 }
 
+// resolveUnderlyingType must treat a malformed/partial type string as "no
+// underlying" — returning "" WITHOUT panicking. ParseTypeRef may return nil (e.g.
+// an unterminated map) or a partial ref with a nil leaf; NamedLeaf() is
+// nil-receiver-safe (its `for t != nil` guard short-circuits before any field
+// access), so the leaf==nil check absorbs it. This locks that nil-safety against a
+// future change to NamedLeaf.
+func TestResolveUnderlyingType_MalformedInputSafe(t *testing.T) {
+	meta := newTestMeta()
+	meta.Packages = map[string]*metadata.Package{}
+	for _, bad := range []string{"", "map[string", "map[", "[", "[]", "***", "[2]", "map[string]"} {
+		assert.NotPanics(t, func() { resolveUnderlyingType(bad, meta) }, "input %q must not panic", bad)
+		assert.Equal(t, "", resolveUnderlyingType(bad, meta), "malformed %q has no underlying", bad)
+	}
+}
+
 // TestWrapperFieldIsGeneric_ContainerNotPlaceholder covers SW1: only interface{}/
 // any (optionally behind a pointer) is a generic placeholder — []interface{} and
 // map[string]any are concrete typed fields, not placeholders.

@@ -31,7 +31,7 @@ Each item above manifests only when the construct is present and ships with its
 own targeted fixtures; the existing framework golden corpus does not exercise
 these constructs, so it — and the determinism suite — stays byte-identical.
 
-### Changed — internals (no output change beyond the improvements above)
+### Changed — internals (pure refactors; golden-neutral on the existing corpus)
 
 - The string-based schema generator (`mapGoTypeToOpenAPISchema`) and the
   type-string parsing helpers (`TypeParts`, `typeByName`) were deleted; all schema
