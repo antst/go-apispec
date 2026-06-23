@@ -270,6 +270,24 @@ func fitsLen(n int64) bool {
 	return n >= 0 && int64(int(n)) == n
 }
 
+// basicTypeRef builds a RefBasic from a go/types basic. An UNTYPED basic (an
+// untyped constant's type) reports a Name() like "untyped int" — not a real
+// primitive — so it is resolved to its DEFAULT typed form ("int","string",
+// "bool","float64",…). Invalid types and untyped nil (no typed default) yield nil.
+func basicTypeRef(t types.Type, u *types.Basic) *TypeRef {
+	if u.Kind() == types.Invalid {
+		return nil // unresolved/erroneous type — no usable representation
+	}
+	if u.Info()&types.IsUntyped != 0 {
+		d, ok := types.Default(t).(*types.Basic)
+		if !ok || d.Kind() == types.Invalid || d.Info()&types.IsUntyped != 0 {
+			return nil
+		}
+		return &TypeRef{Kind: RefBasic, Name: d.Name()}
+	}
+	return &TypeRef{Kind: RefBasic, Name: u.Name()}
+}
+
 // TypeRefFromType builds a TypeRef from a go/types type — the resolved-type
 // counterpart to TypeRefFromExpr, for sites that have a types.Type but no
 // syntax (e.g. a value's inferred type). go/types has already resolved aliases,
@@ -280,10 +298,7 @@ func TypeRefFromType(t types.Type) *TypeRef {
 	case nil:
 		return nil
 	case *types.Basic:
-		if u.Kind() == types.Invalid {
-			return nil // unresolved/erroneous type — no usable representation
-		}
-		return &TypeRef{Kind: RefBasic, Name: u.Name()}
+		return basicTypeRef(t, u)
 	case *types.Named:
 		return namedTypeRef(u)
 	case *types.Alias:

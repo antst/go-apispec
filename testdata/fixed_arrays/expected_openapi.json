@@ -51,7 +51,8 @@
           "hash": {
             "type": "string",
             "format": "byte",
-            "maxLength": 16
+            "minLength": 24,
+            "maxLength": 24
           },
           "scores": {
             "type": "array",

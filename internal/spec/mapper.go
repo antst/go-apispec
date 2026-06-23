@@ -15,6 +15,7 @@
 package spec
 
 import (
+	"encoding/base64"
 	"fmt"
 	"go/types"
 	"maps"
@@ -1099,7 +1100,14 @@ func typeByRefGated(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Ty
 
 // typeByRefInSegment resolves a bare-qualified named ref against only the packages
 // whose last path segment equals ref.Pkg (deterministic, sorted order), so a short
-// qualifier cannot borrow a same-named type from an unrelated package.
+// qualifier cannot borrow a same-named type from a NON-matching-segment package.
+//
+// Known residual (CodeRabbit): two analyzed packages that share the SAME last
+// segment (github.com/a/models and github.com/b/models) are indistinguishable from
+// a bare "models" qualifier, so a same-named type resolves to the sorted-first one.
+// That is the ceiling of a string heuristic over a bare qualifier — a full import
+// path is needed to disambiguate, which the ref-native resolution (spec 008)
+// provides. The sorted order keeps it at least deterministic.
 func typeByRefInSegment(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Type {
 	for _, pkgName := range slices.Sorted(maps.Keys(meta.Packages)) {
 		if lastPathSegment(pkgName) != ref.Pkg {
@@ -2186,13 +2194,19 @@ func schemaFromTypeRef(ref *metadata.TypeRef, cfg *APISpecConfig) *Schema {
 		}
 		return &Schema{Type: "array", Items: items}
 	case metadata.RefArray:
-		// A fixed-length array: byte arrays become a base64 string with maxLength;
-		// others an array with minItems == maxItems. Len -1 (inferred/unresolved)
-		// carries no constraint.
+		// A fixed-length array: byte arrays become a base64 string of FIXED encoded
+		// length; others an array with minItems == maxItems. Len -1 (inferred/
+		// unresolved) carries no constraint.
 		if isByteRef(ref.Elem) {
 			s := &Schema{Type: "string", Format: "byte"}
 			if ref.Len >= 0 {
-				s.MaxLength = ref.Len
+				// `format: byte` is base64; min/maxLength constrain the ENCODED
+				// string length, not the raw byte count. An N-byte array encodes to
+				// EXACTLY base64.StdEncoding.EncodedLen(N) chars (e.g. [16]byte -> 24),
+				// so pin both bounds — `maxLength: N` would wrongly reject valid base64.
+				n := base64.StdEncoding.EncodedLen(ref.Len)
+				s.MinLength = n
+				s.MaxLength = n
 			}
 			return s
 		}

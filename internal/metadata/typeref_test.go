@@ -394,6 +394,13 @@ type S struct {
 	assert.Nil(t, TypeRefFromType(types.NewMap(tuple, intT))) // map key nil
 	assert.Nil(t, TypeRefFromType(types.NewMap(intT, tuple))) // map value nil
 	assert.Nil(t, TypeRefFromType(types.NewPointer(tuple)))   // pointer elem nil (via wrap)
+
+	// An UNTYPED basic resolves to its DEFAULT typed form (not a "untyped X" name).
+	assert.Equal(t, &TypeRef{Kind: RefBasic, Name: "int"}, TypeRefFromType(types.Typ[types.UntypedInt]))
+	assert.Equal(t, &TypeRef{Kind: RefBasic, Name: "string"}, TypeRefFromType(types.Typ[types.UntypedString]))
+	assert.Equal(t, &TypeRef{Kind: RefBasic, Name: "bool"}, TypeRefFromType(types.Typ[types.UntypedBool]))
+	assert.Equal(t, &TypeRef{Kind: RefBasic, Name: "float64"}, TypeRefFromType(types.Typ[types.UntypedFloat]))
+	assert.Nil(t, TypeRefFromType(types.Typ[types.UntypedNil])) // untyped nil has no typed default → no schema
 }
 
 func TestTypeRefFromExpr_InfoFallback(t *testing.T) {
