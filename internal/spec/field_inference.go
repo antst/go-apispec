@@ -226,32 +226,6 @@ func unwrapArgRefs(arg *metadata.CallArgument) *metadata.CallArgument {
 	return arg
 }
 
-// selectorFieldOnTarget returns the field name of `<targetVar>.<field>`
-// when the argument is exactly that selector (or one wrapped in a single
-// unary/star, which covers `*body.field` for pointer fields). Returns ""
-// for any other shape so callers fall through.
-func selectorFieldOnTarget(arg *metadata.CallArgument, targetVar string) string {
-	if arg == nil {
-		return ""
-	}
-	switch arg.GetKind() {
-	case metadata.KindUnary, metadata.KindStar:
-		if arg.X == nil {
-			return ""
-		}
-		return selectorFieldOnTarget(arg.X, targetVar)
-	case metadata.KindSelector:
-		if arg.X == nil || arg.Sel == nil {
-			return ""
-		}
-		if arg.X.GetKind() != metadata.KindIdent || arg.X.GetName() != targetVar {
-			return ""
-		}
-		return arg.Sel.GetName()
-	}
-	return ""
-}
-
 // lookupStructFields returns a Go-field-name → JSON-name map for a struct
 // referenced by its fully-qualified type name (e.g.,
 // "json_dto.CopyDocumentRequest"). Returns nil if the type can't be found.
@@ -259,33 +233,31 @@ func lookupStructFields(bodyType string, meta *metadata.Metadata) map[string]str
 	if meta == nil {
 		return nil
 	}
-	parts := TypeParts(strings.TrimPrefix(bodyType, "*"))
-	if parts.PkgName == "" || parts.TypeName == "" {
+	typ := typeByRefGated(metadata.ParseTypeRef(strings.TrimPrefix(bodyType, "*")), meta)
+	if typ == nil {
 		return nil
 	}
-	pkg, ok := meta.Packages[parts.PkgName]
-	if !ok {
-		return nil
-	}
-	for _, file := range pkg.Files {
-		typ, ok := file.Types[parts.TypeName]
-		if !ok {
+	out := make(map[string]string, len(typ.Fields))
+	for _, field := range typ.Fields {
+		goName := stringFromPool(meta, field.Name)
+		if goName == "" {
 			continue
 		}
-		out := make(map[string]string, len(typ.Fields))
-		for _, field := range typ.Fields {
-			goName := stringFromPool(meta, field.Name)
-			if goName == "" {
-				continue
-			}
-			tag := stringFromPool(meta, field.Tag)
-			jsonName := extractJSONName(tag)
-			if jsonName == "" {
-				jsonName = goName
-			}
-			out[goName] = jsonName
+		// Mirror generateStructSchema's field visibility: an unexported field and a
+		// `json:"-"` field have no property in the schema, so there is nothing to
+		// infer a format onto — skip them here too rather than carry a phantom entry.
+		if stringFromPool(meta, field.Scope) == metadata.ScopeUnexported {
+			continue
 		}
-		return out
+		tag := stringFromPool(meta, field.Tag)
+		jsonName, skip, _ := jsonFieldName(tag)
+		if skip {
+			continue
+		}
+		if jsonName == "" {
+			jsonName = goName
+		}
+		out[goName] = jsonName
 	}
-	return nil
+	return out
 }

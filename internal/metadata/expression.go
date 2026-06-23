@@ -29,10 +29,21 @@ const (
 	defaultSep = "."
 )
 
-// ExprToCallArgument returns a structured CallArgument for an expression.
-//
-//nolint:gocyclo // AST expression to call argument conversion
+// ExprToCallArgument returns a structured CallArgument for an expression and
+// attaches its structured TypeRef (Phase 2). The TypeRef is derived from the
+// expression's resolved type when type info is available — covering both type
+// and value expressions — and recursive sub-arguments are covered too, since
+// they route back through this wrapper.
 func ExprToCallArgument(expr ast.Expr, info *types.Info, pkgName string, fset *token.FileSet, meta *Metadata) *CallArgument {
+	arg := exprToCallArgument(expr, info, pkgName, fset, meta)
+	if arg != nil && arg.TypeRef == nil {
+		arg.TypeRef = TypeRefFromExpr(expr, info)
+	}
+	return arg
+}
+
+//nolint:gocyclo // AST expression to call argument conversion
+func exprToCallArgument(expr ast.Expr, info *types.Info, pkgName string, fset *token.FileSet, meta *Metadata) *CallArgument {
 	if expr == nil {
 		arg := NewCallArgument(meta)
 		arg.SetKind(KindRaw)

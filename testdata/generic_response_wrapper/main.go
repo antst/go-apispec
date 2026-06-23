@@ -9,10 +9,13 @@ import (
 	"net/http"
 )
 
-// APIResponse is the generic envelope.
+// APIResponse is the generic envelope. Internal is a generic field tagged
+// json:"-": encoding/json never marshals it, so wrapper specialisation must drop
+// it from the envelope even though it is bound and assigned at the call site.
 type APIResponse[T any] struct {
-	Data    T      `json:"data"`
-	Message string `json:"message"`
+	Data     T      `json:"data"`
+	Message  string `json:"message"`
+	Internal T      `json:"-"`
 }
 
 // User is one payload type.
@@ -29,12 +32,12 @@ type Product struct {
 
 func getUser(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(APIResponse[User]{Data: User{}, Message: "ok"})
+	_ = json.NewEncoder(w).Encode(APIResponse[User]{Data: User{}, Message: "ok", Internal: User{}})
 }
 
 func getProduct(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(APIResponse[Product]{Data: Product{}, Message: "ok"})
+	_ = json.NewEncoder(w).Encode(APIResponse[Product]{Data: Product{}, Message: "ok", Internal: Product{}})
 }
 
 func main() {

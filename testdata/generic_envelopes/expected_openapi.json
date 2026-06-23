@@ -1,0 +1,145 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/pair": {
+      "get": {
+        "operationId": "generic_envelopes.getPair",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generic_envelopes.Pair_generic_envelopes.User-generic_envelopes.Order"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/scores": {
+      "get": {
+        "summary": "getScores returns Pair instantiated with PRIMITIVE arguments — first/second\nresolve to string/int inline, and (unlike the former positional binding) no\norphan \"K-string\"/\"V-int\" component is emitted.",
+        "operationId": "generic_envelopes.getScores",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generic_envelopes.Pair_string-int"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/user": {
+      "get": {
+        "operationId": "generic_envelopes.getUser",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/generic_envelopes.APIResponse_generic_envelopes.User"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "generic_envelopes.APIResponse_generic_envelopes.User": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/generic_envelopes.User"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "data",
+          "message"
+        ]
+      },
+      "generic_envelopes.Order": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "total"
+        ]
+      },
+      "generic_envelopes.Pair_generic_envelopes.User-generic_envelopes.Order": {
+        "type": "object",
+        "properties": {
+          "first": {
+            "$ref": "#/components/schemas/generic_envelopes.User"
+          },
+          "second": {
+            "$ref": "#/components/schemas/generic_envelopes.Order"
+          }
+        },
+        "required": [
+          "first",
+          "second"
+        ]
+      },
+      "generic_envelopes.Pair_string-int": {
+        "type": "object",
+        "properties": {
+          "first": {
+            "type": "string"
+          },
+          "second": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "first",
+          "second"
+        ]
+      },
+      "generic_envelopes.User": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      }
+    }
+  }
+}

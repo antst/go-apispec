@@ -94,7 +94,7 @@ func TestMapGoTypeToOpenAPISchema_PointerTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, meta, cfg, nil)
 			if schema.Type != tt.expected {
 				t.Errorf("expected type %s, got %s", tt.expected, schema.Type)
 			}
@@ -365,9 +365,9 @@ func TestMapGoTypeToOpenAPISchema_ExternalTypes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			result, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, nil)
+			result, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if !reflect.DeepEqual(result, tt.expected) {
-				t.Errorf("mapGoTypeToOpenAPISchema() = %v, want %v", result, tt.expected)
+				t.Errorf("schemaForType() = %v, want %v", result, tt.expected)
 			}
 		})
 	}
@@ -893,47 +893,6 @@ func TestFindTypesInMetadata(t *testing.T) {
 		t.Error("Should return nil for nil metadata")
 	}
 }
-
-func TestTypeByName(t *testing.T) {
-	// Create metadata with string pool
-	stringPool := metadata.NewStringPool()
-	meta := &metadata.Metadata{
-		StringPool: stringPool,
-		Packages: map[string]*metadata.Package{
-			"main": {
-				Files: map[string]*metadata.File{
-					"types.go": {
-						Types: map[string]*metadata.Type{
-							"User": {
-								Name: stringPool.Get("User"),
-								Kind: stringPool.Get("struct"),
-								Fields: []metadata.Field{
-									{
-										Name: stringPool.Get("Name"),
-										Type: stringPool.Get("string"),
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	// Test finding type by name
-	typ := typeByName(Parts{PkgName: "main", TypeName: "User"}, meta)
-	if typ == nil {
-		t.Error("Should find type by name")
-	}
-
-	// Test finding non-existent type
-	typ = typeByName(Parts{PkgName: "main", TypeName: "NonExistentType"}, meta)
-	if typ != nil {
-		t.Error("Should not find non-existent type")
-	}
-}
-
 func TestAddTypeAndDependenciesWithMetadata(t *testing.T) {
 	// Test adding type and dependencies
 	usedTypes := make(map[string]*Schema)
@@ -1000,59 +959,6 @@ func TestGetStringFromPool(t *testing.T) {
 			t.Errorf("Expected 'test', got '%s'", result)
 		}
 	})
-}
-
-func TestExtractJSONName(t *testing.T) {
-	tests := []struct {
-		name     string
-		tag      string
-		expected string
-	}{
-		{
-			name:     "simple json tag",
-			tag:      `json:"name"`,
-			expected: "name",
-		},
-		{
-			name:     "json tag with omitempty",
-			tag:      `json:"name,omitempty"`,
-			expected: "name",
-		},
-		{
-			name:     "json tag with multiple options",
-			tag:      `json:"name,omitempty,string"`,
-			expected: "name",
-		},
-		{
-			name:     "json tag with dash",
-			tag:      `json:"-"`,
-			expected: "",
-		},
-		{
-			name:     "empty tag",
-			tag:      "",
-			expected: "",
-		},
-		{
-			name:     "tag without json",
-			tag:      `xml:"name"`,
-			expected: "",
-		},
-		{
-			name:     "tag with spaces",
-			tag:      `json: "name" `,
-			expected: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := extractJSONName(tt.tag)
-			if result != tt.expected {
-				t.Errorf("extractJSONName(%q) = %q, expected %q", tt.tag, result, tt.expected)
-			}
-		})
-	}
 }
 
 func TestCompleteNestedStructFlow(t *testing.T) {
@@ -1287,7 +1193,7 @@ func TestMapGoTypeToOpenAPISchema_CircularReference(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// This should not panic or cause stack overflow
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			// Verify we got a valid schema
 			if schema == nil {
@@ -1498,10 +1404,10 @@ func TestResolveUnderlyingType_CircularReference(t *testing.T) {
 	}
 }
 
-// TestMapGoTypeToOpenAPISchema_DeepCircularReference tests that mapGoTypeToOpenAPISchema
-// doesn't cause stack overflow when dealing with deep circular type references
-func TestMapGoTypeToOpenAPISchema_DeepCircularReference(t *testing.T) {
-	defer RecoverFromPanic(t, "TestMapGoTypeToOpenAPISchema_DeepCircularReference")
+// TestSchemaForType_DeepCircularReference tests that schemaForType doesn't cause
+// stack overflow when dealing with deep circular type references
+func TestSchemaForType_DeepCircularReference(t *testing.T) {
+	defer RecoverFromPanic(t, "TestSchemaForType_DeepCircularReference")
 
 	stringPool := metadata.NewStringPool()
 	meta := &metadata.Metadata{
@@ -1583,7 +1489,7 @@ func TestMapGoTypeToOpenAPISchema_DeepCircularReference(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			// This should not panic or cause stack overflow
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			// Verify we got a valid schema
 			if schema == nil {
@@ -1697,7 +1603,7 @@ func TestResolveUnderlyingType_ComplexCircularReference(t *testing.T) {
 			// This should not panic or cause stack overflow
 			usedTypes := make(map[string]*Schema)
 			visitedTypes := make(map[string]bool)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, visitedTypes)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, visitedTypes)
 
 			// Verify we got a valid schema
 			if schema == nil {
@@ -1718,8 +1624,9 @@ func TestDetectEnumFromConstantsDirect(t *testing.T) {
 					"types.go": {
 						Types: map[string]*metadata.Type{
 							"Status": {
-								Name: stringPool.Get("Status"),
-								Kind: stringPool.Get("string"),
+								Name:   stringPool.Get("Status"),
+								Kind:   stringPool.Get("alias"),
+								Target: stringPool.Get("string"),
 							},
 						},
 						Variables: map[string]*metadata.Variable{
@@ -1774,8 +1681,9 @@ func TestEnumDetectionForArraysSimple(t *testing.T) {
 					"types.go": {
 						Types: map[string]*metadata.Type{
 							"Status": {
-								Name: stringPool.Get("Status"),
-								Kind: stringPool.Get("string"),
+								Name:   stringPool.Get("Status"),
+								Kind:   stringPool.Get("alias"),
+								Target: stringPool.Get("string"),
 							},
 						},
 						Variables: map[string]*metadata.Variable{
@@ -1829,8 +1737,9 @@ func TestEnumDetectionForArrays(t *testing.T) {
 					"types.go": {
 						Types: map[string]*metadata.Type{
 							"Status": {
-								Name: stringPool.Get("Status"),
-								Kind: stringPool.Get("string"),
+								Name:   stringPool.Get("Status"),
+								Kind:   stringPool.Get("alias"),
+								Target: stringPool.Get("string"),
 							},
 						},
 						Variables: map[string]*metadata.Variable{
@@ -1885,7 +1794,7 @@ func TestEnumDetectionForArrays(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
 
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			if schema == nil {
 				t.Fatal("Expected non-nil schema")
@@ -1975,8 +1884,9 @@ func TestEnumDetectionForMaps(t *testing.T) {
 					"types.go": {
 						Types: map[string]*metadata.Type{
 							"Priority": {
-								Name: stringPool.Get("Priority"),
-								Kind: stringPool.Get("string"),
+								Name:   stringPool.Get("Priority"),
+								Kind:   stringPool.Get("alias"),
+								Target: stringPool.Get("string"),
 							},
 						},
 						Variables: map[string]*metadata.Variable{
@@ -2036,7 +1946,7 @@ func TestEnumDetectionForMaps(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			if schema == nil {
 				t.Fatal("Expected non-nil schema")
@@ -2158,7 +2068,7 @@ func TestEnumDetectionForAliasTypes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			if schema == nil {
 				t.Fatal("Expected non-nil schema")
@@ -2352,8 +2262,8 @@ func TestMapTypeWithPackagePrefix(t *testing.T) {
 		expectedType string
 	}{
 		{
-			name:         "map with package prefix",
-			goType:       "pkg.map[string]CustomType",
+			name:         "map with package-qualified value",
+			goType:       "map[string]pkg.CustomType",
 			expectedType: "object",
 		},
 		{
@@ -2366,7 +2276,7 @@ func TestMapTypeWithPackagePrefix(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			usedTypes := make(map[string]*Schema)
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tc.goType, meta, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tc.goType, nil, meta, cfg, nil)
 
 			if schema == nil {
 				t.Fatal("Expected non-nil schema")
@@ -2407,9 +2317,12 @@ func TestCanAddRefSchemaForTypeWithMap(t *testing.T) {
 			expected: false,
 		},
 		{
-			name:     "map type with package prefix",
-			key:      "pkg.map[string]int",
-			expected: false,
+			// A generic INSTANTIATED with a map argument is a nameable component —
+			// it starts with the type name, not "map[". (The old Contains("map[")
+			// check wrongly rejected these.)
+			name:     "generic with a map type argument",
+			key:      "Foo[map[string]int]",
+			expected: true,
 		},
 		{
 			name:     "nested type",

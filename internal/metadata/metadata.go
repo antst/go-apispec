@@ -252,13 +252,9 @@ func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo
 				}
 
 				// Extract type parameter names for generics
-				typeParams := []string{}
-				if fn.Type != nil && fn.Type.TypeParams != nil {
-					for _, tparam := range fn.Type.TypeParams.List {
-						for _, name := range tparam.Names {
-							typeParams = append(typeParams, name.Name)
-						}
-					}
+				var typeParams []string
+				if fn.Type != nil {
+					typeParams = typeParamNames(fn.Type.TypeParams)
 				}
 
 				// Extract return value origins
@@ -854,8 +850,26 @@ func processLocalTypes(file *ast.File, info *types.Info, pkgName string, fset *t
 	}
 }
 
-// processTypeKind determines the kind of type and processes it accordingly
+// typeParamNames extracts declared type-parameter names from a generic
+// type/function parameter list (e.g. [K comparable, V any] -> ["K","V"]).
+func typeParamNames(fl *ast.FieldList) []string {
+	if fl == nil {
+		return nil
+	}
+	var names []string
+	for _, field := range fl.List {
+		for _, name := range field.Names {
+			names = append(names, name.Name)
+		}
+	}
+	return names
+}
+
+// processTypeKind determines the kind of type and processes it accordingly.
 func processTypeKind(tspec *ast.TypeSpec, info *types.Info, pkgName string, fset *token.FileSet, t *Type, allTypes map[string]*Type, metadata *Metadata) {
+	// Phase 2: capture declared generic type-parameter names so an instantiation
+	// can bind concrete args to them by position during substitution.
+	t.TypeParams = typeParamNames(tspec.TypeParams)
 	switch ut := tspec.Type.(type) {
 	case *ast.StructType:
 		t.Kind = metadata.StringPool.Get("struct")
@@ -874,6 +888,11 @@ func processTypeKind(tspec *ast.TypeSpec, info *types.Info, pkgName string, fset
 
 	default:
 		t.Kind = metadata.StringPool.Get("other")
+		// Capture the underlying type of a defined non-struct/alias/interface type
+		// (a defined map/slice/array/func/chan). Without this the field would carry
+		// only Kind "other" with no shape, and the schema pipeline would emit a
+		// dangling $ref; UnderlyingRef lets it resolve the real shape instead.
+		t.UnderlyingRef = TypeRefFromExpr(tspec.Type, info)
 		allTypes[tspec.Name.Name] = t
 	}
 }
@@ -944,6 +963,24 @@ func IsPrimitiveType(typeName string) bool {
 	return false
 }
 
+// IsJSONRawMessageRef reports whether a TypeRef node IS exactly
+// encoding/json.RawMessage (a RefNamed leaf; not unwrapped). RawMessage's
+// underlying is []byte, but it implements json.Marshaler and round-trips raw
+// JSON, so it must map to an empty (any-JSON) schema rather than the base64
+// string its []byte underlying would yield. Shared with the schema layer so the
+// "this is RawMessage" decision has one definition.
+func IsJSONRawMessageRef(ref *TypeRef) bool {
+	return ref != nil && ref.Kind == RefNamed && ref.Pkg == "encoding/json" && ref.Name == "RawMessage"
+}
+
+// refIsJSONRawMessage reports whether a TypeRef's named leaf is
+// encoding/json.RawMessage. NamedLeaf unwraps pointer/slice/array/map so
+// *RawMessage and []RawMessage are recognised too — used at capture time to keep
+// the named ref intact instead of collapsing it to []byte.
+func refIsJSONRawMessage(ref *TypeRef) bool {
+	return IsJSONRawMessageRef(ref.NamedLeaf())
+}
+
 // isExternalType checks if a type is from an external package (not part of the current project)
 func isExternalType(typeInfo types.Type, currentModulePath string) bool {
 	switch t := typeInfo.(type) {
@@ -992,10 +1029,27 @@ func isExternalPackage(pkgPath, currentModulePath string) bool {
 	return true
 }
 
+// inlineStructType returns the inline anonymous *ast.StructType a field
+// declares — either directly (struct{...}) or as the element of a slice/array
+// ([]struct{...}, [N]struct{...}) — or nil when the field is not an inline
+// struct. Named struct types resolve through their identifier, not here.
+func inlineStructType(expr ast.Expr) *ast.StructType {
+	switch t := expr.(type) {
+	case *ast.StructType:
+		return t
+	case *ast.ArrayType:
+		if s, ok := t.Elt.(*ast.StructType); ok {
+			return s
+		}
+	}
+	return nil
+}
+
 // processStructFields processes fields of a struct type
 func processStructFields(structType *ast.StructType, pkgName string, metadata *Metadata, t *Type, info *types.Info) {
 	for _, field := range structType.Fields.List {
 		fieldType := getTypeName(field.Type, info)
+		fieldTypeRef := TypeRefFromExpr(field.Type, info)
 		tag := getFieldTag(field)
 		comments := getComments(field)
 
@@ -1003,20 +1057,60 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 			fieldTypeInfo := info.TypeOf(field.Type)
 			if fieldTypeInfo != nil {
 				// Only resolve external types to their underlying primitives
-				// Internal project types should remain as-is since they'll be resolved from the project
-				if isExternalType(fieldTypeInfo, metadata.CurrentModulePath) {
-					underlyingFieldType := fieldTypeInfo.Underlying().String()
-					if IsPrimitiveType(underlyingFieldType) {
+				// Internal project types should remain as-is since they'll be resolved from the project.
+				// json.RawMessage is the exception: although its underlying is []byte,
+				// it implements json.Marshaler and round-trips RAW JSON, so collapsing
+				// it to []byte would wrongly yield a base64 string. Keep its named
+				// TypeRef so the schema layer can map it to an empty (any-JSON) schema.
+				if isExternalType(fieldTypeInfo, metadata.CurrentModulePath) && !refIsJSONRawMessage(fieldTypeRef) {
+					underlying := fieldTypeInfo.Underlying()
+					if underlyingFieldType := underlying.String(); IsPrimitiveType(underlyingFieldType) {
 						fieldType = underlyingFieldType
+						// Keep the structured type aligned with the rewritten string.
+						fieldTypeRef = TypeRefFromType(underlying)
 					}
 				}
 			}
 		}
 
 		if len(field.Names) == 0 {
-			// Embedded (anonymous) field
-			t.Embeds = append(t.Embeds, metadata.StringPool.Get(fieldType))
-			continue
+			// Embedded (anonymous) field. encoding/json's promotion rules depend on
+			// the json tag (mirrored from the schema layer's jsonFieldName):
+			//   - no tag, or a tag with an EMPTY name (e.g. `json:",omitempty"`):
+			//     the embed's exported fields are PROMOTED/flattened into the
+			//     parent — the historical behaviour (promoteEmbeddedFields).
+			//   - a tag NAMING the embed (e.g. `json:"meta"`): the embed is
+			//     marshaled as a NESTED object under that name, NOT flattened, so it
+			//     is captured as a regular Field and flows through the normal field
+			//     pipeline.
+			//   - exactly `json:"-"`: the embed is DROPPED entirely — neither
+			//     promoted nor nested.
+			jsonName, jsonSkip, _ := jsonTagName(tag)
+			switch {
+			case jsonSkip:
+				// `json:"-"` — encoding/json omits the embed; drop it.
+				continue
+			case jsonName != "":
+				if !jsonNamedEmbedMarshals(embedBaseName(fieldTypeRef), field.Type, info) {
+					// encoding/json marshals a json-named embed of an UNEXPORTED type
+					// only when its underlying is a struct; an unexported NON-struct
+					// embed (e.g. `someInt `json:"n"“ or a builtin `int `json:"n"“)
+					// is dropped even with a tag. Drop it here too.
+					continue
+				}
+				if f, ok := namedEmbedField(fieldType, tag, fieldTypeRef, metadata); ok {
+					t.Fields = append(t.Fields, f)
+					continue
+				}
+				// No usable named type for the embed (nil/non-named TypeRef, e.g. an
+				// inline anonymous struct embed). Fall through to flattening rather
+				// than synthesising a nameless nested field.
+				fallthrough
+			default:
+				t.Embeds = append(t.Embeds, metadata.StringPool.Get(fieldType))
+				t.EmbedRefs = append(t.EmbedRefs, fieldTypeRef)
+				continue
+			}
 		}
 
 		for _, name := range field.Names {
@@ -1027,11 +1121,17 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 				Tag:      metadata.StringPool.Get(tag),
 				Scope:    metadata.StringPool.Get(scope),
 				Comments: metadata.StringPool.Get(comments),
+				// Phase 2: structured type (external types normalized to their
+				// underlying primitive, matching Type above).
+				TypeRef: fieldTypeRef,
 			}
 
-			// Check if this field has a nested struct type
-			if structTypeExpr, ok := field.Type.(*ast.StructType); ok {
-				// Create a nested type for this field
+			// Capture an inline anonymous struct so the consumer can describe its
+			// properties: directly (Meta struct{...}) or as a slice/array element
+			// ([]struct{...}, [N]struct{...}). For the element case NestedType holds
+			// the element struct; the field's RefSlice/RefArray TypeRef tells the
+			// consumer to wrap it back into an array.
+			if structTypeExpr := inlineStructType(field.Type); structTypeExpr != nil {
 				nestedType := &Type{
 					Name:     metadata.StringPool.Get(name.Name + "_nested"),
 					Pkg:      metadata.StringPool.Get(pkgName),
@@ -1046,6 +1146,84 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 			t.Fields = append(t.Fields, f)
 		}
 	}
+}
+
+// namedEmbedField builds the regular Field that represents a json-named
+// anonymous embed (e.g. `Base `json:"meta"“), which encoding/json marshals as a
+// nested object rather than promoting/flattening. The field's Go name is the
+// embed type's BASE name (e.g. "Base" from "pkg.Base" or "*pkg.Base") so the
+// downstream pipeline renders it like any other struct-valued field — the json
+// tag supplies the wire name ("meta") and omitempty drives required.
+//
+// It reports ok=false when the embed carries no usable named type (nil TypeRef,
+// or a non-named leaf such as an inline anonymous struct), so the caller can
+// fall back to flattening instead of synthesising a nameless field.
+func namedEmbedField(fieldType, tag string, fieldTypeRef *TypeRef, metadata *Metadata) (Field, bool) {
+	baseName := embedBaseName(fieldTypeRef)
+	if baseName == "" {
+		return Field{}, false
+	}
+	return Field{
+		Name: metadata.StringPool.Get(baseName),
+		Type: metadata.StringPool.Get(fieldType),
+		Tag:  metadata.StringPool.Get(tag),
+		// A json-NAMED anonymous embed is marshaled by encoding/json as a named
+		// field regardless of the embedded type's exportedness (the anonymous-field
+		// visibility amendment) — e.g. `embC `json:"pub"“ with unexported struct
+		// embC still emits {"pub":{…}}. So force exported scope; deriving it from the
+		// (possibly lowercase) base name would wrongly drop it via the field loop's
+		// unexported-skip.
+		Scope:   metadata.StringPool.Get(ScopeExported),
+		TypeRef: fieldTypeRef,
+	}, true
+}
+
+// embedBaseName returns the bare type name of an embedded field — the name a
+// json-named embed is captured under. It uses the structured TypeRef's named
+// leaf, which strips pointer/slice/etc. wrappers so `*pkg.Base` and `pkg.Base`
+// both yield "Base". It returns "" when there is no usable named type (nil
+// TypeRef, or a non-named leaf such as an inline anonymous struct), signalling
+// the caller to flatten the embed rather than synthesise a nameless,
+// untyped nested field.
+func embedBaseName(fieldTypeRef *TypeRef) string {
+	leaf := fieldTypeRef.NamedLeaf()
+	if leaf == nil || (leaf.Kind != RefNamed && leaf.Kind != RefBasic) {
+		return ""
+	}
+	return leaf.Name
+}
+
+// jsonNamedEmbedMarshals reports whether encoding/json marshals a json-NAMED
+// anonymous embed of the given type. Go's anonymous-field rule (encode.go):
+//
+//	if !field.IsExported() && deref(field.Type).Kind() != reflect.Struct { continue }
+//
+// so an EXPORTED embed always marshals, while an UNEXPORTED embed marshals only
+// when its (de-pointered) underlying type is a struct — an unexported non-struct
+// embed (`someInt `json:"n"“, or a builtin `int `json:"n"“) is dropped even with
+// a tag. An empty/unresolved base name (inline anonymous struct) is treated as
+// marshaling (it flattens downstream); with no type info we assume a struct, the
+// usual embed shape.
+func jsonNamedEmbedMarshals(baseName string, expr ast.Expr, info *types.Info) bool {
+	if baseName == "" || isExported(baseName) {
+		return true
+	}
+	if info == nil || expr == nil {
+		return true
+	}
+	et := info.TypeOf(expr)
+	if et == nil {
+		return true
+	}
+	for {
+		p, ok := et.(*types.Pointer)
+		if !ok {
+			break
+		}
+		et = p.Elem()
+	}
+	_, isStruct := et.Underlying().(*types.Struct)
+	return isStruct
 }
 
 // processInterfaceMethods processes methods of an interface type
@@ -1080,13 +1258,9 @@ func processFunctions(file *ast.File, info *types.Info, pkgName string, fset *to
 		comments := getComments(fn)
 
 		// Extract type parameter names for generics
-		typeParams := []string{}
-		if fn.Type != nil && fn.Type.TypeParams != nil {
-			for _, tparam := range fn.Type.TypeParams.List {
-				for _, name := range tparam.Names {
-					typeParams = append(typeParams, name.Name)
-				}
-			}
+		var typeParams []string
+		if fn.Type != nil {
+			typeParams = typeParamNames(fn.Type.TypeParams)
 		}
 
 		// Extract return value origins
@@ -1236,6 +1410,7 @@ func processVariables(file *ast.File, info *types.Info, pkgName string, fset *to
 					Pkg:        metadata.StringPool.Get(pkgName),
 					Tok:        metadata.StringPool.Get(tok),
 					Type:       metadata.StringPool.Get(getTypeName(vspec.Type, info)),
+					TypeRef:    TypeRefFromExpr(vspec.Type, info), // Phase 2: structured declared type (nil if untyped)
 					Position:   metadata.StringPool.Get(getVarPosition(name, fset)),
 					Comments:   metadata.StringPool.Get(comments),
 					GroupIndex: groupIndex,

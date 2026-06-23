@@ -268,6 +268,18 @@ func TestJsonNameForField(t *testing.T) {
 	sp := meta.StringPool
 	noTag := &metadata.Type{Fields: []metadata.Field{{Name: sp.Get("Raw")}}}
 	assert.Equal(t, "Raw", jsonNameForField(meta, noTag, "Raw"))
+
+	// json-tag semantics match the struct-schema path (one parser): `json:"-"` is a
+	// skip so the field is dropped (caller treats "" as skip); `json:"-,"` names the
+	// field literally "-"; an explicit name wins over the Go field name.
+	tagged := &metadata.Type{Fields: []metadata.Field{
+		{Name: sp.Get("Hidden"), Tag: sp.Get(`json:"-"`)},
+		{Name: sp.Get("Dash"), Tag: sp.Get(`json:"-,"`)},
+		{Name: sp.Get("Named"), Tag: sp.Get(`json:"renamed,omitempty"`)},
+	}}
+	assert.Equal(t, "", jsonNameForField(meta, tagged, "Hidden"), `json:"-" drops the field`)
+	assert.Equal(t, "-", jsonNameForField(meta, tagged, "Dash"), `json:"-," is the literal name "-"`)
+	assert.Equal(t, "renamed", jsonNameForField(meta, tagged, "Named"))
 }
 
 func TestLookupWrapperType(t *testing.T) {
@@ -322,13 +334,14 @@ func TestSpecialiseWrapperSchema(t *testing.T) {
 			"common.go": {Types: map[string]*metadata.Type{"Envelope": wsEnvelopeType(meta)}},
 		},
 	}
-	// Register the payload type so mapGoTypeToOpenAPISchema discovers a
+	// Register the payload type so schemaForType discovers a
 	// component for it (exercising the discovered-registration loop).
 	meta.Packages["orders"] = &metadata.Package{
 		Files: map[string]*metadata.File{
 			"orders.go": {Types: map[string]*metadata.Type{"Order": {
 				Name:   sp.Get("Order"),
 				Pkg:    sp.Get("orders"),
+				Kind:   sp.Get("struct"),
 				Fields: []metadata.Field{{Name: sp.Get("ID"), Type: sp.Get("string"), Tag: sp.Get(`json:"id"`)}},
 			}}},
 		},
@@ -454,6 +467,7 @@ func TestExtractResponse_WrapperEnvelope(t *testing.T) {
 			"orders.go": {Types: map[string]*metadata.Type{"Order": {
 				Name:   sp.Get("Order"),
 				Pkg:    sp.Get("orders"),
+				Kind:   sp.Get("struct"),
 				Fields: []metadata.Field{{Name: sp.Get("ID"), Type: sp.Get("string"), Tag: sp.Get(`json:"id"`)}},
 			}}},
 		},

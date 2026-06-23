@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // fieldExprs parses src and returns each struct field's type expression keyed
@@ -318,6 +319,183 @@ type S struct {
 	before := d.String()
 	d.Qualify("") // empty pkg — no-op
 	assert.Equal(t, before, d.String())
+}
+
+func TestTypeRefFromType(t *testing.T) {
+	exprs, info := fieldExprs(t, `package x
+import (
+	"time"
+	"net/http"
+)
+type Alias = int
+type Box[T any] struct{ V T }
+type S struct {
+	A int
+	B *S
+	C []int
+	D [4]byte
+	E map[string]int
+	F time.Time
+	G time.Duration
+	H http.Header
+	I Box[int]
+	J interface{}
+	K func(int) error
+	L chan int
+	M Alias
+	N struct{ X int }
+	Err error
+}`, true)
+	require.NotNil(t, info)
+
+	ref := func(field string) *TypeRef {
+		typ := info.TypeOf(exprs[field])
+		require.NotNil(t, typ, field)
+		return TypeRefFromType(typ)
+	}
+
+	assert.Equal(t, "int", ref("A").String())
+	assert.Equal(t, RefPointer, ref("B").Kind)
+	assert.Equal(t, "[]int", ref("C").String())
+	d := ref("D")
+	assert.Equal(t, RefArray, d.Kind)
+	assert.Equal(t, 4, d.Len)
+	assert.Equal(t, RefMap, ref("E").Kind)
+	assert.Equal(t, RefBasic, ref("F").Kind) // time.Time is a recognized primitive
+	assert.Equal(t, "time.Time", ref("F").String())
+	g := ref("G")
+	assert.Equal(t, RefNamed, g.Kind)
+	assert.Equal(t, "time.Duration", g.String())
+	assert.Equal(t, "net/http", ref("H").Pkg) // full import path from go/types
+	i := ref("I")
+	require.Equal(t, RefNamed, i.Kind)
+	require.Len(t, i.Args, 1)
+	assert.Equal(t, "int", i.Args[0].String())
+	assert.Equal(t, RefInterface, ref("J").Kind)
+	assert.Equal(t, RefFunc, ref("K").Kind)
+	assert.Equal(t, RefChan, ref("L").Kind)
+	assert.Equal(t, "int", ref("M").String()) // alias resolved through Unalias
+	assert.Equal(t, RefParam, ref("V").Kind)  // type parameter of Box
+	assert.Equal(t, RefStruct, ref("N").Kind)
+	// builtin `error` is a pkg-less *types.Named (Obj().Pkg()==nil) and a
+	// recognized primitive — exercises namedTypeRef's nil-package branch.
+	e := ref("Err")
+	assert.Equal(t, RefBasic, e.Kind)
+	assert.Equal(t, "error", e.String())
+
+	// Defensive branches: an unrepresentable type (a tuple), and composites whose
+	// element/key is unrepresentable, yield nil rather than a fabricated node.
+	tuple := types.NewTuple()
+	intT := types.Typ[types.Int]
+	assert.Nil(t, TypeRefFromType(nil))
+	assert.Nil(t, TypeRefFromType(types.Typ[types.Invalid]))  // unresolved/erroneous
+	assert.Nil(t, TypeRefFromType(tuple))                     // default arm
+	assert.Nil(t, TypeRefFromType(types.NewArray(tuple, 3)))  // array elem nil
+	assert.Nil(t, TypeRefFromType(types.NewMap(tuple, intT))) // map key nil
+	assert.Nil(t, TypeRefFromType(types.NewMap(intT, tuple))) // map value nil
+	assert.Nil(t, TypeRefFromType(types.NewPointer(tuple)))   // pointer elem nil (via wrap)
+
+	// An UNTYPED basic resolves to its DEFAULT typed form (not a "untyped X" name).
+	assert.Equal(t, &TypeRef{Kind: RefBasic, Name: "int"}, TypeRefFromType(types.Typ[types.UntypedInt]))
+	assert.Equal(t, &TypeRef{Kind: RefBasic, Name: "string"}, TypeRefFromType(types.Typ[types.UntypedString]))
+	assert.Equal(t, &TypeRef{Kind: RefBasic, Name: "bool"}, TypeRefFromType(types.Typ[types.UntypedBool]))
+	assert.Equal(t, &TypeRef{Kind: RefBasic, Name: "float64"}, TypeRefFromType(types.Typ[types.UntypedFloat]))
+	assert.Nil(t, TypeRefFromType(types.Typ[types.UntypedNil])) // untyped nil has no typed default → no schema
+}
+
+func TestTypeRefFromExpr_InfoFallback(t *testing.T) {
+	// When type info is present but the type is unresolved (TypeOf is nil/invalid),
+	// TypeRefFromExpr falls back to the AST path — which still uses info to resolve
+	// the selector's package and the array length.
+	exprs, info := fieldExprs(t, `package x
+import "time"
+type S struct {
+	A time.Undefined
+	B [3]time.Nope
+}`, true)
+	require.NotNil(t, info)
+
+	// Selector to an undefined member: the AST fallback resolves the package
+	// import path via info (exercises selectorParts' info branch).
+	a := TypeRefFromExpr(exprs["A"], info)
+	require.Equal(t, RefNamed, a.Kind)
+	assert.Equal(t, "time", a.Pkg)
+	assert.Equal(t, "Undefined", a.Name)
+
+	// Array of an undefined element: the AST fallback resolves the constant
+	// length via info (exercises arrayLen's info path).
+	b := TypeRefFromExpr(exprs["B"], info)
+	require.Equal(t, RefArray, b.Kind)
+	assert.Equal(t, 3, b.Len)
+}
+
+func TestTypeRefFromExpr_PackageIdent(t *testing.T) {
+	// A package identifier (the "http" in http.Header) is not a type; it must not
+	// become a fabricated RefNamed. It surfaces as a sub-expression when the
+	// call-graph builder recurses into selectors.
+	exprs, info := fieldExprs(t, `package x
+import "net/http"
+type S struct{ F http.Header }`, true)
+	require.NotNil(t, info)
+	sel, ok := exprs["F"].(*ast.SelectorExpr)
+	require.True(t, ok)
+	assert.Nil(t, TypeRefFromExpr(sel.X, info)) // sel.X is the "http" package ident
+	// The selector itself still resolves correctly.
+	assert.Equal(t, "net/http.Header", TypeRefFromExpr(sel, info).String())
+}
+
+func TestTypeRef_ConstructorsAgree(t *testing.T) {
+	// With type info, TypeRefFromExpr routes through TypeRefFromType, so the two
+	// constructors produce identical trees and the prior divergences (bare vs
+	// full package path, `any` Kind) are gone.
+	exprs, info := fieldExprs(t, `package x
+type Local struct{ X int }
+type S struct {
+	A Local
+	B any
+	C []Local
+}`, true)
+	require.NotNil(t, info)
+
+	// Same-package type now carries the full package path (matching go/types),
+	// not a bare name — and equals what TypeRefFromType produces.
+	a := TypeRefFromExpr(exprs["A"], info)
+	require.Equal(t, RefNamed, a.Kind)
+	assert.Equal(t, "x", a.Pkg)
+	assert.Equal(t, TypeRefFromType(info.TypeOf(exprs["A"])), a)
+
+	// `any` resolves to the interface kind through go/types (not RefBasic{"any"}).
+	b := TypeRefFromExpr(exprs["B"], info)
+	assert.Equal(t, RefInterface, b.Kind)
+	assert.Equal(t, TypeRefFromType(info.TypeOf(exprs["B"])), b)
+
+	// Composite of a same-package type agrees too.
+	c := TypeRefFromExpr(exprs["C"], info)
+	assert.Equal(t, TypeRefFromType(info.TypeOf(exprs["C"])), c)
+}
+
+func TestTypeRef_YAMLRoundTrip(t *testing.T) {
+	// A tree exercising every field: a named generic with args, slice/map/pointer
+	// nesting, a concrete array length, a genuine [0], and the inferred (-1)
+	// sentinel — round-trips through default struct marshaling, no custom code.
+	orig := &TypeRef{
+		Kind: RefNamed, Pkg: "pkg", Name: "APIResponse",
+		Args: []*TypeRef{
+			{Kind: RefMap,
+				Key:  &TypeRef{Kind: RefBasic, Name: "string"},
+				Elem: &TypeRef{Kind: RefSlice, Elem: &TypeRef{Kind: RefPointer, Elem: &TypeRef{Kind: RefNamed, Pkg: "pkg", Name: "User"}}}},
+			{Kind: RefArray, Len: 16, Elem: &TypeRef{Kind: RefBasic, Name: "byte"}},
+			{Kind: RefArray, Len: 0, Elem: &TypeRef{Kind: RefBasic, Name: "int"}},  // genuine [0]int
+			{Kind: RefArray, Len: -1, Elem: &TypeRef{Kind: RefBasic, Name: "int"}}, // inferred [...]int
+			{Kind: RefInterface},
+		},
+	}
+	data, err := yaml.Marshal(orig)
+	require.NoError(t, err)
+	var back TypeRef
+	require.NoError(t, yaml.Unmarshal(data, &back))
+	assert.Equal(t, orig, &back)                  // structurally identical
+	assert.Equal(t, orig.String(), back.String()) // and renders identically
 }
 
 func TestTypeRef_StringNil(t *testing.T) {

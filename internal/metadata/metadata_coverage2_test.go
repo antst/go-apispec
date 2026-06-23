@@ -116,6 +116,241 @@ type Config struct {
 	}
 }
 
+// structDeclByName returns the *ast.StructType of the named top-level type
+// declaration, failing the test if it is absent or not a struct.
+func structDeclByName(t *testing.T, file *ast.File, name string) *ast.StructType {
+	t.Helper()
+	for _, decl := range file.Decls {
+		genDecl, ok := decl.(*ast.GenDecl)
+		if !ok || genDecl.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range genDecl.Specs {
+			tspec, ok := spec.(*ast.TypeSpec)
+			if !ok || tspec.Name.Name != name {
+				continue
+			}
+			st, ok := tspec.Type.(*ast.StructType)
+			require.True(t, ok, "type %s is not a struct", name)
+			return st
+		}
+	}
+	t.Fatalf("struct type %s not found", name)
+	return nil
+}
+
+// processStructFields must honour encoding/json's tag-dependent rules for
+// ANONYMOUS embedded fields: an untagged embed is flattened (-> Embeds), a
+// json-named embed is captured as a nested regular field (-> Fields), and a
+// `json:"-"` embed is dropped entirely (neither).
+func TestProcessStructFields_TaggedEmbeds(t *testing.T) {
+	src := `package testpkg
+
+type Base struct {
+	ID int
+}
+
+type Meta struct {
+	Revision int
+}
+
+type Internal struct {
+	Secret string
+}
+
+type secretBag struct {
+	Token string
+}
+
+type tally int
+
+type Doc struct {
+	Base                  // untagged embed -> flattened
+	Meta      ` + "`json:\"meta\"`" + ` // named embed -> nested field
+	Internal  ` + "`json:\"-\"`" + `    // dropped entirely
+	*secretBag ` + "`json:\"secrets\"`" + ` // unexported *STRUCT embed, named -> nested (pointer de-ref'd)
+	tally     ` + "`json:\"tally\"`" + `   // unexported NON-struct embed, named -> dropped
+	Title     string ` + "`json:\"title\"`" + `
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "test.go", src, parser.AllErrors)
+	require.NoError(t, err)
+
+	info := typeCheckFile(t, fset, file)
+	meta := newTestMetadata()
+
+	ty := &Type{Name: meta.StringPool.Get("Doc"), Pkg: meta.StringPool.Get("testpkg")}
+	processStructFields(structDeclByName(t, file, "Doc"), "testpkg", meta, ty, info)
+
+	// Untagged Base is the ONLY flattened embed.
+	embedNames := make([]string, len(ty.Embeds))
+	for i, idx := range ty.Embeds {
+		embedNames[i] = meta.StringPool.GetString(idx)
+	}
+	assert.Equal(t, []string{"Base"}, embedNames, "only the untagged embed flattens")
+	assert.Len(t, ty.EmbedRefs, 1, "EmbedRefs stays index-aligned with Embeds")
+
+	// Fields: the named embed (captured under its base name "Meta") and the
+	// normal scalar "Title" — but NOT the json:"-" embed nor the untagged Base.
+	fieldByName := make(map[string]Field, len(ty.Fields))
+	for _, f := range ty.Fields {
+		fieldByName[meta.StringPool.GetString(f.Name)] = f
+	}
+	require.Contains(t, fieldByName, "Meta", "json:\"meta\" embed becomes a nested field")
+	require.Contains(t, fieldByName, "secretBag", "unexported STRUCT embed with a json name nests")
+	require.Contains(t, fieldByName, "Title")
+	assert.NotContains(t, fieldByName, "Internal", "json:\"-\" embed is dropped from Fields")
+	assert.NotContains(t, fieldByName, "Base", "untagged embed never becomes a field")
+	assert.NotContains(t, fieldByName, "tally", "unexported NON-struct embed is dropped (Go ignores it)")
+	assert.Len(t, ty.Fields, 3, "the meta, secretBag, and title fields")
+	// The unexported-struct embed is forced exported so the schema layer keeps it.
+	assert.Equal(t, "exported", meta.StringPool.GetString(fieldByName["secretBag"].Scope))
+
+	// The captured meta field carries its json tag (so the wire name resolves to
+	// "meta" downstream) and a named TypeRef.
+	metaField := fieldByName["Meta"]
+	assert.Contains(t, meta.StringPool.GetString(metaField.Tag), `json:"meta"`)
+	require.NotNil(t, metaField.TypeRef)
+	assert.Equal(t, "Meta", metaField.TypeRef.NamedLeaf().Name)
+
+	// The json:"-" embed (Internal) must not surface as a flattened embed either.
+	assert.NotContains(t, embedNames, "Internal")
+}
+
+// A POINTER embed tagged with a json name nests under that name just like a
+// value embed; the base name strips the pointer wrapper.
+func TestProcessStructFields_TaggedPointerEmbed(t *testing.T) {
+	src := `package testpkg
+
+type Meta struct {
+	Revision int
+}
+
+type Doc struct {
+	*Meta ` + "`json:\"meta\"`" + `
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "test.go", src, parser.AllErrors)
+	require.NoError(t, err)
+
+	info := typeCheckFile(t, fset, file)
+	meta := newTestMetadata()
+
+	ty := &Type{Name: meta.StringPool.Get("Doc"), Pkg: meta.StringPool.Get("testpkg")}
+	processStructFields(structDeclByName(t, file, "Doc"), "testpkg", meta, ty, info)
+
+	assert.Empty(t, ty.Embeds, "a json-named pointer embed nests, it does not flatten")
+	require.Len(t, ty.Fields, 1)
+	f := ty.Fields[0]
+	assert.Equal(t, "Meta", meta.StringPool.GetString(f.Name), "base name strips the pointer")
+	require.NotNil(t, f.TypeRef)
+	assert.Equal(t, "Meta", f.TypeRef.NamedLeaf().Name)
+}
+
+// A json-NAMED embed whose type has no nameable base (here a synthetic inline
+// anonymous struct, which yields a non-named TypeRef) must fall back to
+// FLATTENING rather than synthesising a nameless nested field. This drives the
+// embed branch's `fallthrough` arm. Built directly as AST because valid Go
+// cannot tag an unnamed embedded struct type.
+func TestProcessStructFields_NamedEmbedNonNamedFallsBackToFlatten(t *testing.T) {
+	field := &ast.Field{
+		// No Names => embedded/anonymous field.
+		Type: &ast.StructType{Fields: &ast.FieldList{}}, // -> RefStruct (non-named)
+		Tag:  &ast.BasicLit{Kind: token.STRING, Value: "`json:\"x\"`"},
+	}
+	structType := &ast.StructType{Fields: &ast.FieldList{List: []*ast.Field{field}}}
+
+	meta := newTestMetadata()
+	ty := &Type{Name: meta.StringPool.Get("Doc"), Pkg: meta.StringPool.Get("testpkg")}
+	// info=nil so TypeRefFromExpr takes the AST path (StructType -> RefStruct).
+	processStructFields(structType, "testpkg", meta, ty, nil)
+
+	assert.Empty(t, ty.Fields, "a non-named json-tagged embed is not captured as a field")
+	assert.Len(t, ty.Embeds, 1, "it flattens instead")
+}
+
+// jsonTagName mirrors the schema layer's jsonFieldName, including the subtlety
+// that only a BARE `json:"-"` is a skip.
+func TestJSONTagName(t *testing.T) {
+	cases := []struct {
+		name        string
+		tag         string
+		wantName    string
+		wantSkip    bool
+		wantPresent bool
+	}{
+		{"no json tag", `xml:"x"`, "", false, false},
+		{"empty tag", ``, "", false, false},
+		{"named", `json:"meta"`, "meta", false, true},
+		{"named with options", `json:"meta,omitempty"`, "meta", false, true},
+		{"empty name with options", `json:",omitempty"`, "", false, true},
+		{"skip", `json:"-"`, "", true, true},
+		{"literal dash name", `json:"-,"`, "-", false, true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			name, skip, present := jsonTagName(tc.tag)
+			assert.Equal(t, tc.wantName, name)
+			assert.Equal(t, tc.wantSkip, skip)
+			assert.Equal(t, tc.wantPresent, present)
+		})
+	}
+}
+
+// embedBaseName uses the TypeRef's named leaf and falls back to "" (signalling
+// the caller to flatten) when there is no usable named type.
+func TestEmbedBaseName(t *testing.T) {
+	assert.Equal(t, "Base", embedBaseName(&TypeRef{Kind: RefNamed, Pkg: "pkg", Name: "Base"}))
+	assert.Equal(t, "Base", embedBaseName(&TypeRef{Kind: RefPointer, Elem: &TypeRef{Kind: RefNamed, Name: "Base"}}))
+	assert.Equal(t, "time", embedBaseName(&TypeRef{Kind: RefBasic, Name: "time"}), "basic leaf keeps its name")
+	assert.Empty(t, embedBaseName(nil), "nil TypeRef has no base name")
+	assert.Empty(t, embedBaseName(&TypeRef{Kind: RefFunc}), "non-named leaf has no base name")
+	// A container whose leaf is non-named (map of inline struct) is not nameable.
+	assert.Empty(t, embedBaseName(&TypeRef{Kind: RefMap, Key: &TypeRef{Kind: RefBasic, Name: "string"}, Elem: &TypeRef{Kind: RefFunc}}))
+}
+
+// namedEmbedField reports ok=false (so the caller flattens) when the embed has
+// no usable named type — e.g. a nil TypeRef.
+func TestNamedEmbedField_FallbackToFlatten(t *testing.T) {
+	meta := newTestMetadata()
+	_, ok := namedEmbedField("struct{}", `json:"x"`, nil, meta)
+	assert.False(t, ok, "nil TypeRef -> flatten")
+
+	f, ok := namedEmbedField("pkg.Base", `json:"meta"`, &TypeRef{Kind: RefNamed, Pkg: "pkg", Name: "Base"}, meta)
+	require.True(t, ok)
+	assert.Equal(t, "Base", meta.StringPool.GetString(f.Name))
+	assert.Equal(t, "exported", meta.StringPool.GetString(f.Scope))
+
+	// An UNEXPORTED-type embed (lowercase base name) must STILL get exported scope:
+	// a json-named anonymous embed is marshaled regardless of the type's
+	// exportedness, so deriving scope from the lowercase name would wrongly drop it
+	// via the schema field loop's unexported-skip.
+	fu, ok := namedEmbedField("pkg.secretBag", `json:"secrets"`, &TypeRef{Kind: RefNamed, Pkg: "pkg", Name: "secretBag"}, meta)
+	require.True(t, ok)
+	assert.Equal(t, "secretBag", meta.StringPool.GetString(fu.Name))
+	assert.Equal(t, "exported", meta.StringPool.GetString(fu.Scope), "json-named embed forces exported scope")
+}
+
+// jsonNamedEmbedMarshals default-to-marshal fallbacks (the resolvable
+// unexported-struct=true / unexported-non-struct=false cases are covered
+// end-to-end by TestProcessStructFields_TaggedEmbeds).
+func TestJSONNamedEmbedMarshals_Fallbacks(t *testing.T) {
+	// Exported base name -> marshals without consulting type info.
+	assert.True(t, jsonNamedEmbedMarshals("Base", nil, nil))
+	// Empty base name (inline/unresolved embed) -> marshals (flattens downstream).
+	assert.True(t, jsonNamedEmbedMarshals("", nil, nil))
+	// Unexported + no type info at all -> assume the usual struct shape.
+	assert.True(t, jsonNamedEmbedMarshals("secretBag", nil, nil))
+	// Unexported + info present but a nil expr -> defensive marshal.
+	assert.True(t, jsonNamedEmbedMarshals("secretBag", nil, &types.Info{}))
+	// Unexported + expr unknown to the info (TypeOf nil) -> assume marshal.
+	assert.True(t, jsonNamedEmbedMarshals("mystery", ast.NewIdent("mystery"),
+		&types.Info{Types: map[ast.Expr]types.TypeAndValue{}}))
+}
+
 // ---------------------------------------------------------------------------
 // processStructInstance — basic struct literal
 // ---------------------------------------------------------------------------
@@ -2517,4 +2752,23 @@ var c = Config{}
 	})
 
 	assert.NotEmpty(t, f.StructInstances)
+}
+
+// TestInlineStructType covers the helper that recognizes an inline anonymous
+// struct a field declares — directly, or as a slice/array element — which is how
+// processStructFields decides to capture a NestedType (US3).
+func TestInlineStructType(t *testing.T) {
+	direct := &ast.StructType{Fields: &ast.FieldList{}}
+	elem := &ast.StructType{Fields: &ast.FieldList{}}
+
+	// Directly an inline struct.
+	assert.Equal(t, direct, inlineStructType(direct))
+	// Slice of an inline struct: returns the element struct.
+	assert.Equal(t, elem, inlineStructType(&ast.ArrayType{Elt: elem}))
+	// Fixed array of an inline struct: also returns the element struct.
+	assert.Equal(t, elem, inlineStructType(&ast.ArrayType{Len: ast.NewIdent("2"), Elt: elem}))
+	// Slice of a non-struct element: nil.
+	assert.Nil(t, inlineStructType(&ast.ArrayType{Elt: ast.NewIdent("int")}))
+	// A plain named type: nil.
+	assert.Nil(t, inlineStructType(ast.NewIdent("string")))
 }

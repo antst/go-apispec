@@ -657,7 +657,7 @@ func TestFindTypesInMetadata_GenericTypeWithBrackets(t *testing.T) {
 		},
 	}
 
-	// TypeParts for "models-->Response[T string]" should parse generics
+	// findTypesInMetadata should resolve the generic "models-->Response[T string]"
 	result := findTypesInMetadata(meta, "models-->Response")
 	require.NotNil(t, result)
 	assert.NotNil(t, result["models-->Response"])
@@ -1248,68 +1248,6 @@ func TestSetOperationOnPathItem_AllMethods(t *testing.T) {
 		case "HEAD":
 			assert.Equal(t, op, item.Head)
 		}
-	}
-}
-
-func TestExtractJSONName_Naming(t *testing.T) {
-	tests := []struct {
-		tag      string
-		expected string
-	}{
-		{`json:"name,omitempty"`, "name"},
-		{`json:"user_id"`, "user_id"},
-		{`json:"-"`, ""},
-		{`json:""`, ""},
-		{"", ""},
-		{`yaml:"name"`, ""},
-		{`json:"field_name" validate:"required"`, "field_name"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.tag, func(t *testing.T) {
-			result := extractJSONName(tt.tag)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestTypeParts_VariousFormats(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    string
-		expected Parts
-	}{
-		{
-			name:  "with TypeSep",
-			input: "models-->User",
-			expected: Parts{
-				PkgName:  "models",
-				TypeName: "User",
-			},
-		},
-		{
-			name:  "with dot separator",
-			input: "github.com/org/project.Type",
-			expected: Parts{
-				PkgName:  "github.com/org/project",
-				TypeName: "Type",
-			},
-		},
-		{
-			name:  "bare type",
-			input: "User",
-			expected: Parts{
-				TypeName: "User",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := TypeParts(tt.input)
-			assert.Equal(t, tt.expected.PkgName, result.PkgName)
-			assert.Equal(t, tt.expected.TypeName, result.TypeName)
-		})
 	}
 }
 

@@ -35,23 +35,28 @@ import (
 // open-ended reimplementation of Go's type grammar. Building the tree from the
 // AST sidesteps all of it: *ast.FuncType, *ast.IndexListExpr, and
 // *ast.ArrayType.Len each answer the question directly and unambiguously.
+//
+// The yaml tags let the tree round-trip through the metadata model's
+// serialization via default struct marshaling — no custom marshaler and no
+// string parser. Kind distinguishes RefArray from RefSlice, so Len carries an
+// omitempty 0 unambiguously (a genuine [0]T is a RefArray with Len 0).
 type TypeRef struct {
-	Kind RefKind
+	Kind RefKind `yaml:"kind,omitempty"`
 	// Named: the package import path and type name. Basic: Name only (and Pkg
 	// for a qualified primitive such as time.Time, so String renders it whole).
-	Pkg  string
-	Name string
+	Pkg  string `yaml:"pkg,omitempty"`
+	Name string `yaml:"name,omitempty"`
 	// Slice/Array/Pointer: the element type. Map: the value type.
-	Elem *TypeRef
+	Elem *TypeRef `yaml:"elem,omitempty"`
 	// Map: the key type.
-	Key *TypeRef
+	Key *TypeRef `yaml:"key,omitempty"`
 	// Named: generic instantiation arguments, e.g. the User in APIResponse[User]
 	// or the K, V in Pair[K, V] — positional, one per declared type parameter.
-	Args []*TypeRef
+	Args []*TypeRef `yaml:"args,omitempty"`
 	// Array: the length. >= 0 is a known constant length; -1 means inferred or
 	// not statically resolved — [...]T, or a const-expression length built
 	// without type info — and renders as [...]. A genuine [0]T keeps Len 0.
-	Len int
+	Len int `yaml:"len,omitempty"`
 }
 
 // RefKind tags the shape of a TypeRef.
@@ -94,6 +99,21 @@ const (
 //
 //nolint:gocyclo // flat type switch over many AST node kinds — low real complexity
 func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
+	// Prefer the fully-resolved go/types type when available: it is the single
+	// source of truth (resolves aliases, instantiations, and package import
+	// paths) and guarantees TypeRefFromExpr and TypeRefFromType agree for the
+	// same type. Fall back to the AST when type info is absent, the type is
+	// unresolved (external fragments, undefined identifiers), OR go/types returns
+	// a shape TypeRefFromType intentionally does not represent (tuples and other
+	// default-arm kinds, for which it returns nil). This also lets the constructor
+	// handle value expressions, whose type comes from info.
+	if e != nil && info != nil {
+		if t := info.TypeOf(e); t != nil {
+			if ref := TypeRefFromType(t); ref != nil {
+				return ref
+			}
+		}
+	}
 	switch t := e.(type) {
 	case nil:
 		return nil
@@ -101,6 +121,8 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 		return TypeRefFromExpr(t.X, info)
 	case *ast.Ident:
 		switch {
+		case isPackageName(t, info):
+			return nil // a package identifier (the "http" in http.Header) is not a type
 		case IsPrimitiveType(t.Name):
 			return &TypeRef{Kind: RefBasic, Name: t.Name}
 		case isTypeParam(t, info):
@@ -109,15 +131,7 @@ func TypeRefFromExpr(e ast.Expr, info *types.Info) *TypeRef {
 			return &TypeRef{Kind: RefNamed, Name: t.Name}
 		}
 	case *ast.SelectorExpr:
-		pkg, name := selectorParts(t, info)
-		full := name
-		if pkg != "" {
-			full = pkg + "." + name
-		}
-		if IsPrimitiveType(full) {
-			return &TypeRef{Kind: RefBasic, Pkg: pkg, Name: name}
-		}
-		return &TypeRef{Kind: RefNamed, Pkg: pkg, Name: name}
+		return namedOrBasic(selectorParts(t, info))
 	case *ast.StarExpr:
 		return wrap(RefPointer, TypeRefFromExpr(t.X, info))
 	case *ast.ArrayType:
@@ -200,6 +214,17 @@ func isTypeParam(id *ast.Ident, info *types.Info) bool {
 	return ok
 }
 
+// isPackageName reports whether id refers to an imported package rather than a
+// type (the "http" in http.Header). Such an identifier has no type and must not
+// become a fabricated RefNamed. Requires type info.
+func isPackageName(id *ast.Ident, info *types.Info) bool {
+	if info == nil {
+		return false
+	}
+	_, ok := info.ObjectOf(id).(*types.PkgName)
+	return ok
+}
+
 // selectorParts resolves a qualified type "pkg.Name" to its import path and
 // name. With type info the package's full import path is used; without it the
 // source-level qualifier is the best available.
@@ -245,6 +270,116 @@ func fitsLen(n int64) bool {
 	return n >= 0 && int64(int(n)) == n
 }
 
+// basicTypeRef builds a RefBasic from a go/types basic. An UNTYPED basic (an
+// untyped constant's type) reports a Name() like "untyped int" — not a real
+// primitive — so it is resolved to its DEFAULT typed form ("int","string",
+// "bool","float64",…). Invalid types and untyped nil (no typed default) yield nil.
+func basicTypeRef(t types.Type, u *types.Basic) *TypeRef {
+	if u.Kind() == types.Invalid {
+		return nil // unresolved/erroneous type — no usable representation
+	}
+	if u.Info()&types.IsUntyped != 0 {
+		d, ok := types.Default(t).(*types.Basic)
+		if !ok || d.Kind() == types.Invalid || d.Info()&types.IsUntyped != 0 {
+			return nil
+		}
+		return &TypeRef{Kind: RefBasic, Name: d.Name()}
+	}
+	return &TypeRef{Kind: RefBasic, Name: u.Name()}
+}
+
+// TypeRefFromType builds a TypeRef from a go/types type — the resolved-type
+// counterpart to TypeRefFromExpr, for sites that have a types.Type but no
+// syntax (e.g. a value's inferred type). go/types has already resolved aliases,
+// constants, and instantiations, so array lengths and generic arguments are
+// always concrete here. A nil type, or a child that does not resolve, yields nil.
+func TypeRefFromType(t types.Type) *TypeRef {
+	switch u := t.(type) {
+	case nil:
+		return nil
+	case *types.Basic:
+		return basicTypeRef(t, u)
+	case *types.Named:
+		return namedTypeRef(u)
+	case *types.Alias:
+		return TypeRefFromType(types.Unalias(u))
+	case *types.Pointer:
+		return wrap(RefPointer, TypeRefFromType(u.Elem()))
+	case *types.Slice:
+		return wrap(RefSlice, TypeRefFromType(u.Elem()))
+	case *types.Array:
+		elem := TypeRefFromType(u.Elem())
+		if elem == nil {
+			return nil
+		}
+		// fitsLen guards the int64->int conversion (matches the AST path); an
+		// out-of-range length degrades to the inferred sentinel, not a wrap.
+		ln := -1
+		if fitsLen(u.Len()) {
+			ln = int(u.Len())
+		}
+		return &TypeRef{Kind: RefArray, Len: ln, Elem: elem}
+	case *types.Map:
+		key, val := TypeRefFromType(u.Key()), TypeRefFromType(u.Elem())
+		if key == nil || val == nil {
+			return nil
+		}
+		return &TypeRef{Kind: RefMap, Key: key, Elem: val}
+	case *types.Interface:
+		return &TypeRef{Kind: RefInterface}
+	case *types.Signature:
+		return &TypeRef{Kind: RefFunc}
+	case *types.Struct:
+		return &TypeRef{Kind: RefStruct}
+	case *types.Chan:
+		return &TypeRef{Kind: RefChan}
+	case *types.TypeParam:
+		return &TypeRef{Kind: RefParam, Name: u.Obj().Name()}
+	default:
+		return nil
+	}
+}
+
+// namedOrBasic classifies a resolved (pkg, name) pair as a primitive (RefBasic,
+// e.g. time.Time) or a package type (RefNamed). Shared by the AST and go/types
+// constructors so both classify the same type identically.
+func namedOrBasic(pkg, name string) *TypeRef {
+	full := name
+	if pkg != "" {
+		full = pkg + "." + name
+	}
+	if IsPrimitiveType(full) {
+		return &TypeRef{Kind: RefBasic, Pkg: pkg, Name: name}
+	}
+	return &TypeRef{Kind: RefNamed, Pkg: pkg, Name: name}
+}
+
+// namedTypeRef builds the TypeRef for a *types.Named, resolving package identity,
+// the primitive special-cases (via namedOrBasic), and generic instantiation
+// arguments. An unresolvable type argument bails the whole node to nil, matching
+// the AST twin namedWithArgs.
+func namedTypeRef(n *types.Named) *TypeRef {
+	obj := n.Obj()
+	pkg := ""
+	if obj.Pkg() != nil {
+		pkg = obj.Pkg().Path()
+	}
+	ref := namedOrBasic(pkg, obj.Name())
+	if ref.Kind != RefNamed {
+		return ref // a primitive (error, time.Time, …) carries no type arguments
+	}
+	if args := n.TypeArgs(); args != nil {
+		for i := 0; i < args.Len(); i++ {
+			a := TypeRefFromType(args.At(i))
+			if a == nil {
+				return nil
+			}
+			ref.Args = append(ref.Args, a)
+		}
+	}
+	return ref
+}
+
 // Qualify attaches pkg to every unqualified named node in the tree, turning a
 // bare field type like []Money into []pkg.Money. Already-qualified nodes,
 // primitives, and opaque kinds are left untouched.
@@ -266,6 +401,209 @@ func (t *TypeRef) Qualify(pkg string) {
 		t.Key.Qualify(pkg)
 		t.Elem.Qualify(pkg)
 	}
+}
+
+// SubstituteParams returns a copy of the tree with every RefParam node replaced by
+// its binding (keyed by parameter name); unbound params and all other nodes are
+// preserved. Used to instantiate a generic struct's field types with the concrete
+// type arguments — e.g. a field []K under bindings{K: User} becomes []User,
+// including params nested inside Elem/Key/Args (decision D3). A no-op when there
+// are no bindings.
+func (t *TypeRef) SubstituteParams(bindings map[string]*TypeRef) *TypeRef {
+	if t == nil || len(bindings) == 0 {
+		return t
+	}
+	if t.Kind == RefParam {
+		if b, ok := bindings[t.Name]; ok {
+			// INVARIANT: the binding pointer is returned as-is, so every occurrence
+			// of the same type parameter shares one *TypeRef node. Callers must treat
+			// a substituted tree as READ-ONLY (the schema pipeline only reads
+			// .String()) — mutating a node in place (e.g. Qualify) would corrupt every
+			// sibling that bound the same argument. Clone first if you need to mutate.
+			return b
+		}
+		return t
+	}
+	c := *t
+	c.Elem = t.Elem.SubstituteParams(bindings)
+	c.Key = t.Key.SubstituteParams(bindings)
+	if t.Args != nil {
+		c.Args = make([]*TypeRef, len(t.Args))
+		for i, a := range t.Args {
+			c.Args[i] = a.SubstituteParams(bindings)
+		}
+	}
+	return &c
+}
+
+// NamedLeaf unwraps pointer, slice, array, and map wrappers and returns the first
+// non-container node — the named/basic leaf a container ultimately holds (the map
+// value for a map). Returns the receiver for a leaf, nil for nil.
+func (t *TypeRef) NamedLeaf() *TypeRef {
+	for t != nil && (t.Kind == RefPointer || t.Kind == RefSlice || t.Kind == RefArray || t.Kind == RefMap) {
+		t = t.Elem
+	}
+	return t
+}
+
+// ParseTypeRef parses a Go-type string into a TypeRef — the inverse of String().
+// It accepts the canonical String() form and the equivalent variants the schema
+// pipeline produces: the "-->" package separator, short or bare package
+// qualifiers, and primitive scalars. Package-qualified names keep whatever
+// qualifier the string carried (typeByRef's name-only fallback resolves short
+// forms); the round-trip String(ParseTypeRef(s)) == s holds for canonical input.
+//
+// This lets every remaining string-only producer (origin-traced body/param
+// types, alias targets, config and wrapper-override type strings) reach the
+// TypeRef tree, so the string-based schema generator could be retired and every
+// schema now derives from the tree.
+//
+//nolint:gocyclo // one case per type-syntax form; a flat dispatch is clearest here
+func ParseTypeRef(s string) *TypeRef {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "-->", "."))
+	if s == "" {
+		return nil
+	}
+	switch {
+	case strings.HasPrefix(s, "*"):
+		return wrapElem(RefPointer, s[1:])
+	case strings.HasPrefix(s, "[]"):
+		return wrapElem(RefSlice, s[2:])
+	case strings.HasPrefix(s, "[...]"):
+		if e := ParseTypeRef(s[5:]); e != nil {
+			return &TypeRef{Kind: RefArray, Len: -1, Elem: e}
+		}
+		return nil
+	case strings.HasPrefix(s, "[") && !strings.HasPrefix(s, "[]"):
+		// [N]T fixed array — the bracket holds a non-negative decimal length.
+		// Reject n < 0: a negative length is not valid Go, and Len < 0 is already
+		// the reserved sentinel for the inferred-length form ("[...]T", Len -1), so
+		// accepting "[-5]int" would silently masquerade as an inferred-length array.
+		if end := strings.IndexByte(s, ']'); end > 1 {
+			if n, err := strconv.Atoi(strings.TrimSpace(s[1:end])); err == nil && n >= 0 {
+				if e := ParseTypeRef(s[end+1:]); e != nil {
+					return &TypeRef{Kind: RefArray, Len: n, Elem: e}
+				}
+			}
+		}
+		return nil
+	case strings.HasPrefix(s, "map["):
+		return parseMapRef(s)
+	case s == "interface{}" || s == "any":
+		return &TypeRef{Kind: RefInterface}
+	case s == "struct{}":
+		return &TypeRef{Kind: RefStruct}
+	case s == "func" || strings.HasPrefix(s, "func(") || strings.HasPrefix(s, "func ") || strings.HasPrefix(s, "func["):
+		// "func[" is a GENERIC function type ("func[T any](T) T"); the analysis
+		// elsewhere already treats the "func[" prefix as a function (tracker.go,
+		// context_provider.go). Recognize it here too so an opaque generic func is
+		// classified RefFunc, not misparsed as a nameable RefNamed (which would let
+		// canAddRefSchemaForType emit a dangling $ref).
+		return &TypeRef{Kind: RefFunc}
+	case s == "chan" || strings.HasPrefix(s, "chan ") || strings.HasPrefix(s, "chan<-") || strings.HasPrefix(s, "<-chan"):
+		return &TypeRef{Kind: RefChan}
+	case IsPrimitiveType(s):
+		return &TypeRef{Kind: RefBasic, Name: s}
+	default:
+		return parseNamedRef(s)
+	}
+}
+
+// wrapElem parses elemStr and wraps it in a single-element container kind
+// (pointer or slice). Returns nil when the element does not parse.
+func wrapElem(kind RefKind, elemStr string) *TypeRef {
+	e := ParseTypeRef(elemStr)
+	if e == nil {
+		return nil
+	}
+	return &TypeRef{Kind: kind, Elem: e}
+}
+
+// parseMapRef parses "map[K]V", scanning balanced brackets to find the key's
+// closing "]" (so map[map[a]b]c keys parse correctly).
+func parseMapRef(s string) *TypeRef {
+	rest := s[len("map["):]
+	depth, end := 0, -1
+	for i := 0; i < len(rest); i++ {
+		switch rest[i] {
+		case '[':
+			depth++
+		case ']':
+			if depth == 0 {
+				end = i
+			} else {
+				depth--
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		return nil
+	}
+	key := ParseTypeRef(rest[:end])
+	val := ParseTypeRef(rest[end+1:])
+	if key == nil || val == nil {
+		return nil
+	}
+	return &TypeRef{Kind: RefMap, Key: key, Elem: val}
+}
+
+// parseNamedRef parses a (possibly generic, possibly package-qualified) named
+// type: "pkg/path.Name", "pkg.Name[Arg1,Arg2]", or a bare "Name".
+func parseNamedRef(s string) *TypeRef {
+	var args []*TypeRef
+	// A mid-string '[' opens a generic argument list (leading '[' was an array,
+	// handled earlier). Everything up to it is the base name.
+	if open := strings.IndexByte(s, '['); open > 0 && strings.HasSuffix(s, "]") {
+		for _, a := range splitTopLevelCommas(s[open+1 : len(s)-1]) {
+			ref := ParseTypeRef(a)
+			if ref == nil {
+				return nil
+			}
+			args = append(args, ref)
+		}
+		s = s[:open]
+	}
+	// After stripping a balanced generic arg list, a well-formed base name carries
+	// no brackets. A residual '[' or ']' means the input was malformed — an
+	// unbalanced/stray bracket (e.g. "Foo[Bar", "Box[int", "Foo]") — so reject it
+	// (return nil) rather than manufacturing a bogus named type whose Name embeds a
+	// bracket and would dangle a $ref through schema resolution.
+	if strings.ContainsAny(s, "[]") {
+		return nil
+	}
+	ref := &TypeRef{Kind: RefNamed, Name: s, Args: args}
+	// Split a package qualifier off the LAST dot (import paths contain dots, but
+	// the type name never does); a dotless string is an unqualified name.
+	if dot := strings.LastIndexByte(s, '.'); dot > 0 {
+		ref.Pkg = s[:dot]
+		ref.Name = s[dot+1:]
+	}
+	return ref
+}
+
+// splitTopLevelCommas splits generic arguments on commas that are not nested
+// inside a bracketed sub-argument (so Map[K,V] inside Outer[Map[K,V],T] stays
+// whole).
+func splitTopLevelCommas(s string) []string {
+	var parts []string
+	depth, start := 0, 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '[', '(', '{':
+			depth++
+		case ']', ')', '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, strings.TrimSpace(s[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	return append(parts, strings.TrimSpace(s[start:]))
 }
 
 // String renders the TypeRef as the project's canonical metadata identifier:

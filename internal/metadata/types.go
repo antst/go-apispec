@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -382,18 +383,35 @@ type File struct {
 
 // Type represents a Go type
 type Type struct {
-	Name          int      `yaml:"name,omitempty"`
-	Pkg           int      `yaml:"pkg,omitempty"`
-	Kind          int      `yaml:"kind,omitempty"`
-	Target        int      `yaml:"target,omitempty"`
-	Implements    []int    `yaml:"implements,omitempty"`
-	ImplementedBy []int    `yaml:"implemented_by,omitempty"`
-	Embeds        []int    `yaml:"embeds,omitempty"`
-	Fields        []Field  `yaml:"fields,omitempty"`
-	Scope         int      `yaml:"scope,omitempty"`
-	Methods       []Method `yaml:"methods,omitempty"`
-	Comments      int      `yaml:"comments,omitempty"`
-	Tags          []int    `yaml:"tags,omitempty"`
+	Name          int   `yaml:"name,omitempty"`
+	Pkg           int   `yaml:"pkg,omitempty"`
+	Kind          int   `yaml:"kind,omitempty"`
+	Target        int   `yaml:"target,omitempty"`
+	Implements    []int `yaml:"implements,omitempty"`
+	ImplementedBy []int `yaml:"implemented_by,omitempty"`
+	Embeds        []int `yaml:"embeds,omitempty"`
+	// EmbedRefs is the structured type for each embedded field, index-aligned
+	// with Embeds (Phase 2); a nil entry means the embed had no usable type.
+	EmbedRefs []*TypeRef `yaml:"embed_refs,omitempty"`
+	Fields    []Field    `yaml:"fields,omitempty"`
+	Scope     int        `yaml:"scope,omitempty"`
+	Methods   []Method   `yaml:"methods,omitempty"`
+	Comments  int        `yaml:"comments,omitempty"`
+	Tags      []int      `yaml:"tags,omitempty"`
+
+	// TypeParams holds declared type-parameter names for a generic type
+	// declaration (e.g. ["K","V"]); empty for non-generic types. Used to bind
+	// an instantiation's TypeRef.Args to parameter names during substitution.
+	TypeParams []string `yaml:"type_params,omitempty"`
+
+	// UnderlyingRef carries the underlying type of a defined type whose
+	// underlying is NOT a struct/alias(ident)/interface — i.e. a Kind "other"
+	// defined map/slice/array/func/chan (e.g. `type Tags map[string]string`).
+	// processTypeKind would otherwise collapse such a type to "other" with no
+	// shape captured, and a field of that type would emit a dangling $ref; the
+	// schema pipeline resolves this ref to recover precise output (map -> object,
+	// slice -> array, …). Nil for struct/alias/interface kinds.
+	UnderlyingRef *TypeRef `yaml:"underlying_ref,omitempty"`
 }
 
 // Field represents a struct field
@@ -406,6 +424,10 @@ type Field struct {
 
 	// For nested struct types, store the nested type definition
 	NestedType *Type `yaml:"nested_type,omitempty"`
+
+	// TypeRef is the structured type for this field (Phase 2), built from the
+	// field's ast.Expr at analysis time.
+	TypeRef *TypeRef `yaml:"type_ref,omitempty"`
 }
 
 // Method represents a method
@@ -468,6 +490,10 @@ type Variable struct {
 	Position      int         `yaml:"position,omitempty"`
 	Comments      int         `yaml:"comments,omitempty"`
 	GroupIndex    int         `yaml:"group_index,omitempty"` // which const group this belongs to
+
+	// TypeRef is the structured declared type (Phase 2), built from the
+	// declaration's ast.Expr. Nil for an untyped declaration (e.g. `const x = 1`).
+	TypeRef *TypeRef `yaml:"type_ref,omitempty"`
 }
 
 // Selector represents a selector expression
@@ -542,6 +568,9 @@ type CallArgument struct {
 	ResolvedType    int  `yaml:"resolved_type,omitempty"`     // The concrete type after type parameter resolution
 	IsGenericType   bool `yaml:"is_generic_type,omitempty"`   // Whether this argument represents a generic type
 	GenericTypeName int  `yaml:"generic_type_name,omitempty"` // The generic type parameter name (e.g., "TRequest", "TData")
+
+	// TypeRef is the structured type for this argument/return (Phase 2).
+	TypeRef *TypeRef `yaml:"type_ref,omitempty"`
 
 	ReceiverType *CallArgument `yaml:"receiver_type,omitempty"` // The type of the receiver
 
@@ -1361,11 +1390,32 @@ func (m *Metadata) resolveSelectorReturnType(returnVar *CallArgument, pkgName st
 	baseType := m.determineResolvedTypeFromReturnVar(returnVar.X, pkgName, "")
 	fieldName := returnVar.Sel.GetName()
 
-	// Try to find the field type in metadata
-	for pkgName, pkg := range m.Packages {
+	// Try to find the field type in metadata. Iterate packages in sorted order so
+	// resolution is deterministic (a same-named type elsewhere can't win by
+	// map-iteration chance; the scoping below confines the candidates to the right
+	// package anyway).
+	lookupPkgName := pkgName // the caller's package, before the loop var shadows it
+	for _, candidatePkgName := range slices.Sorted(maps.Keys(m.Packages)) {
+		pkg := m.Packages[candidatePkgName]
 		for _, file := range pkg.Files {
-			// Try both with and without package prefix
-			typeNames := []string{baseType, pkgName + "." + baseType}
+			// baseType may be a qualified type string (getTypeName import-path-
+			// qualifies a cross-package selector) or a bare name; file.Types is keyed
+			// by the BARE name. The bare baseType / pkg-prefixed candidates only make
+			// sense in the CALLER's package (a bare receiver `var u User` names THIS
+			// package's User, not the first sorted package with a User); the
+			// unqualified leaf is added only while scanning the leaf's OWN package, so
+			// a same-named type elsewhere is never borrowed. (Twin of the
+			// spec.resolveSelectorType fix; same package, ParseTypeRef is local.)
+			var typeNames []string
+			if candidatePkgName == lookupPkgName {
+				typeNames = append(typeNames, baseType, candidatePkgName+"."+baseType)
+			}
+			if r := ParseTypeRef(baseType); r != nil {
+				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType &&
+					pkgMatchesLeaf(candidatePkgName, leaf.Pkg) {
+					typeNames = append(typeNames, leaf.Name)
+				}
+			}
 			for _, typeName := range typeNames {
 				if typ, exists := file.Types[typeName]; exists {
 					// Find the field
@@ -1381,6 +1431,28 @@ func (m *Metadata) resolveSelectorReturnType(returnVar *CallArgument, pkgName st
 
 	// Fallback to concatenated form
 	return baseType + "." + fieldName
+}
+
+// lastPathSegment returns the final "/"-separated segment of an import path
+// (the conventional source-level package qualifier): "github.com/x/app/models"
+// -> "models"; a segment-less string is returned unchanged.
+func lastPathSegment(p string) string {
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+// pkgMatchesLeaf reports whether the analyzed package pkgName (always a full
+// import path) is the package a selector leaf's qualifier names. When leafPkg is a
+// FULL import path (getTypeName qualified the leaf), match it EXACTLY — last-
+// segment matching would wrongly accept any other ".../<segment>" package. Only a
+// bare short qualifier (no "/") falls back to last-segment matching.
+func pkgMatchesLeaf(pkgName, leafPkg string) bool {
+	if strings.Contains(leafPkg, "/") {
+		return pkgName == leafPkg
+	}
+	return lastPathSegment(pkgName) == leafPkg
 }
 
 // resolveCallReturnType resolves the type of a function call return value

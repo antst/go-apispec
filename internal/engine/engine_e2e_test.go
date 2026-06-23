@@ -91,6 +91,24 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "echo_subresources", inputDir: "../../testdata/echo_subresources", configFn: spec.DefaultEchoConfig},
 		{name: "maps_variety", inputDir: "../../testdata/maps_variety", configFn: spec.DefaultHTTPConfig},
 		{name: "arrays_variety", inputDir: "../../testdata/arrays_variety", configFn: spec.DefaultHTTPConfig},
+		{name: "fixed_arrays", inputDir: "../../testdata/fixed_arrays", configFn: spec.DefaultHTTPConfig},
+		// Field visibility + json-tag options: unexported fields and `json:"-"` are
+		// dropped (encoding/json never marshals them), `json:"-,"` keeps a literal
+		// "-" name, and the `,string` option forces {type:string} on a scalar.
+		{name: "unexported_skip", inputDir: "../../testdata/unexported_skip", configFn: spec.DefaultHTTPConfig},
+		// json.RawMessage round-trips raw JSON -> empty schema {} (not base64),
+		// composing through pointer and slice; a plain []byte stays base64.
+		{name: "raw_message", inputDir: "../../testdata/raw_message", configFn: spec.DefaultHTTPConfig},
+		// Generic defined-"other" types (type Box[T any] map[string]T): a field of
+		// Box[int] substitutes T -> int (map[string]int), in direct/pointer/slice
+		// positions, instead of dangling a $ref to the bare parameter.
+		{name: "generic_container", inputDir: "../../testdata/generic_container", configFn: spec.DefaultHTTPConfig},
+		// Defined non-struct/alias/interface types (Kind "other": a defined map,
+		// slice, nested-slice, func). A field of such a type must resolve from its
+		// captured underlying shape, not emit a dangling $ref; a func underlying is
+		// opaque and the field is omitted.
+		{name: "named_underlying", inputDir: "../../testdata/named_underlying", configFn: spec.DefaultHTTPConfig},
+		{name: "inline_structs", inputDir: "../../testdata/inline_structs", configFn: spec.DefaultHTTPConfig},
 		{name: "pointers_variety", inputDir: "../../testdata/pointers_variety", configFn: spec.DefaultHTTPConfig},
 		{name: "optional_fields", inputDir: "../../testdata/optional_fields", configFn: spec.DefaultHTTPConfig},
 		// Regression for #52: a multipart handler must not get a request body
@@ -113,8 +131,13 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "nested_arrays", inputDir: "../../testdata/nested_arrays", configFn: spec.DefaultHTTPConfig},
 		// Embedded structs: anonymous fields (value/pointer/transitive) promote flat.
 		{name: "embedded_structs", inputDir: "../../testdata/embedded_structs", configFn: spec.DefaultHTTPConfig},
+		// json-tagged anonymous embeds: an untagged embed promotes flat, a
+		// `json:"meta"`-named embed nests under "meta" (not flattened), and a
+		// `json:"-"` embed is dropped entirely (no property, no component).
+		{name: "embedded_tagged", inputDir: "../../testdata/embedded_tagged", configFn: spec.DefaultHTTPConfig},
 		// Generic envelope wrapper: APIResponse[T] must bind T per call site.
 		{name: "generic_response_wrapper", inputDir: "../../testdata/generic_response_wrapper", configFn: spec.DefaultHTTPConfig},
+		{name: "generic_envelopes", inputDir: "../../testdata/generic_envelopes", configFn: spec.DefaultHTTPConfig},
 		// gorilla/mux .Queries(...) query params attach to their own route only.
 		{name: "mux_queries", inputDir: "../../testdata/mux_queries", configFn: spec.DefaultMuxConfig},
 		// Conditional-status fan-out reachability (#50): only statuses whose

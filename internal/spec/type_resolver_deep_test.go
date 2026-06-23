@@ -688,6 +688,122 @@ func TestResolveSelectorType_WithFieldLookup(t *testing.T) {
 	assert.Equal(t, "string", result)
 }
 
+// TestResolveSelectorType_QualifiedReceiverResolvesField locks the fix for the
+// TypeRef-qualification regression (Copilot, PR #61). The receiver ident now
+// resolves through variable.TypeRef.String(), which is FULLY QUALIFIED
+// ("github.com/x/app/models.User"), while file.Types is keyed by the BARE type
+// name ("User"). Without normalizing the lookup key to the unqualified leaf, the
+// field lookup misses and resolveSelectorType returns the bogus
+// "...models.User.Name" concatenation instead of the field's type.
+func TestResolveSelectorType_QualifiedReceiverResolvesField(t *testing.T) {
+	meta, sp := newTypeResolverTestMeta()
+	meta.Packages = map[string]*metadata.Package{
+		"github.com/x/app/models": {
+			Files: map[string]*metadata.File{
+				"user.go": {
+					Types: map[string]*metadata.Type{
+						"User": { // keyed by the bare name, as the metadata builder does
+							Name: sp.Get("User"),
+							Kind: sp.Get("struct"),
+							Fields: []metadata.Field{
+								{Name: sp.Get("Name"), Type: sp.Get("string")},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	resolver := newTestResolver(meta)
+
+	sel := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) {
+		a.SetName("Name")
+	})
+	x := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) {
+		a.SetName("u")
+		a.SetType("github.com/x/app/models.User") // qualified, as TypeRef.String() yields
+	})
+	arg := makeArg(meta, metadata.KindSelector, func(a *metadata.CallArgument) {
+		a.Sel = &sel
+		a.X = &x
+	})
+
+	// Must resolve to the field's type, NOT the bogus "...models.User.Name".
+	assert.Equal(t, "string", resolver.resolveSelectorType(arg))
+}
+
+// TestResolveSelectorType_QualifiedReceiverScopedToPackage locks the scoping
+// refinement (CodeRabbit, PR #61): the bare leaf candidate ("User") is added only
+// while scanning the leaf's OWN package, so a same-named "User" in an unrelated
+// package can't be borrowed first (which would resolve the wrong field type). The
+// WRONG package sorts FIRST (registry < models) so that, with deterministic sorted
+// iteration, reverting the scoping deterministically returns the wrong type — a
+// solid revert guard, not a map-order-flaky one.
+func TestResolveSelectorType_QualifiedReceiverScopedToPackage(t *testing.T) {
+	meta, sp := newTypeResolverTestMeta()
+	meta.Packages = map[string]*metadata.Package{
+		"github.com/a/registry": {Files: map[string]*metadata.File{"user.go": {Types: map[string]*metadata.Type{
+			"User": {Name: sp.Get("User"), Kind: sp.Get("struct"), Fields: []metadata.Field{
+				{Name: sp.Get("Name"), Type: sp.Get("int")}, // WRONG type — sorts first
+			}},
+		}}}},
+		"github.com/z/models": {Files: map[string]*metadata.File{"user.go": {Types: map[string]*metadata.Type{
+			"User": {Name: sp.Get("User"), Kind: sp.Get("struct"), Fields: []metadata.Field{
+				{Name: sp.Get("Name"), Type: sp.Get("string")}, // CORRECT — the receiver's package
+			}},
+		}}}},
+	}
+	resolver := newTestResolver(meta)
+
+	sel := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) { a.SetName("Name") })
+	x := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) {
+		a.SetName("u")
+		a.SetType("github.com/z/models.User") // receiver is the models.User
+	})
+	arg := makeArg(meta, metadata.KindSelector, func(a *metadata.CallArgument) {
+		a.Sel = &sel
+		a.X = &x
+	})
+
+	// Must resolve z/models.User.Name ("string"), never a/registry.User.Name ("int").
+	assert.Equal(t, "string", resolver.resolveSelectorType(arg))
+}
+
+// TestResolveSelectorType_FullPathExactMatch locks the full-path exact-match
+// refinement (Copilot): when the leaf qualifier is a FULL import path, the lookup
+// must match that exact package, NOT merely the last segment — so two different
+// ".../models" packages don't collide. The WRONG models package sorts first.
+func TestResolveSelectorType_FullPathExactMatch(t *testing.T) {
+	meta, sp := newTypeResolverTestMeta()
+	meta.Packages = map[string]*metadata.Package{
+		"github.com/a/models": {Files: map[string]*metadata.File{"u.go": {Types: map[string]*metadata.Type{
+			"User": {Name: sp.Get("User"), Kind: sp.Get("struct"), Fields: []metadata.Field{
+				{Name: sp.Get("Name"), Type: sp.Get("int")}, // same SEGMENT "models", WRONG package, sorts first
+			}},
+		}}}},
+		"github.com/z/models": {Files: map[string]*metadata.File{"u.go": {Types: map[string]*metadata.Type{
+			"User": {Name: sp.Get("User"), Kind: sp.Get("struct"), Fields: []metadata.Field{
+				{Name: sp.Get("Name"), Type: sp.Get("string")}, // the receiver's exact package
+			}},
+		}}}},
+	}
+	resolver := newTestResolver(meta)
+
+	sel := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) { a.SetName("Name") })
+	x := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) {
+		a.SetName("u")
+		a.SetType("github.com/z/models.User") // full import path
+	})
+	arg := makeArg(meta, metadata.KindSelector, func(a *metadata.CallArgument) {
+		a.Sel = &sel
+		a.X = &x
+	})
+
+	// Exact full-path match → z/models.User.Name ("string"), never the same-segment
+	// a/models.User.Name ("int") that last-segment matching would have borrowed.
+	assert.Equal(t, "string", resolver.resolveSelectorType(arg))
+}
+
 func TestResolveSelectorType_WithPkgPrefix(t *testing.T) {
 	meta, sp := newTypeResolverTestMeta()
 

@@ -545,6 +545,14 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		// Check if this is a literal value - if so, determine appropriate type
 		if arg.GetKind() == metadata.KindLiteral {
 			bodyType = determineLiteralType(bodyType)
+		} else if s := bodyTypeFromMetadataRef(arg.TypeRef, route.Metadata, r.cfg); s != "" {
+			// The decode target (&dto) carries a TypeRef whose named leaf is a type
+			// in metadata — its declared type IS the body type, no origin tracing
+			// needed. Use the canonical fully-qualified form (deref'd to match the
+			// field path) so the request body references the same component as a
+			// field of that type. Generic/helper decode targets (leaf RefParam) get
+			// "" here and fall through to the resolution chain below (T009/T011).
+			bodyType = strings.TrimPrefix(s, "*")
 		} else {
 			// Check for resolved type information in the CallArgument
 			if resolvedType := arg.GetResolvedType(); resolvedType != "" {
@@ -574,7 +582,7 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		// target + field-inference frame onto the handler.
 		bodyType, fieldFrameBaseID = r.refineBodyTypeThroughHelper(node, reqInfo, bodyType, fieldFrameBaseID, route)
 
-		schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
+		schema, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, r.cfg, nil)
 		reqInfo.Schema = schema
 	}
 
@@ -1039,14 +1047,12 @@ func (b *BasePatternMatcher) findAssignmentFunction(arg *metadata.CallArgument) 
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
 func (r *RequestPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
-	// Request-specific: trace generic origin via TypeParts before shared logic
+	// Request-specific: trace generic origin through the type-param tree before shared logic
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
 		return resolvedType
 	}
 
-	typeParts := TypeParts(originalType)
-	genericType := traceGenericOrigin(node, typeParts)
-	if genericType != "" {
+	if genericType := traceGenericOrigin(node, originalType); genericType != "" {
 		return genericType
 	}
 
@@ -1054,11 +1060,15 @@ func (r *RequestPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument
 	return sharedResolveTypeOrigin(arg, node, originalType, r.contextProvider, true)
 }
 
-func traceGenericOrigin(node TrackerNodeInterface, typeParts Parts) string {
+func traceGenericOrigin(node TrackerNodeInterface, originalType string) string {
 	typeParams := node.GetTypeParamMap()
 
-	if len(typeParams) > 0 && typeParts.TypeName != "" {
-		searchType := typeParts.TypeName
+	// The bare type name (a type parameter like T resolves through the call site's
+	// type-param map), obtained from the tree. Unwrap any
+	// pointer/slice/array so a "*pkg.T" still keys on "T".
+	leaf := metadata.ParseTypeRef(originalType).NamedLeaf()
+	if len(typeParams) > 0 && leaf != nil && leaf.Name != "" {
+		searchType := leaf.Name
 		foundMapping := false
 
 		for {

@@ -1,0 +1,88 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/doc": {
+      "get": {
+        "operationId": "embedded_tagged.getDoc",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/embedded_tagged.Document"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "embedded_tagged.Document": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/embedded_tagged.Meta"
+          },
+          "secrets": {
+            "$ref": "#/components/schemas/embedded_tagged.secretBag"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "meta",
+          "secrets",
+          "title",
+          "id",
+          "createdAt"
+        ]
+      },
+      "embedded_tagged.Meta": {
+        "type": "object",
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "author"
+        ]
+      },
+      "embedded_tagged.secretBag": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ]
+      }
+    }
+  }
+}

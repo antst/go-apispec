@@ -944,7 +944,7 @@ func testMapGoTypeToOpenAPISchemaPrimitiveTypes(t *testing.T) {
 
 	for _, tt := range primitiveTests {
 		t.Run(tt.goType, func(t *testing.T) {
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if schema.Type != tt.expectedType {
 				t.Errorf("Expected type %s for %s, got %s", tt.expectedType, tt.goType, schema.Type)
 			}
@@ -968,7 +968,7 @@ func testMapGoTypeToOpenAPISchemaPointerTypes(t *testing.T) {
 
 	for _, tt := range pointerTests {
 		t.Run(tt.goType, func(t *testing.T) {
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if schema.Type != tt.expectedType {
 				t.Errorf("Expected type %s for %s, got %s", tt.expectedType, tt.goType, schema.Type)
 			}
@@ -993,7 +993,7 @@ func testMapGoTypeToOpenAPISchemaSliceTypes(t *testing.T) {
 
 	for _, tt := range sliceTests {
 		t.Run(tt.goType, func(t *testing.T) {
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if schema.Type != tt.expectedType {
 				t.Errorf("Expected type %s for %s, got %s", tt.expectedType, tt.goType, schema.Type)
 			}
@@ -1020,18 +1020,18 @@ func testMapGoTypeToOpenAPISchemaArrayTypes(t *testing.T) {
 		description       string
 	}{
 		{
-			goType:            "[16]byte",
-			expectedType:      "string",
-			expectedFormat:    "byte",
-			expectedMaxLength: func() *int { size := 16; return &size }(),
-			description:       "Fixed-size byte array should be converted to string with maxLength",
+			goType:           "[16]byte",
+			expectedType:     "array",
+			expectedMaxItems: func() *int { size := 16; return &size }(),
+			expectedMinItems: func() *int { size := 16; return &size }(),
+			description:      "Fixed byte ARRAY -> array of 16 integers (only a []byte SLICE is base64)",
 		},
 		{
-			goType:            "[32]byte",
-			expectedType:      "string",
-			expectedFormat:    "byte",
-			expectedMaxLength: func() *int { size := 32; return &size }(),
-			description:       "32-byte array should be converted to string with maxLength 32",
+			goType:           "[32]byte",
+			expectedType:     "array",
+			expectedMaxItems: func() *int { size := 32; return &size }(),
+			expectedMinItems: func() *int { size := 32; return &size }(),
+			description:      "32-byte array -> array of 32 integers",
 		},
 		{
 			goType:           "[5]int",
@@ -1056,7 +1056,7 @@ func testMapGoTypeToOpenAPISchemaArrayTypes(t *testing.T) {
 
 	for _, tt := range arrayTests {
 		t.Run(tt.goType, func(t *testing.T) {
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, make(map[string]bool))
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, make(map[string]bool))
 
 			if schema == nil {
 				t.Fatalf("Expected schema for %s, got nil", tt.goType)
@@ -1109,7 +1109,7 @@ func testMapGoTypeToOpenAPISchemaMapTypes(t *testing.T) {
 
 	for _, tt := range mapTests {
 		t.Run(tt.goType, func(t *testing.T) {
-			schema, _ := mapGoTypeToOpenAPISchema(usedTypes, tt.goType, nil, cfg, nil)
+			schema, _ := schemaForType(usedTypes, tt.goType, nil, nil, cfg, nil)
 			if schema.Type != tt.expectedType {
 				t.Errorf("Expected type %s for %s, got %s", tt.expectedType, tt.goType, schema.Type)
 			}
@@ -1150,7 +1150,7 @@ func testMapGoTypeToOpenAPISchemaCustomTypes(t *testing.T) {
 		},
 	}
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "User", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "User", nil, meta, cfg, nil)
 	// Should be a reference
 	if schema.Ref == "" {
 		t.Errorf("Expected reference for custom type, got empty Ref")
@@ -1181,7 +1181,7 @@ func testMapGoTypeToOpenAPISchemaExternalTypes(t *testing.T) {
 	}
 	usedTypes := make(map[string]*Schema)
 
-	_, schemas := mapGoTypeToOpenAPISchema(usedTypes, "CustomType", nil, cfg, nil)
+	_, schemas := schemaForType(usedTypes, "CustomType", nil, nil, cfg, nil)
 	// External types are added to schemas map, not returned directly
 	if externalSchema, exists := schemas["CustomType"]; exists {
 		if externalSchema.Type != "string" {
@@ -1209,7 +1209,7 @@ func testMapGoTypeToOpenAPISchemaTypeMappings(t *testing.T) {
 	}
 	usedTypes := make(map[string]*Schema)
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "CustomType", nil, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "CustomType", nil, nil, cfg, nil)
 	if schema.Type != "integer" {
 		t.Errorf("Expected type 'integer' for mapped type, got %s", schema.Type)
 	}
@@ -1223,7 +1223,7 @@ func testMapGoTypeToOpenAPISchemaNilMetadata(t *testing.T) {
 	usedTypes := make(map[string]*Schema)
 
 	// Test with nil metadata
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "CustomType", nil, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "CustomType", nil, nil, cfg, nil)
 	if schema == nil {
 		t.Error("Expected non-nil schema")
 		return
@@ -1754,69 +1754,6 @@ func testIsPrimitiveTypeCustomTypes(t *testing.T) {
 }
 
 // TestExtractJSONName_Comprehensive tests JSON name extraction
-func TestExtractJSONName_Comprehensive(t *testing.T) {
-	tests := []struct {
-		tag      string
-		expected string
-	}{
-		{"", ""},
-		{`json:"name"`, "name"},
-		{`json:"user_name"`, "user_name"},
-		{`json:"name,omitempty"`, "name"},
-		{`json:"-"`, ""},
-		{`json:"name,omitempty,string"`, "name"},
-		{`other:"value"`, ""},
-		{`json:"name" other:"value"`, "name"},
-		{`other:"value" json:"name"`, "name"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.tag, func(t *testing.T) {
-			result := extractJSONName(tt.tag)
-			if result != tt.expected {
-				t.Errorf("Expected %s, got %s", tt.expected, result)
-			}
-		})
-	}
-}
-
-// TestTypeParts_Comprehensive tests type parts parsing
-func TestTypeParts_Comprehensive(t *testing.T) {
-	tests := []struct {
-		input                string
-		expectedPkgName      string
-		expectedTypeName     string
-		expectedGenericTypes []string
-	}{
-		{"string", "", "string", nil},
-		{"main-->User", "main", "User", nil},
-		{"pkg-->Type-->T", "pkg", "Type", []string{"T"}},
-		{"Container[T]", "", "Container", []string{"T T"}},
-		{"Container[T, U]", "", "Container", []string{"T T", "U U"}},
-		{"pkg-->Container[T]", "pkg", "Container", []string{"T"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			result := TypeParts(tt.input)
-			if result.PkgName != tt.expectedPkgName {
-				t.Errorf("Expected PkgName to be %s, got %s", tt.expectedPkgName, result.PkgName)
-			}
-			if result.TypeName != tt.expectedTypeName {
-				t.Errorf("Expected TypeName to be %s, got %s", tt.expectedTypeName, result.TypeName)
-			}
-			if len(result.GenericTypes) != len(tt.expectedGenericTypes) {
-				t.Errorf("Expected %d generic types, got %d", len(tt.expectedGenericTypes), len(result.GenericTypes))
-			}
-			for i, expected := range tt.expectedGenericTypes {
-				if i < len(result.GenericTypes) && result.GenericTypes[i] != expected {
-					t.Errorf("Expected generic type %d to be %s, got %s", i, expected, result.GenericTypes[i])
-				}
-			}
-		})
-	}
-}
-
 // TestFindTypesInMetadata_Comprehensive tests type finding in metadata
 func TestFindTypesInMetadata_Comprehensive(t *testing.T) {
 	tests := []struct {

@@ -254,14 +254,14 @@ func TestMapGoTypeToOpenAPISchema_ByteSlice(t *testing.T) {
 	usedTypes := make(map[string]*Schema)
 
 	t.Run("[]byte returns string/byte", func(t *testing.T) {
-		schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[]byte", nil, cfg, nil)
+		schema, _ := schemaForType(usedTypes, "[]byte", nil, nil, cfg, nil)
 		require.NotNil(t, schema)
 		assert.Equal(t, "string", schema.Type)
 		assert.Equal(t, "byte", schema.Format)
 	})
 
 	t.Run("byte returns integer", func(t *testing.T) {
-		schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "byte", nil, cfg, nil)
+		schema, _ := schemaForType(usedTypes, "byte", nil, nil, cfg, nil)
 		require.NotNil(t, schema)
 		assert.Equal(t, "integer", schema.Type)
 	})

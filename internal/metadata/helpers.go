@@ -19,15 +19,33 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"reflect"
 	"strings"
 )
 
+// ScopeExported and ScopeUnexported are the sentinel strings stored in a
+// Field/Type/Method Scope (via getScope). They are exported so schema consumers
+// can decide field visibility from the SAME source of truth — e.g. the OpenAPI
+// generator drops unexported fields, which encoding/json never marshals.
 const (
-	defaultScopeExported   = "exported"
-	defaultScopeUnexported = "unexported"
+	ScopeExported   = "exported"
+	ScopeUnexported = "unexported"
+
+	defaultScopeExported   = ScopeExported
+	defaultScopeUnexported = ScopeUnexported
 )
 
-// getTypeName extracts a type name from an AST expression
+// getTypeName extracts a flattened type-name string from an AST expression.
+//
+// It is RETAINED for non-schema consumers only (T027): the call graph
+// (receiver/argument type strings via SetType, used for matching and
+// callArgToString's string-based body/param type derivation) and diagnostics.
+// Schema generation no longer reads its output — struct fields and embeds carry a
+// lossless *TypeRef (TestEveryStructFieldHasTypeRef enforces this), and the schema
+// pipeline derives every type from the TypeRef tree. Do NOT reintroduce it into
+// schema derivation; it is lossy (drops fixed-array lengths, multi-parameter
+// generics, and full package paths). Retiring it from the body/param path as well
+// requires moving callArgToString and origin tracing onto the tree.
 //
 //nolint:gocyclo // AST type name extraction with multiple node types
 func getTypeName(nd ast.Node, info *types.Info) string {
@@ -180,6 +198,32 @@ func getFieldTag(field *ast.Field) string {
 		return tag[1 : len(tag)-1]
 	}
 	return tag
+}
+
+// jsonTagName parses the `json` directive of a struct tag the way encoding/json
+// reads it, returning the explicit name, whether the field is skipped, and
+// whether a json tag was present at all. The input is the backtick-stripped tag
+// body (as produced by getFieldTag), so reflect.StructTag operates on it
+// directly. It mirrors the schema layer's jsonFieldName — replicated here
+// because the metadata package must not import internal/spec — and is used by
+// the embed branch to honour encoding/json's tag semantics for anonymous
+// embedded fields.
+//
+// As in jsonFieldName, only a BARE `json:"-"` is a skip: `json:"-,"` (trailing
+// comma) names a field literally "-" and is NOT skipped, matching
+// reflect.StructTag.
+func jsonTagName(tag string) (name string, skip bool, present bool) {
+	value, ok := reflect.StructTag(tag).Lookup("json")
+	if !ok {
+		return "", false, false
+	}
+	if value == "-" {
+		return "", true, true
+	}
+	if i := strings.IndexByte(value, ','); i >= 0 {
+		value = value[:i]
+	}
+	return value, false, true
 }
 
 // isExported checks if a name is exported (starts with uppercase)

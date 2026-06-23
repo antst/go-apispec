@@ -76,9 +76,6 @@ type ParamPatternMatcher interface {
 type TypeResolver interface {
 	// ResolveType resolves a Go type to its concrete type
 	ResolveType(arg metadata.CallArgument, context TrackerNodeInterface) string
-
-	// MapToOpenAPISchema maps a Go type to OpenAPI schema
-	MapToOpenAPISchema(goType string) *Schema
 }
 
 // VariableTracer defines the interface for variable tracing operations
@@ -140,11 +137,8 @@ type ContextProvider interface {
 	GetArgumentInfo(arg *metadata.CallArgument) string
 }
 
-// SchemaMapper defines the interface for schema mapping operations
+// SchemaMapper defines the interface for HTTP status/method mapping operations
 type SchemaMapper interface {
-	// MapGoTypeToOpenAPISchema maps a Go type to OpenAPI schema
-	MapGoTypeToOpenAPISchema(goType string) *Schema
-
 	// MapStatusCode maps a status code string to HTTP status code
 	MapStatusCode(statusStr string) (int, bool)
 

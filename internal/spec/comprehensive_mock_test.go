@@ -105,8 +105,7 @@ func TestPatternMatchersWithMockNodes(t *testing.T) {
 
 	// Create config and schema mapper
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	// Test route pattern matcher
 	routePattern := RoutePattern{BasePattern: BasePattern{CallRegex: "Get"}, MethodFromCall: true,
@@ -146,8 +145,7 @@ func TestTypeResolverWithMockNodes(t *testing.T) {
 	}
 
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	// Create a mock node for type resolution context
 	mockNode := &TrackerNode{

@@ -75,8 +75,7 @@ func TestTypeResolver_ResolveType(t *testing.T) {
 	}
 
 	cfg := DefaultAPISpecConfig()
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	tests := []struct {
 		name     string
@@ -234,64 +233,10 @@ func TestTypeResolver_ResolveType(t *testing.T) {
 	}
 }
 
-func TestTypeResolver_MapToOpenAPISchema(t *testing.T) {
-	meta := &metadata.Metadata{}
-	cfg := DefaultAPISpecConfig()
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
-
-	tests := []struct {
-		name     string
-		goType   string
-		expected string
-	}{
-		{
-			name:     "string type",
-			goType:   "string",
-			expected: "string",
-		},
-		{
-			name:     "int type",
-			goType:   "int",
-			expected: "integer",
-		},
-		{
-			name:     "bool type",
-			goType:   "bool",
-			expected: "boolean",
-		},
-		{
-			name:     "slice type",
-			goType:   "[]string",
-			expected: "array",
-		},
-		{
-			name:     "map type",
-			goType:   "map[string]int",
-			expected: "object",
-		},
-		{
-			name:     "pointer type",
-			goType:   "*User",
-			expected: "", // Custom types return empty schema (will be handled by ref)
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			schema := resolver.MapToOpenAPISchema(tt.goType)
-			if schema.Type != tt.expected {
-				t.Errorf("expected type %s, got %s", tt.expected, schema.Type)
-			}
-		})
-	}
-}
-
 func TestTypeResolver_ResolveGenericType(t *testing.T) {
 	meta := &metadata.Metadata{}
 	cfg := DefaultAPISpecConfig()
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	tests := []struct {
 		name        string
@@ -374,8 +319,7 @@ func TestTypeResolver_ResolveGenericType(t *testing.T) {
 func TestTypeResolver_ExtractTypeParameters(t *testing.T) {
 	meta := &metadata.Metadata{}
 	cfg := DefaultAPISpecConfig()
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	tests := []struct {
 		name        string

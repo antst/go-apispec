@@ -16,6 +16,8 @@ package spec
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/antst/go-apispec/internal/metadata"
@@ -23,17 +25,15 @@ import (
 
 // TypeResolverImpl implements TypeResolver
 type TypeResolverImpl struct {
-	meta         *metadata.Metadata
-	cfg          *APISpecConfig
-	schemaMapper SchemaMapper
+	meta *metadata.Metadata
 }
 
-// NewTypeResolver creates a new type resolver
-func NewTypeResolver(meta *metadata.Metadata, cfg *APISpecConfig, schemaMapper SchemaMapper) *TypeResolverImpl {
+// NewTypeResolver creates a new type resolver. cfg is accepted for call-site
+// symmetry with the other constructors but is unused: type resolution reads only
+// the metadata model.
+func NewTypeResolver(meta *metadata.Metadata, _ *APISpecConfig) *TypeResolverImpl {
 	return &TypeResolverImpl{
-		meta:         meta,
-		cfg:          cfg,
-		schemaMapper: schemaMapper,
+		meta: meta,
 	}
 }
 
@@ -139,8 +139,40 @@ func (t *TypeResolverImpl) resolveTypeFromArgument(arg metadata.CallArgument) st
 	}
 }
 
+// typeRefStringIsLossy reports whether a TypeRef of the given kind stringifies to
+// a bare keyword that loses information the pooled arg.Type still carries, so the
+// pooled type is the better answer for it:
+//
+//   - RefParam ("T") has no concrete type at all;
+//   - RefFunc / RefChan stringify to "func" / "chan" WITHOUT the signature, but
+//     resolveCallType needs the full "func(...)..." form to extract a callee's
+//     return type — preferring the bare "func" silently breaks that extraction.
+//
+// Every other kind (named types and the containers around them) stringifies to a
+// fully-qualified form that is at least as good as the frequently-bare pooled type.
+func typeRefStringIsLossy(k metadata.RefKind) bool {
+	switch k {
+	case metadata.RefParam, metadata.RefFunc, metadata.RefChan:
+		return true
+	default:
+		return false
+	}
+}
+
 // resolveIdentType resolves type for identifier arguments
 func (t *TypeResolverImpl) resolveIdentType(arg metadata.CallArgument) string {
+	// Prefer the structured TypeRef when present: it is fully package-qualified
+	// ("github.com/x/models.User"), whereas the pooled arg.Type is frequently the
+	// bare name ("User") and would force resolveSelectorType to guess the package.
+	// Mirrors the variable.TypeRef preference below. Some kinds are excluded
+	// because their String() is a bare keyword that DROPS information the pooled
+	// arg.Type still carries (see typeRefStringIsLossy).
+	if arg.TypeRef != nil && !typeRefStringIsLossy(arg.TypeRef.Kind) {
+		if s := arg.TypeRef.String(); s != "" {
+			return s
+		}
+	}
+
 	// If we have a direct type, use it
 	if arg.Type != -1 {
 		return arg.GetType()
@@ -153,6 +185,9 @@ func (t *TypeResolverImpl) resolveIdentType(arg metadata.CallArgument) string {
 			for _, file := range pkg.Files {
 				varName := arg.GetName()
 				if variable, exists := file.Variables[varName]; exists {
+					if variable.TypeRef != nil {
+						return variable.TypeRef.String()
+					}
 					return t.getString(variable.Type)
 				}
 			}
@@ -174,16 +209,38 @@ func (t *TypeResolverImpl) resolveSelectorType(arg metadata.CallArgument) string
 		return arg.Sel.GetName()
 	}
 
-	// For field access, try to find the field type in metadata
-	for pkgName, pkg := range t.meta.Packages {
+	// For field access, try to find the field type in metadata. Iterate packages in
+	// sorted order so resolution is deterministic (a same-named type in another
+	// package can never win by map-iteration chance — and the scoping below confines
+	// the bare-leaf candidate to its own package anyway).
+	for _, pkgName := range slices.Sorted(maps.Keys(t.meta.Packages)) {
+		pkg := t.meta.Packages[pkgName]
 		for _, file := range pkg.Files {
-			// Try both with and without package prefix
+			// Try both with and without package prefix. baseType may now be a
+			// qualified TypeRef.String() ("github.com/x/app/models.User" — the
+			// receiver ident resolves through variable.TypeRef.String()), while
+			// file.Types is keyed by the BARE type name ("User"). Add the unqualified
+			// leaf so the field lookup still resolves instead of falling through to
+			// the bogus "<qualified>.Field" concatenation below — but ONLY while
+			// scanning the leaf's own package, so a same-named type in an unrelated
+			// package can't be borrowed first.
 			typeNames := []string{baseType, pkgName + "." + baseType}
+			if r := metadata.ParseTypeRef(baseType); r != nil {
+				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType &&
+					pkgMatchesLeaf(pkgName, leaf.Pkg) {
+					typeNames = append(typeNames, leaf.Name)
+				}
+			}
 			for _, typeName := range typeNames {
 				if typ, exists := file.Types[typeName]; exists {
 					// Find the field
 					for _, field := range typ.Fields {
 						if t.getString(field.Name) == arg.Sel.GetName() {
+							// Prefer the lossless TypeRef (every field carries one —
+							// TestEveryStructFieldHasTypeRef) over the getTypeName string.
+							if field.TypeRef != nil {
+								return field.TypeRef.String()
+							}
 							return t.getString(field.Type)
 						}
 					}
@@ -306,11 +363,6 @@ func (t *TypeResolverImpl) resolveMapType(arg metadata.CallArgument) string {
 	valueType := t.resolveTypeFromArgument(*arg.Fun)
 
 	return fmt.Sprintf("map[%s]%s", keyType, valueType)
-}
-
-// MapToOpenAPISchema maps a Go type to OpenAPI schema
-func (t *TypeResolverImpl) MapToOpenAPISchema(goType string) *Schema {
-	return t.schemaMapper.MapGoTypeToOpenAPISchema(goType)
 }
 
 // Helper methods

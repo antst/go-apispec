@@ -244,11 +244,11 @@ func specialiseWrapperSchema(baseSchema *Schema, overrides []wrapperFieldOverrid
 		if jsonName == "" {
 			continue
 		}
-		propSchema, discovered := mapGoTypeToOpenAPISchema(usedTypes, override.GoType, meta, cfg, nil)
+		propSchema, discovered := schemaForType(usedTypes, override.GoType, nil, meta, cfg, nil)
 		if propSchema == nil {
 			continue
 		}
-		// mapGoTypeToOpenAPISchema returns the payload's $ref in propSchema but
+		// schemaForType returns the payload's $ref in propSchema but
 		// hands its freshly discovered component definitions back in
 		// `discovered` — the caller is responsible for registering them, or the
 		// `data` $ref we just produced can point at a component nothing ever
@@ -323,12 +323,7 @@ func lookupWrapperType(meta *metadata.Metadata, goType string) *metadata.Type {
 	if meta == nil || goType == "" {
 		return nil
 	}
-	goType = strings.TrimPrefix(goType, "*")
-	parts := TypeParts(goType)
-	if parts.TypeName == "" {
-		return nil
-	}
-	return typeByName(parts, meta)
+	return typeByRefGated(metadata.ParseTypeRef(strings.TrimPrefix(goType, "*")), meta)
 }
 
 // wrapperFieldIsGeneric reports whether the declared type of the named struct
@@ -342,8 +337,19 @@ func wrapperFieldIsGeneric(meta *metadata.Metadata, wrapperType *metadata.Type, 
 		if meta.StringPool.GetString(field.Name) != structFieldName {
 			continue
 		}
-		declared := meta.StringPool.GetString(field.Type)
-		declared = strings.TrimPrefix(declared, "*")
+		// A generic placeholder field is interface{}/any, optionally behind a
+		// pointer — but NOT inside a slice/array/map: `[]interface{}` /
+		// `map[string]any` are concrete typed fields, not placeholders. NamedLeaf
+		// unwraps containers too, so unwrap pointers ONLY (mirroring the legacy
+		// string path's single TrimPrefix("*")) before the interface check.
+		if field.TypeRef != nil {
+			t := field.TypeRef
+			for t != nil && t.Kind == metadata.RefPointer {
+				t = t.Elem
+			}
+			return t != nil && t.Kind == metadata.RefInterface
+		}
+		declared := strings.TrimPrefix(meta.StringPool.GetString(field.Type), "*")
 		return declared == "interface{}" || declared == "any"
 	}
 	return false
@@ -358,7 +364,15 @@ func jsonNameForField(meta *metadata.Metadata, wrapperType *metadata.Type, struc
 			continue
 		}
 		tag := meta.StringPool.GetString(field.Tag)
-		if name := extractJSONName(tag); name != "" {
+		// Use the one true json-tag parser (same as the struct-schema path): a
+		// `json:"-"` field is never marshaled, so report "" and let the caller drop
+		// it (it skips on ""); `json:"-,"` names the field literally "-"; an empty
+		// name falls back to the Go field name.
+		name, skip, _ := jsonFieldName(tag)
+		if skip {
+			return ""
+		}
+		if name != "" {
 			return name
 		}
 		return structFieldName

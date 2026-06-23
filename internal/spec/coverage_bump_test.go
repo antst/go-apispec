@@ -209,7 +209,7 @@ func TestCallArgToString_KindRaw(t *testing.T) {
 // pre-resolved type names through.
 func TestResolveGenericType_NoParams_UnparseableInput(t *testing.T) {
 	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg, NewSchemaMapper(cfg))
+	resolver := NewTypeResolver(nil, cfg)
 	// Empty input — extractBaseTypeAndParams returns "" base, no params.
 	got := resolver.ResolveGenericType("", nil)
 	assert.Equal(t, "", got)
@@ -221,7 +221,7 @@ func TestResolveGenericType_NoParams_UnparseableInput(t *testing.T) {
 // than partial garbage.
 func TestResolveGenericType_WithParams_UnparseableInput(t *testing.T) {
 	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg, NewSchemaMapper(cfg))
+	resolver := NewTypeResolver(nil, cfg)
 	got := resolver.ResolveGenericType("", map[string]string{"T": "int"})
 	assert.Equal(t, "", got, "empty input must round-trip even when type params are supplied")
 }
@@ -233,7 +233,7 @@ func TestResolveGenericType_WithParams_UnparseableInput(t *testing.T) {
 // collapse logic inside the typeParams branch.
 func TestResolveGenericType_WithParams_EmptyBrackets(t *testing.T) {
 	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg, NewSchemaMapper(cfg))
+	resolver := NewTypeResolver(nil, cfg)
 	got := resolver.ResolveGenericType("Foo[]", map[string]string{"T": "int"})
 	assert.Equal(t, "Foo", got, "empty param block collapses to base type")
 }
@@ -243,7 +243,7 @@ func TestResolveGenericType_WithParams_EmptyBrackets(t *testing.T) {
 // collapse, different whitespace path.
 func TestResolveGenericType_WithParams_WhitespaceBrackets(t *testing.T) {
 	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg, NewSchemaMapper(cfg))
+	resolver := NewTypeResolver(nil, cfg)
 	got := resolver.ResolveGenericType("Foo[   ]", map[string]string{"T": "int"})
 	assert.Equal(t, "Foo", got)
 }
@@ -264,7 +264,7 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfCachedComplexType(t *testing.T) {
 	}
 	usedTypes := map[string]*Schema{"User": cached}
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[]User", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "[]User", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type, "array of complex type")
 	require.NotNil(t, schema.Items, "items schema must be set")
@@ -282,7 +282,7 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfCachedComplexType_NilSchema(t *testing.
 	// schema generation before the type's own pass completes.
 	usedTypes := map[string]*Schema{"User": nil}
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[]User", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "[]User", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 	require.NotNil(t, schema.Items)
@@ -297,7 +297,7 @@ func TestMapGoTypeToOpenAPISchema_FixedSizeArrayOfCachedType(t *testing.T) {
 	usedTypes := map[string]*Schema{
 		"User": {Type: "object", Properties: map[string]*Schema{"id": {Type: "integer"}}},
 	}
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[5]User", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "[5]User", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 	assert.Equal(t, 5, schema.MinItems, "fixed-size array must set MinItems")
@@ -354,7 +354,7 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfEnumOverlaysOntoStoredSchema(t *testing
 	}
 
 	usedTypes := map[string]*Schema{}
-	schema, schemas := mapGoTypeToOpenAPISchema(usedTypes, "[]enum.Status", meta, cfg, nil)
+	schema, schemas := schemaForType(usedTypes, "[]enum.Status", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 	// Element type was non-primitive (`enum.Status`) so the array branch

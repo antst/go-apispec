@@ -352,7 +352,7 @@ func (e *Extractor) checkContentTypePattern(node TrackerNodeInterface, route *Ro
 func NewExtractor(tree TrackerTreeInterface, cfg *APISpecConfig) *Extractor {
 	contextProvider := NewContextProvider(tree.GetMetadata())
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(tree.GetMetadata(), cfg, schemaMapper)
+	typeResolver := NewTypeResolver(tree.GetMetadata(), cfg)
 	overrideApplier := NewOverrideApplier(cfg)
 
 	extractor := &Extractor{
@@ -1144,7 +1144,7 @@ func (e *Extractor) expandHelperFunctionResponses(routeNode TrackerNodeInterface
 					if bodyArg, ok := call.edge.ParamArgMap[bodyParam]; ok {
 						bodyType := e.contextProvider.GetArgumentInfo(&bodyArg)
 						if bodyType != "" && bodyType != "interface{}" && bodyType != "any" {
-							if s, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, e.cfg, nil); s != nil {
+							if s, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, e.cfg, nil); s != nil {
 								schema = s
 							}
 						}
@@ -1802,6 +1802,16 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		}
 
 		bodyType := r.contextProvider.GetArgumentInfo(arg)
+		// For a composite literal whose named leaf is a type we have in metadata,
+		// prefer the lossless TypeRef string: its canonical fully-qualified form is
+		// what the field path uses, so the body references the same component. A
+		// literal needs no origin tracing, so taking it here is safe; external types
+		// (not in metadata) keep their existing short-alias form (T009/T011).
+		if arg.GetKind() == metadata.KindCompositeLit && arg.TypeRef != nil && route.Metadata != nil {
+			if s := bodyTypeFromMetadataRef(arg.TypeRef, route.Metadata, r.cfg); s != "" {
+				bodyType = s
+			}
+		}
 		// Prefer the conversion target type if available
 		if conversionTargetType != "" {
 			bodyType = conversionTargetType
@@ -1815,6 +1825,13 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		// declaration "APIResponse[T any]" — so only fall back to rawArgType when
 		// bodyType isn't already a bound (concrete-arg) generic instantiation.
 		rawArgType := r.contextProvider.GetString(arg.Type)
+		// Prefer the lossless TypeRef, which carries the BOUND generic
+		// instantiation (Pair[User,Order]) where arg.Type may hold only the unbound
+		// declaration (Pair[K,V]) — the wrapper this branch exists to preserve
+		// (T009/T011).
+		if arg.TypeRef != nil {
+			rawArgType = arg.TypeRef.String()
+		}
 		if strings.Contains(rawArgType, "[") && !strings.HasPrefix(rawArgType, "[]") && !strings.HasPrefix(rawArgType, "map[") {
 			if !genericArgsAreConcrete(bodyType) {
 				bodyType = rawArgType
@@ -1863,7 +1880,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		if bodyType == "[]byte" {
 			respInfo.Schema = &Schema{Type: "string", Format: "binary"}
 		} else {
-			schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
+			schema, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, r.cfg, nil)
 			respInfo.Schema = schema
 
 			// Wrapper/envelope specialisation: when the body flows through a
@@ -1908,7 +1925,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 				respInfo.Schema = &Schema{Type: "string"}
 			}
 		} else {
-			schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, bodyType, route.Metadata, r.cfg, nil)
+			schema, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, r.cfg, nil)
 			respInfo.Schema = schema
 		}
 	}
@@ -2090,8 +2107,7 @@ func (r *ResponsePatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgumen
 	// `WriteJSON[T any](w, status, v T)` would emit the bare type parameter
 	// (e.g. `pkg.T`) instead of the concrete instantiation at the call site
 	// (e.g. `dto.CheckRoomHTTPResponse`). Mirrors the request-side logic.
-	typeParts := TypeParts(originalType)
-	if genericType := traceGenericOrigin(node, typeParts); genericType != "" {
+	if genericType := traceGenericOrigin(node, originalType); genericType != "" {
 		return genericType
 	}
 
@@ -2156,7 +2172,7 @@ func (p *ParamPatternMatcherImpl) ExtractParam(node TrackerNodeInterface, route 
 			}
 		}
 
-		schema, _ := mapGoTypeToOpenAPISchema(route.UsedTypes, paramType, route.Metadata, p.cfg, nil)
+		schema, _ := schemaForType(route.UsedTypes, paramType, nil, route.Metadata, p.cfg, nil)
 		param.Schema = schema
 	}
 

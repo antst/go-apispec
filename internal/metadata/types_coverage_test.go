@@ -1091,6 +1091,95 @@ func TestResolveSelectorReturnType_FieldLookup(t *testing.T) {
 	assert.Equal(t, "string", result)
 }
 
+// TestResolveSelectorReturnType_QualifiedReceiver locks the sibling of the
+// resolveSelectorType qualification fix (PR #61 sweep). When the receiver
+// variable's type is a fully-qualified import path (getTypeName qualifies a
+// cross-package selector) but File.Types is keyed by the bare name, the lookup
+// must still resolve the field via the unqualified leaf rather than returning the
+// bogus "<qualified>.Field" concatenation.
+func TestResolveSelectorReturnType_QualifiedReceiver(t *testing.T) {
+	meta := makeTestMeta()
+	pkgName := "github.com/x/app/models"
+
+	meta.Packages[pkgName] = &Package{
+		Files: map[string]*File{
+			"user.go": {
+				Types: map[string]*Type{
+					"User": { // keyed by the bare name, as the builder does
+						Name: meta.StringPool.Get("User"),
+						Fields: []Field{
+							{Name: meta.StringPool.Get("Name"), Type: meta.StringPool.Get("string")},
+						},
+					},
+				},
+				Variables: map[string]*Variable{
+					"u": {
+						Name: meta.StringPool.Get("u"),
+						Type: meta.StringPool.Get("github.com/x/app/models.User"), // qualified
+					},
+				},
+				Functions: map[string]*Function{},
+			},
+		},
+	}
+
+	rv := makeTestArg(meta)
+	rv.SetKind(KindSelector)
+	xArg := makeTestArg(meta)
+	xArg.SetKind(KindIdent)
+	xArg.SetName("u")
+	rv.X = xArg
+	selArg := makeTestArg(meta)
+	selArg.SetKind(KindIdent)
+	selArg.SetName("Name")
+	rv.Sel = selArg
+
+	// Must resolve to the field's type, NOT the bogus "...models.User.Name".
+	assert.Equal(t, "string", meta.resolveSelectorReturnType(rv, pkgName))
+}
+
+// TestResolveSelectorReturnType_ScopedToPackage locks the cross-package scoping of
+// the metadata twin (PR #61): the bare leaf candidate is added only in the leaf's
+// own package, so a same-named type in an unrelated package can't be borrowed. The
+// WRONG package sorts FIRST so reverting the scoping deterministically returns the
+// wrong field type (a solid revert guard with the sorted iteration).
+func TestResolveSelectorReturnType_ScopedToPackage(t *testing.T) {
+	meta := makeTestMeta()
+	receiverPkg := "github.com/z/models"
+	meta.Packages = map[string]*Package{
+		"github.com/a/registry": {Files: map[string]*File{"u.go": {
+			Types: map[string]*Type{"User": {Name: meta.StringPool.Get("User"), Fields: []Field{
+				{Name: meta.StringPool.Get("Name"), Type: meta.StringPool.Get("int")}, // WRONG — sorts first
+			}}},
+			Variables: map[string]*Variable{}, Functions: map[string]*Function{},
+		}}},
+		receiverPkg: {Files: map[string]*File{"u.go": {
+			Types: map[string]*Type{"User": {Name: meta.StringPool.Get("User"), Fields: []Field{
+				{Name: meta.StringPool.Get("Name"), Type: meta.StringPool.Get("string")}, // CORRECT
+			}}},
+			Variables: map[string]*Variable{"u": {
+				Name: meta.StringPool.Get("u"),
+				Type: meta.StringPool.Get("github.com/z/models.User"), // qualified
+			}},
+			Functions: map[string]*Function{},
+		}}},
+	}
+
+	rv := makeTestArg(meta)
+	rv.SetKind(KindSelector)
+	xArg := makeTestArg(meta)
+	xArg.SetKind(KindIdent)
+	xArg.SetName("u")
+	rv.X = xArg
+	selArg := makeTestArg(meta)
+	selArg.SetKind(KindIdent)
+	selArg.SetName("Name")
+	rv.Sel = selArg
+
+	// Must resolve z/models.User.Name ("string"), never a/registry.User.Name ("int").
+	assert.Equal(t, "string", meta.resolveSelectorReturnType(rv, receiverPkg))
+}
+
 // --- resolveCallReturnType ---
 
 func TestResolveCallReturnType_NilFun(t *testing.T) {

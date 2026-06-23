@@ -1550,8 +1550,7 @@ func TestConvertPathToOpenAPI_Mount(t *testing.T) {
 func TestTypeResolver_GetCallerName_NilContext(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	// nil context
 	assert.Equal(t, "", resolver.getCallerName(nil))
@@ -1564,8 +1563,7 @@ func TestTypeResolver_GetCallerName_NilContext(t *testing.T) {
 func TestTypeResolver_GetCallerPkg_NilContext(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	// nil context
 	assert.Equal(t, "", resolver.getCallerPkg(nil))
@@ -1582,8 +1580,7 @@ func TestTypeResolver_GetCallerPkg_NilContext(t *testing.T) {
 func TestTypeResolver_ExtractParameterName(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	// Single letter parameter
 	assert.Equal(t, "T", resolver.extractParameterName("T"))
@@ -1606,8 +1603,7 @@ func TestTypeResolver_ExtractParameterName(t *testing.T) {
 func TestTypeResolver_ResolveGenericType_EmptyParams(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
-	schemaMapper := NewSchemaMapper(cfg)
-	resolver := NewTypeResolver(meta, cfg, schemaMapper)
+	resolver := NewTypeResolver(meta, cfg)
 
 	// No brackets
 	result := resolver.ResolveGenericType("string", nil)
@@ -1649,7 +1645,7 @@ func TestExtractRequest_ChainedDecodeNonBody(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := RequestBodyPattern{
 		BasePattern:  BasePattern{CallRegex: "^Decode$"},
@@ -1696,7 +1692,7 @@ func TestExtractRequest_ResolvedType_Mount(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := RequestBodyPattern{
 		BasePattern:  BasePattern{CallRegex: "^BindJSON$"},
@@ -1740,7 +1736,7 @@ func TestExtractRequest_DerefPointer(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := RequestBodyPattern{
 		BasePattern:  BasePattern{CallRegex: "^BindJSON$"},
@@ -2245,7 +2241,7 @@ func TestResolveTypeOrigin_GenericOrigin(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg, schemaMapper)
+	typeResolver := NewTypeResolver(meta, cfg)
 
 	// Build a node with type parameters
 	edge := makeEdge(meta, "handler", "main", "BindJSON", "gin", nil)
@@ -2531,23 +2527,8 @@ func TestApplyValidationConstraints_Format_Mount(t *testing.T) {
 }
 
 // ===========================================================================
-// TypeParts — additional coverage
+// Type-string parsing (ParseTypeRef) — additional coverage
 // ===========================================================================
-
-func TestTypeParts_Complex(t *testing.T) {
-	parts := TypeParts("map[string][]User")
-	assert.NotEmpty(t, parts)
-
-	parts = TypeParts("*User")
-	assert.NotEmpty(t, parts)
-
-	parts = TypeParts("[]string")
-	assert.NotEmpty(t, parts)
-
-	parts = TypeParts("interface{}")
-	assert.NotEmpty(t, parts)
-}
-
 // ===========================================================================
 // resolveUnderlyingType — additional coverage
 // ===========================================================================
@@ -2561,42 +2542,6 @@ func TestResolveUnderlyingType_NoMatch(t *testing.T) {
 	meta := newTestMeta()
 	result := resolveUnderlyingType("NonExistentType", meta)
 	assert.Equal(t, "", result)
-}
-
-// ===========================================================================
-// SchemaMapper — MapGoTypeToOpenAPISchema additional types
-// ===========================================================================
-
-func TestSchemaMapper_AdditionalTypes(t *testing.T) {
-	cfg := &APISpecConfig{}
-	mapper := NewSchemaMapper(cfg)
-
-	tests := []struct {
-		goType     string
-		schemaType string
-	}{
-		{"uint", "integer"},
-		{"uint8", "integer"},
-		{"uint16", "integer"},
-		{"uint32", "integer"},
-		{"uint64", "integer"},
-		{"float32", "number"},
-		{"float64", "number"},
-		{"bool", "boolean"},
-		{"byte", "integer"},
-		{"int", "integer"},
-		{"int8", "integer"},
-		{"int16", "integer"},
-		{"int32", "integer"},
-		{"int64", "integer"},
-		{"string", "string"},
-	}
-
-	for _, tt := range tests {
-		schema := mapper.MapGoTypeToOpenAPISchema(tt.goType)
-		require.NotNil(t, schema, "expected schema for type %s", tt.goType)
-		assert.Equal(t, tt.schemaType, schema.Type, "type %s", tt.goType)
-	}
 }
 
 // ===========================================================================
@@ -2628,19 +2573,22 @@ func TestGenerateStructSchema_BasicStruct(t *testing.T) {
 		Kind: sp.Get("struct"),
 		Fields: []metadata.Field{
 			{
-				Name: sp.Get("ID"),
-				Type: sp.Get("int"),
-				Tag:  sp.Get(`json:"id"`),
+				Name:    sp.Get("ID"),
+				Type:    sp.Get("int"),
+				Tag:     sp.Get(`json:"id"`),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "int"},
 			},
 			{
-				Name: sp.Get("Name"),
-				Type: sp.Get("string"),
-				Tag:  sp.Get(`json:"name"`),
+				Name:    sp.Get("Name"),
+				Type:    sp.Get("string"),
+				Tag:     sp.Get(`json:"name"`),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"},
 			},
 			{
-				Name: sp.Get("Email"),
-				Type: sp.Get("string"),
-				Tag:  sp.Get(`json:"email,omitempty"`),
+				Name:    sp.Get("Email"),
+				Type:    sp.Get("string"),
+				Tag:     sp.Get(`json:"email,omitempty"`),
+				TypeRef: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"},
 			},
 		},
 	}
@@ -2776,6 +2724,40 @@ func TestPromoteEmbeddedFields(t *testing.T) {
 	assert.NotEqual(t, "string", schema.Properties["id"].Type)
 }
 
+// TestGenerateStructSchema_FieldWithoutTypeInfo asserts the field-type
+// normalization tolerates a degenerate field that carries neither a TypeRef nor
+// a parseable pooled type string: ParseTypeRef yields nil and the loop must not
+// dereference it (the nil-guard before alias/enum resolution). Production never
+// reaches this — every field carries a TypeRef (TestEveryStructFieldHasTypeRef)
+// — so this is purely a malformed-metadata robustness check.
+func TestGenerateStructSchema_FieldWithoutTypeInfo(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+
+	typ := &metadata.Type{
+		Name: sp.Get("Degenerate"), Pkg: sp.Get("myapp"), Kind: sp.Get("struct"),
+		Fields: []metadata.Field{
+			// No TypeRef and an empty Type string: the bridge parses to nil.
+			{Name: sp.Get("Mystery"), Type: sp.Get(""), Tag: sp.Get(`json:"mystery"`)},
+		},
+	}
+	cfg := &APISpecConfig{Defaults: Defaults{ResponseContentType: "application/json"}}
+
+	schemas := map[string]*Schema{}
+	schema, _ := generateStructSchema(schemas, "myapp-->Degenerate", typ, meta, cfg, map[string]bool{})
+
+	require.NotNil(t, schema)
+	assert.Equal(t, "object", schema.Type)
+	assert.Contains(t, schema.Properties, "mystery")
+	mystery := schema.Properties["mystery"]
+	require.NotNil(t, mystery, "a field with no type info must stay visible, not be dropped")
+	// It must be a valid empty {} schema (any JSON) — NOT a $ref dangling against an
+	// empty component name, and NOT a nil component registered under "".
+	assert.Empty(t, mystery.Ref, "a typeless field must not emit a dangling $ref")
+	assert.Empty(t, mystery.Type, "a typeless field is an open {} schema")
+	assert.NotContains(t, schemas, "", "no nil component may be registered under an empty name")
+}
+
 func TestGenerateStructSchema_WithGenericTypes(t *testing.T) {
 	meta := newTestMeta()
 	sp := meta.StringPool
@@ -2892,7 +2874,7 @@ func TestGenerateStructSchema_FieldWithPointerType(t *testing.T) {
 }
 
 // ===========================================================================
-// mapGoTypeToOpenAPISchema — map type, slice type, existing usedTypes reference
+// schemaForType — map type, slice type, existing usedTypes reference
 // ===========================================================================
 
 func TestMapGoTypeToOpenAPISchema_SliceType(t *testing.T) {
@@ -2901,7 +2883,7 @@ func TestMapGoTypeToOpenAPISchema_SliceType(t *testing.T) {
 	visitedTypes := map[string]bool{}
 	meta := newTestMeta()
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[]string", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "[]string", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 	require.NotNil(t, schema.Items)
@@ -2914,7 +2896,7 @@ func TestMapGoTypeToOpenAPISchema_MapType(t *testing.T) {
 	visitedTypes := map[string]bool{}
 	meta := newTestMeta()
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "map[string]int", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "map[string]int", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	assert.Equal(t, "object", schema.Type)
 }
@@ -2925,7 +2907,7 @@ func TestMapGoTypeToOpenAPISchema_PointerType(t *testing.T) {
 	visitedTypes := map[string]bool{}
 	meta := newTestMeta()
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "*string", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "*string", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	assert.Equal(t, "string", schema.Type)
 }
@@ -2936,12 +2918,15 @@ func TestMapGoTypeToOpenAPISchema_FixedArray(t *testing.T) {
 	visitedTypes := map[string]bool{}
 	meta := newTestMeta()
 
-	// [16]byte → string with format byte
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[16]byte", meta, cfg, visitedTypes)
+	// [16]byte → a JSON array of 16 integers (a byte ARRAY marshals as ints; only a
+	// []byte SLICE is a base64 string).
+	schema, _ := schemaForType(usedTypes, "[16]byte", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
-	assert.Equal(t, "string", schema.Type)
-	assert.Equal(t, "byte", schema.Format)
-	assert.Equal(t, 16, schema.MaxLength)
+	assert.Equal(t, "array", schema.Type)
+	require.NotNil(t, schema.Items)
+	assert.Equal(t, "integer", schema.Items.Type)
+	assert.Equal(t, 16, schema.MinItems)
+	assert.Equal(t, 16, schema.MaxItems)
 }
 
 func TestMapGoTypeToOpenAPISchema_FixedArrayInt(t *testing.T) {
@@ -2951,7 +2936,7 @@ func TestMapGoTypeToOpenAPISchema_FixedArrayInt(t *testing.T) {
 	meta := newTestMeta()
 
 	// [3]int → array of integers
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[3]int", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "[3]int", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 	assert.Equal(t, 3, schema.MaxItems)
@@ -2966,7 +2951,7 @@ func TestMapGoTypeToOpenAPISchema_CycleDetection(t *testing.T) {
 	meta := newTestMeta()
 
 	// The type already exists in usedTypes — should return a reference
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "myapp.User", meta, cfg, visitedTypes)
+	schema, _ := schemaForType(usedTypes, "myapp.User", nil, meta, cfg, visitedTypes)
 	require.NotNil(t, schema)
 	// Should be a $ref since the type already exists
 	assert.NotEmpty(t, schema.Ref)
@@ -3167,7 +3152,7 @@ func TestGenerateStructSchema_NestedType(t *testing.T) {
 }
 
 // ===========================================================================
-// mapGoTypeToOpenAPISchema — interface{} and any types
+// schemaForType — interface{} and any types
 // ===========================================================================
 
 func TestMapGoTypeToOpenAPISchema_Interface(t *testing.T) {
@@ -3175,7 +3160,7 @@ func TestMapGoTypeToOpenAPISchema_Interface(t *testing.T) {
 	usedTypes := map[string]*Schema{}
 	meta := newTestMeta()
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "interface{}", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "interface{}", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "object", schema.Type)
 }
@@ -3185,7 +3170,7 @@ func TestMapGoTypeToOpenAPISchema_Any(t *testing.T) {
 	usedTypes := map[string]*Schema{}
 	meta := newTestMeta()
 
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "any", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "any", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 }
 
@@ -3303,41 +3288,6 @@ func TestHasOmitempty_DashTag(t *testing.T) {
 }
 
 // ===========================================================================
-// typeByName — with metadata packages
-// ===========================================================================
-
-func TestTypeByName_Found(t *testing.T) {
-	meta := newTestMeta()
-	sp := meta.StringPool
-
-	expectedType := &metadata.Type{
-		Name: sp.Get("User"),
-		Pkg:  sp.Get("myapp"),
-		Kind: sp.Get("struct"),
-	}
-
-	meta.Packages["myapp"] = &metadata.Package{
-		Files: map[string]*metadata.File{
-			"user.go": {
-				Types: map[string]*metadata.Type{
-					"User": expectedType,
-				},
-			},
-		},
-	}
-
-	parts := TypeParts("myapp-->User")
-	result := typeByName(parts, meta)
-	assert.NotNil(t, result)
-}
-
-func TestTypeByName_NilMeta(t *testing.T) {
-	parts := TypeParts("myapp-->User")
-	result := typeByName(parts, nil)
-	assert.Nil(t, result)
-}
-
-// ===========================================================================
 // resolveUnderlyingType — with alias type
 // ===========================================================================
 
@@ -3406,9 +3356,12 @@ func TestResolveUnderlyingType_MapAlias(t *testing.T) {
 		},
 	}
 
-	result := resolveUnderlyingType("map[myapp-->Status", meta)
-	// map[ prefix followed by type that resolves to alias
-	assert.Contains(t, result, "string")
+	// A well-formed map whose value is an alias resolves the value's underlying
+	// type while KEEPING the map wrapper (the re-apply-outermost-only bug dropped
+	// the map and returned a bare "string"). A malformed/incomplete map string —
+	// which production never emits — yields "".
+	assert.Equal(t, "map[string]string", resolveUnderlyingType("map[string]myapp-->Status", meta))
+	assert.Equal(t, "", resolveUnderlyingType("map[myapp-->Status", meta))
 }
 
 func TestResolveUnderlyingType_PointerAlias(t *testing.T) {
@@ -3551,26 +3504,8 @@ func TestMapMetadataToOpenAPI_EmptyInfoFallsBack(t *testing.T) {
 }
 
 // ===========================================================================
-// TypeParts — more edge cases
+// Type-string parsing (ParseTypeRef) — more edge cases
 // ===========================================================================
-
-func TestTypeParts_EdgeCases(t *testing.T) {
-	// Simple type
-	parts := TypeParts("string")
-	assert.Equal(t, "", parts.PkgName)
-	assert.Equal(t, "string", parts.TypeName)
-
-	// Type with TypeSep
-	parts = TypeParts("myapp-->User")
-	assert.Equal(t, "myapp", parts.PkgName)
-	assert.Equal(t, "User", parts.TypeName)
-
-	// Generic type
-	parts = TypeParts("myapp-->Response[T myapp-->User]")
-	assert.Equal(t, "myapp", parts.PkgName)
-	assert.NotEmpty(t, parts.GenericTypes)
-}
-
 // ===========================================================================
 // extractEnumValues — with non-const values
 // ===========================================================================
@@ -3605,7 +3540,7 @@ func TestCollectUsedTypesFromRoutes_WithRequest(t *testing.T) {
 }
 
 // ===========================================================================
-// mapGoTypeToOpenAPISchema — custom type found in metadata
+// schemaForType — custom type found in metadata
 // ===========================================================================
 
 func TestMapGoTypeToOpenAPISchema_CustomTypeFromMetadata(t *testing.T) {
@@ -3634,7 +3569,7 @@ func TestMapGoTypeToOpenAPISchema_CustomTypeFromMetadata(t *testing.T) {
 	cfg := &APISpecConfig{}
 	usedTypes := map[string]*Schema{}
 
-	schema, schemas := mapGoTypeToOpenAPISchema(usedTypes, "myapp-->User", meta, cfg, nil)
+	schema, schemas := schemaForType(usedTypes, "myapp-->User", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	// Schema should be either an object or a ref
 	_ = schemas
@@ -3665,7 +3600,7 @@ func TestMapGoTypeToOpenAPISchema_ArrayOfCustomType(t *testing.T) {
 	usedTypes := map[string]*Schema{}
 
 	// Test with a fixed-size array of custom type
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "[5]myapp-->User", meta, cfg, nil)
+	schema, _ := schemaForType(usedTypes, "[5]myapp-->User", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 	assert.Equal(t, "array", schema.Type)
 }
@@ -3734,6 +3669,39 @@ func TestGenerateSchemas_WithMetadataType(t *testing.T) {
 
 	// The Config type should have been generated into the schemas
 	assert.NotEmpty(t, components.Schemas)
+}
+
+// A versioned external type that ALSO resolves in metadata must keep its
+// configured external component — metadata generation must NOT overwrite it.
+// Regression: the external match at the top of the type loop used a bare
+// `continue`, which only exited the inner ExternalTypes loop and fell through to
+// metadata generation, regenerating the struct schema over the external one.
+func TestGenerateSchemas_VersionedExternalNotOverwrittenByMetadata(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+	// A struct Map declared in a /v2 package: it resolves in metadata under the
+	// versioned key — the same key the external type matches (version-stripped).
+	meta.Packages["github.com/x/v2"] = &metadata.Package{
+		Files: map[string]*metadata.File{"m.go": {Types: map[string]*metadata.Type{
+			"Map": {
+				Name: sp.Get("Map"), Pkg: sp.Get("github.com/x/v2"), Kind: sp.Get("struct"),
+				Fields: []metadata.Field{{Name: sp.Get("K"), Type: sp.Get("string"), Tag: sp.Get(`json:"k"`)}},
+			},
+		}}},
+	}
+	cfg := &APISpecConfig{ExternalTypes: []ExternalType{
+		{Name: "github.com/x.Map", OpenAPIType: &Schema{Type: "object", Format: "EXTERNAL-SENTINEL"}},
+	}}
+	usedTypes := map[string]*Schema{"github.com/x/v2-->Map": nil}
+	components := Components{Schemas: make(map[string]*Schema)}
+
+	generateSchemas(usedTypes, cfg, components, meta)
+
+	key := schemaName("github.com/x/v2-->Map", cfg)
+	got := components.Schemas[key]
+	require.NotNil(t, got, "external component must be registered under the stripped name %q", key)
+	assert.Equal(t, "EXTERNAL-SENTINEL", got.Format,
+		"configured external type must win — metadata generation must not overwrite it")
 }
 
 // ===========================================================================
@@ -3826,7 +3794,7 @@ func TestShortenAllRefs_NilComponents_Mount(_ *testing.T) {
 }
 
 // ===========================================================================
-// mapGoTypeToOpenAPISchema — generic struct instantiation (lines 1938-1950)
+// schemaForType — generic struct instantiation
 // ===========================================================================
 
 func TestMapGoTypeToOpenAPISchema_GenericStruct(t *testing.T) {
@@ -3856,8 +3824,8 @@ func TestMapGoTypeToOpenAPISchema_GenericStruct(t *testing.T) {
 	usedTypes := map[string]*Schema{}
 
 	// Generic struct instantiation with bracket syntax (dot separator, not TypeSep)
-	// TypeParts handles "myapp.APIResponse[myapp.User]" format
-	schema, _ := mapGoTypeToOpenAPISchema(usedTypes, "myapp.APIResponse[myapp.User]", meta, cfg, nil)
+	// schemaForType resolves the "myapp.APIResponse[myapp.User]" format via ParseTypeRef
+	schema, _ := schemaForType(usedTypes, "myapp.APIResponse[myapp.User]", nil, meta, cfg, nil)
 	require.NotNil(t, schema)
 }
 

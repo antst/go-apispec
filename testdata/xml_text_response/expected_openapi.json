@@ -60,9 +60,6 @@
       "xml_text_response.Note": {
         "type": "object",
         "properties": {
-          "XMLName": {
-            "$ref": "#/components/schemas/encoding_xml.Name"
-          },
           "body": {
             "type": "string"
           },
@@ -74,7 +71,6 @@
           }
         },
         "required": [
-          "XMLName",
           "to",
           "from",
           "body"
