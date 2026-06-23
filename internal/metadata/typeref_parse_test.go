@@ -172,3 +172,20 @@ func TestParseTypeRef_OpaqueFuncChanKinds(t *testing.T) {
 		t.Errorf("ParseTypeRef(Pair[int,string]).Kind = %v, want RefNamed", r)
 	}
 }
+
+// ParseTypeRef must reject malformed inputs with stray/unbalanced generic brackets
+// by returning nil, rather than manufacturing a named type whose Name embeds a
+// bracket (e.g. "Foo[Bar") — which would dangle a $ref through schema resolution.
+func TestParseTypeRef_RejectsUnbalancedBrackets(t *testing.T) {
+	for _, s := range []string{"Foo[Bar", "Box[int", "Foo]", "][", "a[b[c", "Foo[Bar]Baz", "pkg.Foo[Bar"} {
+		if r := ParseTypeRef(s); r != nil {
+			t.Errorf("ParseTypeRef(%q) = %+v, want nil (unbalanced brackets)", s, r)
+		}
+	}
+	// Well-formed named and generic types (incl. nested args) still parse to RefNamed.
+	for _, s := range []string{"Box[int]", "models.User", "Pair[K,V]", "Box[[]int]", "Outer[Map[K,V],T]"} {
+		if r := ParseTypeRef(s); r == nil || r.Kind != RefNamed {
+			t.Errorf("ParseTypeRef(%q) = %v, want RefNamed", s, r)
+		}
+	}
+}

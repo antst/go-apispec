@@ -566,6 +566,14 @@ func parseNamedRef(s string) *TypeRef {
 		}
 		s = s[:open]
 	}
+	// After stripping a balanced generic arg list, a well-formed base name carries
+	// no brackets. A residual '[' or ']' means the input was malformed — an
+	// unbalanced/stray bracket (e.g. "Foo[Bar", "Box[int", "Foo]") — so reject it
+	// (return nil) rather than manufacturing a bogus named type whose Name embeds a
+	// bracket and would dangle a $ref through schema resolution.
+	if strings.ContainsAny(s, "[]") {
+		return nil
+	}
 	ref := &TypeRef{Kind: RefNamed, Name: s, Args: args}
 	// Split a package qualifier off the LAST dot (import paths contain dots, but
 	// the type name never does); a dotless string is an unqualified name.
