@@ -15,6 +15,7 @@
 package spec
 
 import (
+	"encoding/json"
 	"fmt"
 	"go/types"
 	"maps"
@@ -1396,15 +1397,6 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			fieldSchema = &Schema{}
 		}
 
-		// The json `,string` option makes encoding/json marshal a string/number/
-		// bool field as a QUOTED JSON string, so its schema becomes {type:string}
-		// regardless of the Go type. encoding/json applies the option only to
-		// those scalar kinds; mirror that gate so a `,string` on a struct/array/
-		// map (where Go ignores it) is left untouched.
-		if jsonHasStringOption(fieldTagStr) {
-			applyJSONStringOption(fieldSchema)
-		}
-
 		// Required inference composes (issue #48): a field is required by Go
 		// default when its json tag has no omitempty (the zero value is always
 		// serialized), and a `validate:"required"` constraint forces it. A
@@ -1422,6 +1414,18 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			schema.Required = append(schema.Required, fieldName)
 		}
 
+		// The json `,string` option makes encoding/json marshal a string/number/
+		// bool field as a QUOTED JSON string, so its schema becomes {type:string}
+		// regardless of the Go type. encoding/json applies the option only to those
+		// scalar kinds; mirror that gate so a `,string` on a struct/array/map (where
+		// Go ignores it) is left untouched. Applied AFTER validation so a numeric
+		// `validate:"min/max"` is interpreted as a VALUE bound and then cleared with
+		// the other numeric facets — not reinterpreted as a string-LENGTH bound on
+		// the forced {type:string}.
+		if jsonHasStringOption(fieldTagStr) {
+			applyJSONStringOption(fieldSchema)
+		}
+
 		// `apispec:"..."` is the user's explicit override — applied last so it
 		// wins over both validator constraints and Go-type-derived defaults.
 		applyAPISpecTag(fieldSchema, parseAPISpecTag(fieldTagStr))
@@ -1435,13 +1439,6 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			// Only detect enums for custom types, not built-in types like string, int, etc.
 			if !metadata.IsPrimitiveType(originalFieldType) {
 				if enumValues := detectEnumFromConstants(originalFieldType, pkgName, meta); len(enumValues) > 0 {
-					// A `,string` field marshals its value as a QUOTED JSON string,
-					// so applyJSONStringOption already forced {type:string}; its enum
-					// members must be the string forms ("1","2"), not the raw int
-					// constants, which would never validate against type:string.
-					if jsonHasStringOption(fieldTagStr) {
-						enumValues = stringifyEnumValues(enumValues)
-					}
 					switch fieldSchema.Type {
 					case "array":
 						fieldSchema.Items.Enum = enumValues
@@ -1450,6 +1447,15 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 							fieldSchema.AdditionalProperties.Enum = enumValues
 						}
 					default:
+						// encoding/json applies the `,string` option only to a SCALAR
+						// field, which applyJSONStringOption already forced to
+						// {type:string}; its enum members are then the quoted-string
+						// forms ("1","2"), not the raw constants that could never
+						// validate against type:string. An array/object field (Go
+						// ignores ,string there) keeps its raw element members above.
+						if jsonHasStringOption(fieldTagStr) {
+							enumValues = stringifyEnumValues(enumValues)
+						}
 						fieldSchema.Enum = enumValues
 					}
 				}
@@ -1625,12 +1631,18 @@ func bindTypeParams(args []*metadata.TypeRef, typeParams []string) map[string]*m
 	positional := []string{"T", "U", "V", "W", "X", "Y", "Z"}
 	bindings := make(map[string]*metadata.TypeRef, len(args))
 	for i, arg := range args {
-		name := positional[0]
-		if i < len(positional) {
-			name = positional[i]
-		}
-		if i < len(typeParams) {
+		// Prefer the DECLARED parameter name; fall back to the conventional
+		// positional letter only for the first len(positional) args. Beyond that
+		// with no declared name there is no sound name to bind to — skip rather
+		// than collide every extra arg onto positional[0] ("T").
+		var name string
+		switch {
+		case i < len(typeParams):
 			name = typeParams[i]
+		case i < len(positional):
+			name = positional[i]
+		default:
+			continue
 		}
 		bindings[name] = arg
 	}
@@ -1714,16 +1726,15 @@ func getStringFromPool(meta *metadata.Metadata, idx int) string {
 
 // hasOmitempty checks if the json tag contains the omitempty option.
 func hasOmitempty(tag string) bool {
-	if !strings.Contains(tag, "json:") {
+	// Same reflect.StructTag parse as jsonFieldName/jsonHasStringOption (one tag
+	// parser, not three): the option list is everything after the name, so a field
+	// literally named "...omitempty..." is no longer a false positive.
+	value, ok := reflect.StructTag(tag).Lookup("json")
+	if !ok {
 		return false
 	}
-	parts := strings.Split(tag, "json:")
-	if len(parts) < 2 {
-		return false
-	}
-	jsonPart := strings.Split(parts[1], " ")[0]
-	jsonPart = strings.Trim(jsonPart, "\"")
-	return strings.Contains(jsonPart, "omitempty")
+	parts := strings.Split(value, ",")
+	return slices.Contains(parts[1:], "omitempty")
 }
 
 // extractJSONName extracts JSON name from a struct tag
@@ -1816,19 +1827,30 @@ func applyJSONStringOption(s *Schema) {
 		s.ExclusiveMaximum = false
 		s.MultipleOf = 0
 	case "string":
-		// Already a string on the wire; the option is a no-op.
+		// Left as {type:string}. A `,string` STRING field is the one case Go does
+		// not cleanly round-trip — it double-encodes (the value becomes a JSON
+		// string literal, "\"hi\"") — but OpenAPI has no clean way to express
+		// "a JSON value encoded inside a string", so {type:string} is the closest
+		// honest shape rather than a guaranteed-exact one.
 	}
 }
 
 // stringifyEnumValues rewrites enum members to the string forms encoding/json
-// produces under the `,string` option: an integer 1 marshals as "1", a bool as
-// "true". Values that are already strings are kept as-is. Used to keep a
-// `,string`-tagged field's detected enum consistent with its forced {type:string}.
+// produces under the `,string` option, keeping a `,string`-tagged scalar field's
+// detected enum consistent with its forced {type:string}. Under `,string` the
+// value is marshaled normally and that text becomes the JSON string's content, so
+// json.Marshal yields the exact wire form: int64(1)->"1", float64(1e6)->"1000000"
+// (NOT fmt's "1e+06"), bool true->"true". An already-string member is kept as-is
+// (a `,string` string field double-encodes — a rare shape we do not model).
 func stringifyEnumValues(values []interface{}) []interface{} {
 	out := make([]interface{}, len(values))
 	for i, v := range values {
 		if s, ok := v.(string); ok {
 			out[i] = s
+			continue
+		}
+		if b, err := json.Marshal(v); err == nil {
+			out[i] = string(b)
 			continue
 		}
 		out[i] = fmt.Sprintf("%v", v)

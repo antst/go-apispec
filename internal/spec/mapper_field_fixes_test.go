@@ -9,6 +9,7 @@
 package spec
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -99,15 +100,25 @@ func TestApplyJSONStringOption(t *testing.T) {
 // `,string`-tagged field marshals (FIX 4), leaving existing strings untouched and
 // preserving order.
 func TestStringifyEnumValues(t *testing.T) {
-	got := stringifyEnumValues([]interface{}{0, 1, 2})
+	got := stringifyEnumValues([]interface{}{int64(0), int64(1), int64(2)})
 	assert.Equal(t, []interface{}{"0", "1", "2"}, got, "ints become quoted-string forms")
 
 	assert.Equal(t, []interface{}{"true", "false"}, stringifyEnumValues([]interface{}{true, false}),
 		"bools become their string forms")
 
+	// Floats use encoding/json's number form, NOT fmt's %v: 1e6 -> "1000000",
+	// not "1e+06" (which no real ,string wire value would ever match).
+	assert.Equal(t, []interface{}{"1000000", "0.0001"},
+		stringifyEnumValues([]interface{}{float64(1000000), float64(0.0001)}),
+		"floats match encoding/json, not fmt scientific notation")
+
 	// Already strings: kept as-is; order preserved alongside a converted value.
-	assert.Equal(t, []interface{}{"admin", "1"}, stringifyEnumValues([]interface{}{"admin", 1}),
+	assert.Equal(t, []interface{}{"admin", "1"}, stringifyEnumValues([]interface{}{"admin", int64(1)}),
 		"existing strings untouched, order preserved")
+
+	// json.Marshal-unrepresentable value (Inf) falls back to fmt %v without panicking.
+	assert.Equal(t, []interface{}{"+Inf"}, stringifyEnumValues([]interface{}{math.Inf(1)}),
+		"a value json cannot marshal falls back to fmt %v")
 
 	assert.Empty(t, stringifyEnumValues(nil))
 }
@@ -193,6 +204,17 @@ func TestBindTypeParams(t *testing.T) {
 	got = bindTypeParams([]*metadata.TypeRef{intRef, strRef}, nil)
 	assert.Same(t, intRef, got["T"])
 	assert.Same(t, strRef, got["U"])
+
+	// More args than positional letters AND no declared names: the first 7 bind to
+	// T..Z, and the 8th has no sound name — it is SKIPPED, never collided onto "T".
+	many := make([]*metadata.TypeRef, 8)
+	for i := range many {
+		many[i] = &metadata.TypeRef{Kind: metadata.RefBasic, Name: "t" + string(rune('0'+i))}
+	}
+	got = bindTypeParams(many, nil)
+	assert.Len(t, got, 7, "only the 7 positional letters bind; the 8th arg is skipped")
+	assert.Same(t, many[0], got["T"], "first arg keeps T — not clobbered by the 8th")
+	assert.Same(t, many[6], got["Z"])
 }
 
 func TestRefHasUnboundParam(t *testing.T) {

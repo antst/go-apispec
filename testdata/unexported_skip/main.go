@@ -8,7 +8,9 @@
 //     kept (FIX 2);
 //   - a numeric/bool field with the `,string` option marshals as a quoted JSON
 //     string, so its schema is {type:string} (FIX 4) — and a named-integer enum
-//     tagged `,string` carries its enum members as STRINGS, not raw ints (FIX 4).
+//     tagged `,string` carries its enum members as STRINGS, not raw ints (FIX 4);
+//   - but `,string` on a SLICE/map is ignored by encoding/json, so a `[]Enum`
+//     field keeps a raw integer element enum, never stringified (FIX 4).
 //
 // Embedded promotion is included so the unexported-leaf skip is exercised through
 // field promotion as well as direct fields.
@@ -46,12 +48,14 @@ type Account struct {
 	Name     string  `json:"name"`
 	password string  // unexported — never marshaled, must be skipped
 	internal int     // unexported — never marshaled, must be skipped
-	Token    string  `json:"-"`             // explicit skip — must be omitted
-	Dash     string  `json:"-,"`            // literal field name "-" — must be KEPT
-	Balance  int64   `json:",string"`       // quoted-string number — {type:string}, name "Balance"
-	Ratio    float64 `json:"ratio,string"`  // quoted-string number under explicit json name
-	Active   bool    `json:"active,string"` // quoted-string bool — {type:string}
-	Tier     Tier    `json:"tier,string"`   // named-int enum + ,string → {type:string, enum:["0","1","2"]}
+	Token    string  `json:"-"`                                // explicit skip — must be omitted
+	Dash     string  `json:"-,"`                               // literal field name "-" — must be KEPT
+	Balance  int64   `json:",string"`                          // quoted-string number — {type:string}, name "Balance"
+	Ratio    float64 `json:"ratio,string"`                     // quoted-string number under explicit json name
+	Active   bool    `json:"active,string"`                    // quoted-string bool — {type:string}
+	Tier     Tier    `json:"tier,string"`                      // named-int enum + ,string → {type:string, enum:["0","1","2"]}
+	Tiers    []Tier  `json:"tiers,string"`                     // ,string is IGNORED on a slice → array of RAW int enum [0,1,2]
+	Capped   int     `json:"capped,string" validate:"max=100"` // ,string + numeric validate → clean {type:string}, no maxLength
 }
 
 func getAccount(w http.ResponseWriter, r *http.Request) {

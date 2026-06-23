@@ -42,6 +42,9 @@
           "active": {
             "type": "string"
           },
+          "capped": {
+            "type": "string"
+          },
           "createdBy": {
             "type": "string"
           },
@@ -61,6 +64,17 @@
               "1",
               "2"
             ]
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "enum": [
+                0,
+                1,
+                2
+              ]
+            }
           }
         },
         "required": [
@@ -71,6 +85,8 @@
           "ratio",
           "active",
           "tier",
+          "tiers",
+          "capped",
           "createdBy"
         ]
       }
