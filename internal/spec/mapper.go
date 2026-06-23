@@ -20,6 +20,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -1211,19 +1212,9 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 	// then instantiated by substituting these bindings into each field's TypeRef
 	// (SubstituteParams), replacing the former string-pattern substitution.
 	keyRef := metadata.ParseTypeRef(key)
-	genericRefs := map[string]*metadata.TypeRef{}
-	if keyRef != nil && len(keyRef.Args) > 0 {
-		positional := []string{"T", "U", "V", "W", "X", "Y", "Z"}
-		for i, arg := range keyRef.Args {
-			name := positional[0]
-			if i < len(positional) {
-				name = positional[i]
-			}
-			if i < len(typ.TypeParams) {
-				name = typ.TypeParams[i]
-			}
-			genericRefs[name] = arg
-		}
+	var genericRefs map[string]*metadata.TypeRef
+	if keyRef != nil {
+		genericRefs = bindTypeParams(keyRef.Args, typ.TypeParams)
 	}
 
 	schema := &Schema{
@@ -1274,6 +1265,24 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			continue
 		}
 
+		fieldTagStr := getStringFromPool(meta, field.Tag)
+
+		// encoding/json never marshals an unexported field, so it has no JSON
+		// representation: omit it from both Properties and Required (it would
+		// otherwise leak as a phantom property). The blank `_` marker is handled
+		// above; every other unexported field is dropped here.
+		if getStringFromPool(meta, field.Scope) == metadata.ScopeUnexported {
+			continue
+		}
+
+		// A field tagged exactly `json:"-"` is explicitly excluded by
+		// encoding/json — drop it entirely. (jsonFieldName distinguishes this
+		// from a missing json tag and from the literal `json:"-,"` name "-".)
+		jsonName, jsonSkip, _ := jsonFieldName(fieldTagStr)
+		if jsonSkip {
+			continue
+		}
+
 		// Resolve an alias/enum field to its underlying type, but not a slice or map
 		// (those keep the original type for element enum detection) — decided on the
 		// ref kind, not the string.
@@ -1293,14 +1302,14 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			}
 		}
 
-		// Extract JSON tag if present
-		jsonName := extractJSONName(getStringFromPool(meta, field.Tag))
+		// An explicit json name overrides the Go field name; an empty name part
+		// (e.g. `json:",omitempty"`) keeps the Go field name.
 		if jsonName != "" {
 			fieldName = jsonName
 		}
 
 		// Extract validation constraints from struct tag
-		validationConstraints := extractValidationConstraints(getStringFromPool(meta, field.Tag))
+		validationConstraints := extractValidationConstraints(fieldTagStr)
 
 		// Generate schema for field type
 		var fieldSchema *Schema
@@ -1376,14 +1385,22 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			continue
 		}
 
+		// The json `,string` option makes encoding/json marshal a string/number/
+		// bool field as a QUOTED JSON string, so its schema becomes {type:string}
+		// regardless of the Go type. encoding/json applies the option only to
+		// those scalar kinds; mirror that gate so a `,string` on a struct/array/
+		// map (where Go ignores it) is left untouched.
+		if jsonHasStringOption(fieldTagStr) {
+			applyJSONStringOption(fieldSchema)
+		}
+
 		// Required inference composes (issue #48): a field is required by Go
 		// default when its json tag has no omitempty (the zero value is always
 		// serialized), and a `validate:"required"` constraint forces it. A
 		// validate tag *without* required (e.g. `oneof=...`, `min=0`) must add
 		// its constraints without suppressing the omitempty-based inference —
 		// the previous either/else silently dropped such fields from required.
-		fieldTag := getStringFromPool(meta, field.Tag)
-		required := !hasOmitempty(fieldTag)
+		required := !hasOmitempty(fieldTagStr)
 		if validationConstraints != nil {
 			applyValidationConstraints(fieldSchema, validationConstraints)
 			if validationConstraints.Required {
@@ -1396,7 +1413,7 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 
 		// `apispec:"..."` is the user's explicit override — applied last so it
 		// wins over both validator constraints and Go-type-derived defaults.
-		applyAPISpecTag(fieldSchema, parseAPISpecTag(getStringFromPool(meta, field.Tag)))
+		applyAPISpecTag(fieldSchema, parseAPISpecTag(fieldTagStr))
 
 		// Detect and apply enum values from constants if no enum was specified in tags
 		// Only apply enum detection for custom types (not built-in types)
@@ -1407,6 +1424,13 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 			// Only detect enums for custom types, not built-in types like string, int, etc.
 			if !metadata.IsPrimitiveType(originalFieldType) {
 				if enumValues := detectEnumFromConstants(originalFieldType, pkgName, meta); len(enumValues) > 0 {
+					// A `,string` field marshals its value as a QUOTED JSON string,
+					// so applyJSONStringOption already forced {type:string}; its enum
+					// members must be the string forms ("1","2"), not the raw int
+					// constants, which would never validate against type:string.
+					if jsonHasStringOption(fieldTagStr) {
+						enumValues = stringifyEnumValues(enumValues)
+					}
 					switch fieldSchema.Type {
 					case "array":
 						fieldSchema.Items.Enum = enumValues
@@ -1564,7 +1588,64 @@ func definedOtherUnderlying(ref *metadata.TypeRef, meta *metadata.Metadata) stri
 	if typ == nil || getStringFromPool(meta, typ.Kind) != "other" || typ.UnderlyingRef == nil {
 		return ""
 	}
-	return typ.UnderlyingRef.String()
+	// A GENERIC defined-other type (`type Box[T any] map[string]T`, field
+	// `Box[int]`) carries its concrete args on ref.Args; bind them to the declared
+	// params and substitute into the underlying so `Box[int]` -> "map[string]int"
+	// instead of dangling the raw "map[string]T". A non-generic type has no args,
+	// so the substitution is a no-op. If a param is still unbound afterwards
+	// (substitution couldn't fully resolve it), OMIT rather than emit a $ref to the
+	// bare type parameter "T".
+	underlying := typ.UnderlyingRef.SubstituteParams(bindTypeParams(ref.Args, typ.TypeParams))
+	if refHasUnboundParam(underlying) {
+		return ""
+	}
+	return underlying.String()
+}
+
+// bindTypeParams maps a generic instantiation's concrete type arguments to the
+// declared type-parameter names, binding Pair[K,V] to K and V (decision D3) and
+// falling back to the positional placeholder T/U/V… when the declared names are
+// unavailable or fewer than the args. Returns nil for no args (so SubstituteParams
+// short-circuits). Shared by the struct field loop and definedOtherUnderlying.
+func bindTypeParams(args []*metadata.TypeRef, typeParams []string) map[string]*metadata.TypeRef {
+	if len(args) == 0 {
+		return nil
+	}
+	positional := []string{"T", "U", "V", "W", "X", "Y", "Z"}
+	bindings := make(map[string]*metadata.TypeRef, len(args))
+	for i, arg := range args {
+		name := positional[0]
+		if i < len(positional) {
+			name = positional[i]
+		}
+		if i < len(typeParams) {
+			name = typeParams[i]
+		}
+		bindings[name] = arg
+	}
+	return bindings
+}
+
+// refHasUnboundParam reports whether the tree still contains a RefParam node — a
+// type parameter that substitution did not bind. Such a ref has no concrete
+// schema, so the caller omits the field rather than emit a dangling $ref to the
+// bare parameter name.
+func refHasUnboundParam(t *metadata.TypeRef) bool {
+	if t == nil {
+		return false
+	}
+	if t.Kind == metadata.RefParam {
+		return true
+	}
+	if refHasUnboundParam(t.Elem) || refHasUnboundParam(t.Key) {
+		return true
+	}
+	for _, a := range t.Args {
+		if refHasUnboundParam(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // rewrapUnderlying rebuilds the full wrapper chain of ref around `underlying`,
@@ -1658,6 +1739,90 @@ func extractJSONName(tag string) string {
 	}
 
 	return ""
+}
+
+// jsonFieldName parses a struct tag's json directive with encoding/json's exact
+// semantics, distinguishing the three cases extractJSONName collapses:
+//
+//   - present=false: no json tag at all (or a non-json tag). The caller keeps
+//     the Go field name.
+//   - skip=true: the tag is exactly `json:"-"`. encoding/json never marshals the
+//     field, so the caller must OMIT it entirely (issue: a `json:"-"` field used
+//     to leak under the Go field name because extractJSONName returned "").
+//   - otherwise: name is the explicit JSON name, or "" when the name part is
+//     empty (e.g. `json:",omitempty"` / `json:",string"`), in which case the
+//     caller keeps the Go field name.
+//
+// The Go subtlety `json:"-,"` (a trailing comma) names a field literally "-"
+// and is NOT a skip — reflect.StructTag.Get yields value "-," whose first
+// segment is "-" with a (here empty) option, so only a BARE "-" is treated as
+// skip.
+func jsonFieldName(tag string) (name string, skip bool, present bool) {
+	value, ok := reflect.StructTag(tag).Lookup("json")
+	if !ok {
+		return "", false, false
+	}
+	if value == "-" {
+		return "", true, true
+	}
+	if i := strings.IndexByte(value, ','); i >= 0 {
+		value = value[:i]
+	}
+	return value, false, true
+}
+
+// jsonHasStringOption reports whether the struct tag's json directive carries
+// the `,string` option (e.g. `json:",string"` or `json:"count,string"`).
+// encoding/json marshals such a field as a QUOTED JSON string regardless of the
+// Go type, so its schema is forced to {type:string}. Only string/number/bool
+// fields honour the option in encoding/json, so the caller gates on that.
+func jsonHasStringOption(tag string) bool {
+	value, ok := reflect.StructTag(tag).Lookup("json")
+	if !ok {
+		return false
+	}
+	parts := strings.Split(value, ",")
+	return slices.Contains(parts[1:], "string")
+}
+
+// applyJSONStringOption rewrites a scalar field schema to {type:string} for the
+// json `,string` option. encoding/json honours the option only for string,
+// integer/float, and bool fields, so a non-scalar schema (struct $ref, array,
+// object) is left untouched — Go ignores `,string` there too. The numeric
+// format/bounds carried by the original integer/number schema no longer describe
+// the quoted-string wire form, so they are cleared.
+func applyJSONStringOption(s *Schema) {
+	if s == nil {
+		return
+	}
+	switch s.Type {
+	case "integer", "number", "boolean":
+		s.Type = "string"
+		s.Format = ""
+		s.Minimum = nil
+		s.Maximum = nil
+		s.ExclusiveMinimum = false
+		s.ExclusiveMaximum = false
+		s.MultipleOf = 0
+	case "string":
+		// Already a string on the wire; the option is a no-op.
+	}
+}
+
+// stringifyEnumValues rewrites enum members to the string forms encoding/json
+// produces under the `,string` option: an integer 1 marshals as "1", a bool as
+// "true". Values that are already strings are kept as-is. Used to keep a
+// `,string`-tagged field's detected enum consistent with its forced {type:string}.
+func stringifyEnumValues(values []interface{}) []interface{} {
+	out := make([]interface{}, len(values))
+	for i, v := range values {
+		if s, ok := v.(string); ok {
+			out[i] = s
+			continue
+		}
+		out[i] = fmt.Sprintf("%v", v)
+	}
+	return out
 }
 
 // ValidationConstraints represents validation constraints extracted from struct tags
@@ -2204,6 +2369,15 @@ func schemaFromTypeRef(ref *metadata.TypeRef, cfg *APISpecConfig) *Schema {
 	if s := typeMappingForLeaf(ref, cfg); s != nil {
 		return s
 	}
+	// json.RawMessage round-trips arbitrary JSON (it implements json.Marshaler),
+	// so its schema is the empty schema {} — any JSON value — NOT the base64
+	// string its []byte underlying would otherwise produce. Checked here (after a
+	// config override, before the named-type resolver that would emit a dangling
+	// $ref to the external type) so *RawMessage and []RawMessage compose through
+	// the pointer/slice recursion (-> {} and array-of-{} respectively).
+	if metadata.IsJSONRawMessageRef(ref) {
+		return &Schema{}
+	}
 	switch ref.Kind {
 	case metadata.RefPointer:
 		return schemaFromTypeRef(ref.Elem, cfg) // a pointer is transparent to the schema
@@ -2567,7 +2741,10 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 		// A defined type whose underlying is not struct/alias/interface (a defined
 		// map/slice/array/func/chan). Resolve its captured UnderlyingRef directly
 		// here and return — it must NOT fall through to generateSchemaFromType.
-		return schemaForOtherKind(usedTypes, typ, goType, meta, cfg, visitedTypes)
+		// ref carries the instantiation's concrete args (e.g. []Box[int] -> the Box
+		// leaf with Args=[int]); thread them so a GENERIC defined-other element
+		// substitutes its type params instead of omitting/dangling.
+		return schemaForOtherKind(usedTypes, typ, ref, goType, meta, cfg, visitedTypes)
 	default:
 		return nil, nil, false
 	}
@@ -2604,10 +2781,21 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 // array, etc.); a genuinely opaque func/chan underlying yields NO schema (the
 // field is omitted, not a dangling $ref). A self-referential definition is
 // broken with a generic object via the cycle guard.
-func schemaForOtherKind(usedTypes map[string]*Schema, typ *metadata.Type, goType string, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
+func schemaForOtherKind(usedTypes map[string]*Schema, typ *metadata.Type, ref *metadata.TypeRef, goType string, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
 	u := typ.UnderlyingRef
 	if u == nil {
 		return &Schema{Type: "object"}, map[string]*Schema{}, true // legacy fallback when no underlying was captured
+	}
+	// A GENERIC defined-other element ([]Box[int], where `type Box[T any]
+	// map[string]T`): ref carries the concrete args, so substitute them into the
+	// underlying — `map[string]T` -> `map[string]int` — before resolving. A
+	// non-generic type has no args (no-op). A param left unbound has no schema, so
+	// omit the field rather than dangle a $ref to the bare "T".
+	if ref != nil && len(ref.Args) > 0 {
+		u = u.SubstituteParams(bindTypeParams(ref.Args, typ.TypeParams))
+		if refHasUnboundParam(u) {
+			return nil, nil, true
+		}
 	}
 	if visitedTypes[goType+schemaCycleGuardKey] {
 		return &Schema{Type: "object"}, map[string]*Schema{}, true // self-referential defined type
@@ -2663,7 +2851,14 @@ func canAddRefSchemaForType(key string) bool {
 	// (A named leaf with func/chan ARGS — Pair[func(),int] — is NOT unwrapped into
 	// its Args, so a real generic stays componentizable.)
 	if r := metadata.ParseTypeRef(key); r != nil {
-		if leaf := r.NamedLeaf(); leaf != nil && (leaf.Kind == metadata.RefFunc || leaf.Kind == metadata.RefChan) {
+		leaf := r.NamedLeaf()
+		if leaf != nil && (leaf.Kind == metadata.RefFunc || leaf.Kind == metadata.RefChan) {
+			return false
+		}
+		// json.RawMessage is inlined as the empty schema {} (schemaFromTypeRef), so
+		// it is never a named component — a $ref to a "RawMessage" component would
+		// dangle (it is never generated). Parallels the func/chan leaf rule above.
+		if metadata.IsJSONRawMessageRef(leaf) {
 			return false
 		}
 	}

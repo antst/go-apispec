@@ -92,6 +92,17 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "maps_variety", inputDir: "../../testdata/maps_variety", configFn: spec.DefaultHTTPConfig},
 		{name: "arrays_variety", inputDir: "../../testdata/arrays_variety", configFn: spec.DefaultHTTPConfig},
 		{name: "fixed_arrays", inputDir: "../../testdata/fixed_arrays", configFn: spec.DefaultHTTPConfig},
+		// Field visibility + json-tag options: unexported fields and `json:"-"` are
+		// dropped (encoding/json never marshals them), `json:"-,"` keeps a literal
+		// "-" name, and the `,string` option forces {type:string} on a scalar.
+		{name: "unexported_skip", inputDir: "../../testdata/unexported_skip", configFn: spec.DefaultHTTPConfig},
+		// json.RawMessage round-trips raw JSON -> empty schema {} (not base64),
+		// composing through pointer and slice; a plain []byte stays base64.
+		{name: "raw_message", inputDir: "../../testdata/raw_message", configFn: spec.DefaultHTTPConfig},
+		// Generic defined-"other" types (type Box[T any] map[string]T): a field of
+		// Box[int] substitutes T -> int (map[string]int), in direct/pointer/slice
+		// positions, instead of dangling a $ref to the bare parameter.
+		{name: "generic_container", inputDir: "../../testdata/generic_container", configFn: spec.DefaultHTTPConfig},
 		// Defined non-struct/alias/interface types (Kind "other": a defined map,
 		// slice, nested-slice, func). A field of such a type must resolve from its
 		// captured underlying shape, not emit a dangling $ref; a func underlying is

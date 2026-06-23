@@ -139,8 +139,40 @@ func (t *TypeResolverImpl) resolveTypeFromArgument(arg metadata.CallArgument) st
 	}
 }
 
+// typeRefStringIsLossy reports whether a TypeRef of the given kind stringifies to
+// a bare keyword that loses information the pooled arg.Type still carries, so the
+// pooled type is the better answer for it:
+//
+//   - RefParam ("T") has no concrete type at all;
+//   - RefFunc / RefChan stringify to "func" / "chan" WITHOUT the signature, but
+//     resolveCallType needs the full "func(...)..." form to extract a callee's
+//     return type — preferring the bare "func" silently breaks that extraction.
+//
+// Every other kind (named types and the containers around them) stringifies to a
+// fully-qualified form that is at least as good as the frequently-bare pooled type.
+func typeRefStringIsLossy(k metadata.RefKind) bool {
+	switch k {
+	case metadata.RefParam, metadata.RefFunc, metadata.RefChan:
+		return true
+	default:
+		return false
+	}
+}
+
 // resolveIdentType resolves type for identifier arguments
 func (t *TypeResolverImpl) resolveIdentType(arg metadata.CallArgument) string {
+	// Prefer the structured TypeRef when present: it is fully package-qualified
+	// ("github.com/x/models.User"), whereas the pooled arg.Type is frequently the
+	// bare name ("User") and would force resolveSelectorType to guess the package.
+	// Mirrors the variable.TypeRef preference below. Some kinds are excluded
+	// because their String() is a bare keyword that DROPS information the pooled
+	// arg.Type still carries (see typeRefStringIsLossy).
+	if arg.TypeRef != nil && !typeRefStringIsLossy(arg.TypeRef.Kind) {
+		if s := arg.TypeRef.String(); s != "" {
+			return s
+		}
+	}
+
 	// If we have a direct type, use it
 	if arg.Type != -1 {
 		return arg.GetType()

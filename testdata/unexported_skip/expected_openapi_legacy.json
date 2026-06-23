@@ -1,0 +1,79 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/account": {
+      "get": {
+        "operationId": "unexported_skip.getAccount",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/unexported_skip.Account"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "unexported_skip.Account": {
+        "type": "object",
+        "properties": {
+          "-": {
+            "type": "string"
+          },
+          "Balance": {
+            "type": "string"
+          },
+          "active": {
+            "type": "string"
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ratio": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "0",
+              "1",
+              "2"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "-",
+          "Balance",
+          "ratio",
+          "active",
+          "tier",
+          "createdBy"
+        ]
+      }
+    }
+  }
+}

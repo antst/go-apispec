@@ -269,8 +269,17 @@ func lookupStructFields(bodyType string, meta *metadata.Metadata) map[string]str
 		if goName == "" {
 			continue
 		}
+		// Mirror generateStructSchema's field visibility: an unexported field and a
+		// `json:"-"` field have no property in the schema, so there is nothing to
+		// infer a format onto — skip them here too rather than carry a phantom entry.
+		if stringFromPool(meta, field.Scope) == metadata.ScopeUnexported {
+			continue
+		}
 		tag := stringFromPool(meta, field.Tag)
-		jsonName := extractJSONName(tag)
+		jsonName, skip, _ := jsonFieldName(tag)
+		if skip {
+			continue
+		}
 		if jsonName == "" {
 			jsonName = goName
 		}

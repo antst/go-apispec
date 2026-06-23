@@ -153,6 +153,33 @@ func TestLookupStructFields_TypeMissingInAllFiles(t *testing.T) {
 	assert.Nil(t, lookupStructFields("pkg.Req", meta))
 }
 
+func TestLookupStructFields_SkipsUnexportedAndDash(t *testing.T) {
+	// Mirror the schema generator: an unexported field and a `json:"-"` field have
+	// no property, so the format-inference map must not carry a phantom entry for
+	// them. A `json:"-,"` field keeps the literal "-" name.
+	meta := newTestMeta()
+	sp := meta.StringPool
+	meta.Packages = map[string]*metadata.Package{
+		"pkg": {
+			Files: map[string]*metadata.File{
+				"f.go": {Types: map[string]*metadata.Type{
+					"Req": {
+						Name: sp.Get("Req"),
+						Fields: []metadata.Field{
+							{Name: sp.Get("ID"), Tag: sp.Get(`json:"id"`), Scope: sp.Get(metadata.ScopeExported)},
+							{Name: sp.Get("secret"), Scope: sp.Get(metadata.ScopeUnexported)},
+							{Name: sp.Get("Token"), Tag: sp.Get(`json:"-"`), Scope: sp.Get(metadata.ScopeExported)},
+							{Name: sp.Get("Dash"), Tag: sp.Get(`json:"-,"`), Scope: sp.Get(metadata.ScopeExported)},
+						},
+					},
+				}},
+			},
+		},
+	}
+	got := lookupStructFields("pkg.Req", meta)
+	assert.Equal(t, map[string]string{"ID": "id", "Dash": "-"}, got)
+}
+
 func TestLookupStructFields_FieldWithEmptyName_Skipped(t *testing.T) {
 	// Defensive: a field whose Name index resolves to "" is skipped rather
 	// than producing an empty-string key in the result.

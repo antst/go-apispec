@@ -507,7 +507,7 @@ func TestSchemaForOtherKind(t *testing.T) {
 		u := &metadata.TypeRef{Kind: metadata.RefMap, Key: b("string"), Elem: b("string")}
 		meta := otherKindType("Tags", "pkg", u)
 		typ := meta.Packages["pkg"].Files["f.go"].Types["Tags"]
-		s, ns, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Tags", meta, &APISpecConfig{}, map[string]bool{})
+		s, ns, ok := schemaForOtherKind(map[string]*Schema{}, typ, nil, "pkg.Tags", meta, &APISpecConfig{}, map[string]bool{})
 		assert.True(t, ok)
 		assert.Equal(t, &Schema{Type: "object", AdditionalProperties: &Schema{Type: "string"}}, s)
 		assert.Empty(t, ns)
@@ -517,7 +517,7 @@ func TestSchemaForOtherKind(t *testing.T) {
 		u := &metadata.TypeRef{Kind: metadata.RefSlice, Elem: b("int")}
 		meta := otherKindType("Codes", "pkg", u)
 		typ := meta.Packages["pkg"].Files["f.go"].Types["Codes"]
-		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Codes", meta, &APISpecConfig{}, map[string]bool{})
+		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, nil, "pkg.Codes", meta, &APISpecConfig{}, map[string]bool{})
 		assert.True(t, ok)
 		assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "integer"}}, s)
 	})
@@ -526,7 +526,7 @@ func TestSchemaForOtherKind(t *testing.T) {
 		u := &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefSlice, Elem: b("float64")}}
 		meta := otherKindType("Matrix", "pkg", u)
 		typ := meta.Packages["pkg"].Files["f.go"].Types["Matrix"]
-		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Matrix", meta, &APISpecConfig{}, map[string]bool{})
+		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, nil, "pkg.Matrix", meta, &APISpecConfig{}, map[string]bool{})
 		assert.True(t, ok)
 		assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "array", Items: &Schema{Type: "number"}}}, s)
 	})
@@ -534,7 +534,7 @@ func TestSchemaForOtherKind(t *testing.T) {
 	t.Run("func underlying -> no schema (field omitted, no dangling $ref)", func(t *testing.T) {
 		meta := otherKindType("Handler", "pkg", &metadata.TypeRef{Kind: metadata.RefFunc})
 		typ := meta.Packages["pkg"].Files["f.go"].Types["Handler"]
-		s, ns, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Handler", meta, &APISpecConfig{}, map[string]bool{})
+		s, ns, ok := schemaForOtherKind(map[string]*Schema{}, typ, nil, "pkg.Handler", meta, &APISpecConfig{}, map[string]bool{})
 		assert.True(t, ok, "ok is true so the caller does not fall through to a terminal $ref")
 		assert.Nil(t, s, "opaque func underlying yields no schema")
 		assert.Nil(t, ns)
@@ -553,7 +553,7 @@ func TestSchemaForOtherKind(t *testing.T) {
 			Fields: []metadata.Field{{Name: sp.Get("id"), Type: sp.Get("int"), TypeRef: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "int"}, Tag: sp.Get(`json:"id"`)}},
 		}
 		typ := meta.Packages["pkg"].Files["f.go"].Types["Codes"]
-		s, ns, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Codes", meta, &APISpecConfig{}, map[string]bool{})
+		s, ns, ok := schemaForOtherKind(map[string]*Schema{}, typ, nil, "pkg.Codes", meta, &APISpecConfig{}, map[string]bool{})
 		assert.True(t, ok)
 		require.NotNil(t, s)
 		assert.Equal(t, "array", s.Type)
@@ -565,7 +565,7 @@ func TestSchemaForOtherKind(t *testing.T) {
 	t.Run("nil underlying -> legacy generic object", func(t *testing.T) {
 		meta := otherKindType("Mystery", "pkg", nil)
 		typ := meta.Packages["pkg"].Files["f.go"].Types["Mystery"]
-		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Mystery", meta, &APISpecConfig{}, map[string]bool{})
+		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, nil, "pkg.Mystery", meta, &APISpecConfig{}, map[string]bool{})
 		assert.True(t, ok)
 		assert.Equal(t, &Schema{Type: "object"}, s)
 	})
@@ -577,7 +577,7 @@ func TestSchemaForOtherKind(t *testing.T) {
 		meta := otherKindType("List", "pkg", u)
 		typ := meta.Packages["pkg"].Files["f.go"].Types["List"]
 		visited := map[string]bool{"pkg.List" + schemaCycleGuardKey: true}
-		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.List", meta, &APISpecConfig{}, visited)
+		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, nil, "pkg.List", meta, &APISpecConfig{}, visited)
 		assert.True(t, ok)
 		assert.Equal(t, &Schema{Type: "object"}, s)
 	})
@@ -592,8 +592,8 @@ func TestSchemaForOtherKind(t *testing.T) {
 		typ := meta.Packages["pkg"].Files["f.go"].Types["Tags"]
 		shared := map[string]bool{}
 		want := &Schema{Type: "object", AdditionalProperties: &Schema{Type: "string"}}
-		s1, _, _ := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Tags", meta, &APISpecConfig{}, shared)
-		s2, _, _ := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Tags", meta, &APISpecConfig{}, shared)
+		s1, _, _ := schemaForOtherKind(map[string]*Schema{}, typ, nil, "pkg.Tags", meta, &APISpecConfig{}, shared)
+		s2, _, _ := schemaForOtherKind(map[string]*Schema{}, typ, nil, "pkg.Tags", meta, &APISpecConfig{}, shared)
 		assert.Equal(t, want, s1)
 		assert.Equal(t, want, s2, "second resolution must not degrade to a bare {object}")
 		assert.Empty(t, shared, "cycle guard is unset on return")

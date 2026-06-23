@@ -22,9 +22,16 @@ import (
 	"strings"
 )
 
+// ScopeExported and ScopeUnexported are the sentinel strings stored in a
+// Field/Type/Method Scope (via getScope). They are exported so schema consumers
+// can decide field visibility from the SAME source of truth — e.g. the OpenAPI
+// generator drops unexported fields, which encoding/json never marshals.
 const (
-	defaultScopeExported   = "exported"
-	defaultScopeUnexported = "unexported"
+	ScopeExported   = "exported"
+	ScopeUnexported = "unexported"
+
+	defaultScopeExported   = ScopeExported
+	defaultScopeUnexported = ScopeUnexported
 )
 
 // getTypeName extracts a flattened type-name string from an AST expression.

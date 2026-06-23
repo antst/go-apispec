@@ -963,6 +963,24 @@ func IsPrimitiveType(typeName string) bool {
 	return false
 }
 
+// IsJSONRawMessageRef reports whether a TypeRef node IS exactly
+// encoding/json.RawMessage (a RefNamed leaf; not unwrapped). RawMessage's
+// underlying is []byte, but it implements json.Marshaler and round-trips raw
+// JSON, so it must map to an empty (any-JSON) schema rather than the base64
+// string its []byte underlying would yield. Shared with the schema layer so the
+// "this is RawMessage" decision has one definition.
+func IsJSONRawMessageRef(ref *TypeRef) bool {
+	return ref != nil && ref.Kind == RefNamed && ref.Pkg == "encoding/json" && ref.Name == "RawMessage"
+}
+
+// refIsJSONRawMessage reports whether a TypeRef's named leaf is
+// encoding/json.RawMessage. NamedLeaf unwraps pointer/slice/array/map so
+// *RawMessage and []RawMessage are recognised too — used at capture time to keep
+// the named ref intact instead of collapsing it to []byte.
+func refIsJSONRawMessage(ref *TypeRef) bool {
+	return IsJSONRawMessageRef(ref.NamedLeaf())
+}
+
 // isExternalType checks if a type is from an external package (not part of the current project)
 func isExternalType(typeInfo types.Type, currentModulePath string) bool {
 	switch t := typeInfo.(type) {
@@ -1039,8 +1057,12 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 			fieldTypeInfo := info.TypeOf(field.Type)
 			if fieldTypeInfo != nil {
 				// Only resolve external types to their underlying primitives
-				// Internal project types should remain as-is since they'll be resolved from the project
-				if isExternalType(fieldTypeInfo, metadata.CurrentModulePath) {
+				// Internal project types should remain as-is since they'll be resolved from the project.
+				// json.RawMessage is the exception: although its underlying is []byte,
+				// it implements json.Marshaler and round-trips RAW JSON, so collapsing
+				// it to []byte would wrongly yield a base64 string. Keep its named
+				// TypeRef so the schema layer can map it to an empty (any-JSON) schema.
+				if isExternalType(fieldTypeInfo, metadata.CurrentModulePath) && !refIsJSONRawMessage(fieldTypeRef) {
 					underlying := fieldTypeInfo.Underlying()
 					if underlyingFieldType := underlying.String(); IsPrimitiveType(underlyingFieldType) {
 						fieldType = underlyingFieldType
