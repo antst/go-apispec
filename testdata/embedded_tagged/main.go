@@ -45,12 +45,18 @@ type secretBag struct {
 	Token string `json:"token"`
 }
 
+// tally is an UNEXPORTED NON-struct type. encoding/json marshals a json-named embed
+// of an unexported type ONLY when its underlying is a struct, so an unexported
+// non-struct embed is DROPPED even with a tag — the analyzer must not emit it.
+type tally int
+
 // Document mixes every embed/field kind.
 type Document struct {
 	Base                       // untagged embed -> flattened (id, createdAt)
 	Meta      `json:"meta"`    // named embed -> nested {"meta": {...}}
 	Internal  `json:"-"`       // dropped entirely
-	secretBag `json:"secrets"` // unexported-type named embed -> nested {"secrets": {...}}
+	secretBag `json:"secrets"` // unexported struct embed, named -> nested {"secrets": {...}}
+	tally     `json:"tally"`   // unexported NON-struct embed, named -> DROPPED by encoding/json
 	Title     string           `json:"title"`
 }
 

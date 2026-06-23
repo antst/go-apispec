@@ -158,11 +158,19 @@ type Internal struct {
 	Secret string
 }
 
+type secretBag struct {
+	Token string
+}
+
+type tally int
+
 type Doc struct {
 	Base                  // untagged embed -> flattened
-	Meta     ` + "`json:\"meta\"`" + ` // named embed -> nested field
-	Internal ` + "`json:\"-\"`" + `    // dropped entirely
-	Title    string ` + "`json:\"title\"`" + `
+	Meta      ` + "`json:\"meta\"`" + ` // named embed -> nested field
+	Internal  ` + "`json:\"-\"`" + `    // dropped entirely
+	*secretBag ` + "`json:\"secrets\"`" + ` // unexported *STRUCT embed, named -> nested (pointer de-ref'd)
+	tally     ` + "`json:\"tally\"`" + `   // unexported NON-struct embed, named -> dropped
+	Title     string ` + "`json:\"title\"`" + `
 }
 `
 	fset := token.NewFileSet()
@@ -190,10 +198,14 @@ type Doc struct {
 		fieldByName[meta.StringPool.GetString(f.Name)] = f
 	}
 	require.Contains(t, fieldByName, "Meta", "json:\"meta\" embed becomes a nested field")
+	require.Contains(t, fieldByName, "secretBag", "unexported STRUCT embed with a json name nests")
 	require.Contains(t, fieldByName, "Title")
 	assert.NotContains(t, fieldByName, "Internal", "json:\"-\" embed is dropped from Fields")
 	assert.NotContains(t, fieldByName, "Base", "untagged embed never becomes a field")
-	assert.Len(t, ty.Fields, 2, "exactly the meta field and the title field")
+	assert.NotContains(t, fieldByName, "tally", "unexported NON-struct embed is dropped (Go ignores it)")
+	assert.Len(t, ty.Fields, 3, "the meta, secretBag, and title fields")
+	// The unexported-struct embed is forced exported so the schema layer keeps it.
+	assert.Equal(t, "exported", meta.StringPool.GetString(fieldByName["secretBag"].Scope))
 
 	// The captured meta field carries its json tag (so the wire name resolves to
 	// "meta" downstream) and a named TypeRef.
@@ -320,6 +332,23 @@ func TestNamedEmbedField_FallbackToFlatten(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "secretBag", meta.StringPool.GetString(fu.Name))
 	assert.Equal(t, "exported", meta.StringPool.GetString(fu.Scope), "json-named embed forces exported scope")
+}
+
+// jsonNamedEmbedMarshals default-to-marshal fallbacks (the resolvable
+// unexported-struct=true / unexported-non-struct=false cases are covered
+// end-to-end by TestProcessStructFields_TaggedEmbeds).
+func TestJSONNamedEmbedMarshals_Fallbacks(t *testing.T) {
+	// Exported base name -> marshals without consulting type info.
+	assert.True(t, jsonNamedEmbedMarshals("Base", nil, nil))
+	// Empty base name (inline/unresolved embed) -> marshals (flattens downstream).
+	assert.True(t, jsonNamedEmbedMarshals("", nil, nil))
+	// Unexported + no type info at all -> assume the usual struct shape.
+	assert.True(t, jsonNamedEmbedMarshals("secretBag", nil, nil))
+	// Unexported + info present but a nil expr -> defensive marshal.
+	assert.True(t, jsonNamedEmbedMarshals("secretBag", nil, &types.Info{}))
+	// Unexported + expr unknown to the info (TypeOf nil) -> assume marshal.
+	assert.True(t, jsonNamedEmbedMarshals("mystery", ast.NewIdent("mystery"),
+		&types.Info{Types: map[ast.Expr]types.TypeAndValue{}}))
 }
 
 // ---------------------------------------------------------------------------

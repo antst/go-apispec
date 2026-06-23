@@ -1091,6 +1091,13 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 				// `json:"-"` — encoding/json omits the embed; drop it.
 				continue
 			case jsonName != "":
+				if !jsonNamedEmbedMarshals(embedBaseName(fieldTypeRef), field.Type, info) {
+					// encoding/json marshals a json-named embed of an UNEXPORTED type
+					// only when its underlying is a struct; an unexported NON-struct
+					// embed (e.g. `someInt `json:"n"“ or a builtin `int `json:"n"“)
+					// is dropped even with a tag. Drop it here too.
+					continue
+				}
 				if f, ok := namedEmbedField(fieldType, tag, fieldTypeRef, metadata); ok {
 					t.Fields = append(t.Fields, f)
 					continue
@@ -1184,6 +1191,39 @@ func embedBaseName(fieldTypeRef *TypeRef) string {
 		return ""
 	}
 	return leaf.Name
+}
+
+// jsonNamedEmbedMarshals reports whether encoding/json marshals a json-NAMED
+// anonymous embed of the given type. Go's anonymous-field rule (encode.go):
+//
+//	if !field.IsExported() && deref(field.Type).Kind() != reflect.Struct { continue }
+//
+// so an EXPORTED embed always marshals, while an UNEXPORTED embed marshals only
+// when its (de-pointered) underlying type is a struct — an unexported non-struct
+// embed (`someInt `json:"n"“, or a builtin `int `json:"n"“) is dropped even with
+// a tag. An empty/unresolved base name (inline anonymous struct) is treated as
+// marshaling (it flattens downstream); with no type info we assume a struct, the
+// usual embed shape.
+func jsonNamedEmbedMarshals(baseName string, expr ast.Expr, info *types.Info) bool {
+	if baseName == "" || isExported(baseName) {
+		return true
+	}
+	if info == nil || expr == nil {
+		return true
+	}
+	et := info.TypeOf(expr)
+	if et == nil {
+		return true
+	}
+	for {
+		p, ok := et.(*types.Pointer)
+		if !ok {
+			break
+		}
+		et = p.Elem()
+	}
+	_, isStruct := et.Underlying().(*types.Struct)
+	return isStruct
 }
 
 // processInterfaceMethods processes methods of an interface type
