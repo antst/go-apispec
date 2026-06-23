@@ -226,32 +226,6 @@ func unwrapArgRefs(arg *metadata.CallArgument) *metadata.CallArgument {
 	return arg
 }
 
-// selectorFieldOnTarget returns the field name of `<targetVar>.<field>`
-// when the argument is exactly that selector (or one wrapped in a single
-// unary/star, which covers `*body.field` for pointer fields). Returns ""
-// for any other shape so callers fall through.
-func selectorFieldOnTarget(arg *metadata.CallArgument, targetVar string) string {
-	if arg == nil {
-		return ""
-	}
-	switch arg.GetKind() {
-	case metadata.KindUnary, metadata.KindStar:
-		if arg.X == nil {
-			return ""
-		}
-		return selectorFieldOnTarget(arg.X, targetVar)
-	case metadata.KindSelector:
-		if arg.X == nil || arg.Sel == nil {
-			return ""
-		}
-		if arg.X.GetKind() != metadata.KindIdent || arg.X.GetName() != targetVar {
-			return ""
-		}
-		return arg.Sel.GetName()
-	}
-	return ""
-}
-
 // lookupStructFields returns a Go-field-name → JSON-name map for a struct
 // referenced by its fully-qualified type name (e.g.,
 // "json_dto.CopyDocumentRequest"). Returns nil if the type can't be found.

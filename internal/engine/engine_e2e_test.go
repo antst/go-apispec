@@ -131,6 +131,10 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "nested_arrays", inputDir: "../../testdata/nested_arrays", configFn: spec.DefaultHTTPConfig},
 		// Embedded structs: anonymous fields (value/pointer/transitive) promote flat.
 		{name: "embedded_structs", inputDir: "../../testdata/embedded_structs", configFn: spec.DefaultHTTPConfig},
+		// json-tagged anonymous embeds: an untagged embed promotes flat, a
+		// `json:"meta"`-named embed nests under "meta" (not flattened), and a
+		// `json:"-"` embed is dropped entirely (no property, no component).
+		{name: "embedded_tagged", inputDir: "../../testdata/embedded_tagged", configFn: spec.DefaultHTTPConfig},
 		// Generic envelope wrapper: APIResponse[T] must bind T per call site.
 		{name: "generic_response_wrapper", inputDir: "../../testdata/generic_response_wrapper", configFn: spec.DefaultHTTPConfig},
 		{name: "generic_envelopes", inputDir: "../../testdata/generic_envelopes", configFn: spec.DefaultHTTPConfig},

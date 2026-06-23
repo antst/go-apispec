@@ -19,6 +19,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"reflect"
 	"strings"
 )
 
@@ -197,6 +198,32 @@ func getFieldTag(field *ast.Field) string {
 		return tag[1 : len(tag)-1]
 	}
 	return tag
+}
+
+// jsonTagName parses the `json` directive of a struct tag the way encoding/json
+// reads it, returning the explicit name, whether the field is skipped, and
+// whether a json tag was present at all. The input is the backtick-stripped tag
+// body (as produced by getFieldTag), so reflect.StructTag operates on it
+// directly. It mirrors the schema layer's jsonFieldName — replicated here
+// because the metadata package must not import internal/spec — and is used by
+// the embed branch to honour encoding/json's tag semantics for anonymous
+// embedded fields.
+//
+// As in jsonFieldName, only a BARE `json:"-"` is a skip: `json:"-,"` (trailing
+// comma) names a field literally "-" and is NOT skipped, matching
+// reflect.StructTag.
+func jsonTagName(tag string) (name string, skip bool, present bool) {
+	value, ok := reflect.StructTag(tag).Lookup("json")
+	if !ok {
+		return "", false, false
+	}
+	if value == "-" {
+		return "", true, true
+	}
+	if i := strings.IndexByte(value, ','); i >= 0 {
+		value = value[:i]
+	}
+	return value, false, true
 }
 
 // isExported checks if a name is exported (starts with uppercase)

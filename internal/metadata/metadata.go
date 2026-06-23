@@ -1074,10 +1074,36 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 		}
 
 		if len(field.Names) == 0 {
-			// Embedded (anonymous) field
-			t.Embeds = append(t.Embeds, metadata.StringPool.Get(fieldType))
-			t.EmbedRefs = append(t.EmbedRefs, fieldTypeRef)
-			continue
+			// Embedded (anonymous) field. encoding/json's promotion rules depend on
+			// the json tag (mirrored from the schema layer's jsonFieldName):
+			//   - no tag, or a tag with an EMPTY name (e.g. `json:",omitempty"`):
+			//     the embed's exported fields are PROMOTED/flattened into the
+			//     parent — the historical behaviour (promoteEmbeddedFields).
+			//   - a tag NAMING the embed (e.g. `json:"meta"`): the embed is
+			//     marshaled as a NESTED object under that name, NOT flattened, so it
+			//     is captured as a regular Field and flows through the normal field
+			//     pipeline.
+			//   - exactly `json:"-"`: the embed is DROPPED entirely — neither
+			//     promoted nor nested.
+			jsonName, jsonSkip, _ := jsonTagName(tag)
+			switch {
+			case jsonSkip:
+				// `json:"-"` — encoding/json omits the embed; drop it.
+				continue
+			case jsonName != "":
+				if f, ok := namedEmbedField(fieldType, tag, fieldTypeRef, metadata); ok {
+					t.Fields = append(t.Fields, f)
+					continue
+				}
+				// No usable named type for the embed (nil/non-named TypeRef, e.g. an
+				// inline anonymous struct embed). Fall through to flattening rather
+				// than synthesising a nameless nested field.
+				fallthrough
+			default:
+				t.Embeds = append(t.Embeds, metadata.StringPool.Get(fieldType))
+				t.EmbedRefs = append(t.EmbedRefs, fieldTypeRef)
+				continue
+			}
 		}
 
 		for _, name := range field.Names {
@@ -1113,6 +1139,51 @@ func processStructFields(structType *ast.StructType, pkgName string, metadata *M
 			t.Fields = append(t.Fields, f)
 		}
 	}
+}
+
+// namedEmbedField builds the regular Field that represents a json-named
+// anonymous embed (e.g. `Base `json:"meta"“), which encoding/json marshals as a
+// nested object rather than promoting/flattening. The field's Go name is the
+// embed type's BASE name (e.g. "Base" from "pkg.Base" or "*pkg.Base") so the
+// downstream pipeline renders it like any other struct-valued field — the json
+// tag supplies the wire name ("meta") and omitempty drives required.
+//
+// It reports ok=false when the embed carries no usable named type (nil TypeRef,
+// or a non-named leaf such as an inline anonymous struct), so the caller can
+// fall back to flattening instead of synthesising a nameless field.
+func namedEmbedField(fieldType, tag string, fieldTypeRef *TypeRef, metadata *Metadata) (Field, bool) {
+	baseName := embedBaseName(fieldTypeRef)
+	if baseName == "" {
+		return Field{}, false
+	}
+	return Field{
+		Name: metadata.StringPool.Get(baseName),
+		Type: metadata.StringPool.Get(fieldType),
+		Tag:  metadata.StringPool.Get(tag),
+		// A json-NAMED anonymous embed is marshaled by encoding/json as a named
+		// field regardless of the embedded type's exportedness (the anonymous-field
+		// visibility amendment) — e.g. `embC `json:"pub"“ with unexported struct
+		// embC still emits {"pub":{…}}. So force exported scope; deriving it from the
+		// (possibly lowercase) base name would wrongly drop it via the field loop's
+		// unexported-skip.
+		Scope:   metadata.StringPool.Get(ScopeExported),
+		TypeRef: fieldTypeRef,
+	}, true
+}
+
+// embedBaseName returns the bare type name of an embedded field — the name a
+// json-named embed is captured under. It uses the structured TypeRef's named
+// leaf, which strips pointer/slice/etc. wrappers so `*pkg.Base` and `pkg.Base`
+// both yield "Base". It returns "" when there is no usable named type (nil
+// TypeRef, or a non-named leaf such as an inline anonymous struct), signalling
+// the caller to flatten the embed rather than synthesise a nameless,
+// untyped nested field.
+func embedBaseName(fieldTypeRef *TypeRef) string {
+	leaf := fieldTypeRef.NamedLeaf()
+	if leaf == nil || (leaf.Kind != RefNamed && leaf.Kind != RefBasic) {
+		return ""
+	}
+	return leaf.Name
 }
 
 // processInterfaceMethods processes methods of an interface type
