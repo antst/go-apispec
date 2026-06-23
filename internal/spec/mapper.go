@@ -1060,6 +1060,18 @@ func lastPathSegment(p string) string {
 	return p
 }
 
+// pkgMatchesLeaf reports whether the analyzed package pkgName (always a full
+// import path) is the package a selector leaf's qualifier names. When leafPkg is a
+// FULL import path (getTypeName qualified the leaf), match it EXACTLY — last-
+// segment matching would wrongly accept any other ".../<segment>" package. Only a
+// bare short qualifier (no "/") falls back to last-segment matching.
+func pkgMatchesLeaf(pkgName, leafPkg string) bool {
+	if strings.Contains(leafPkg, "/") {
+		return pkgName == leafPkg
+	}
+	return lastPathSegment(pkgName) == leafPkg
+}
+
 // typeByRefGated is typeByRef with the collision guard applied: it resolves a
 // named ref to its metadata type, but a path-like EXTERNAL qualifier (an import
 // path absent from the analyzed set) returns nil instead of borrowing a
@@ -2621,7 +2633,8 @@ func schemaForOtherKind(usedTypes map[string]*Schema, typ *metadata.Type, goType
 // source of truth for the array-length rule, shared by every site that builds an
 // array schema from a TypeRef (schemaFromTypeRef, schemaForType, and the inline
 // nested-struct element path). A no-op for slices, inferred-length ([...]T)
-// arrays, byte arrays (which use maxLength), and non-array schemas.
+// arrays, and non-array schemas (e.g. a []byte slice's base64 string). A fixed
+// [N]byte array IS a normal array and DOES get minItems == maxItems == N here.
 func setFixedArrayLen(s *Schema, ref *metadata.TypeRef) {
 	if s != nil && s.Type == "array" && ref != nil && ref.Kind == metadata.RefArray && ref.Len >= 0 {
 		s.MinItems = ref.Len

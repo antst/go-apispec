@@ -769,6 +769,41 @@ func TestResolveSelectorType_QualifiedReceiverScopedToPackage(t *testing.T) {
 	assert.Equal(t, "string", resolver.resolveSelectorType(arg))
 }
 
+// TestResolveSelectorType_FullPathExactMatch locks the full-path exact-match
+// refinement (Copilot): when the leaf qualifier is a FULL import path, the lookup
+// must match that exact package, NOT merely the last segment — so two different
+// ".../models" packages don't collide. The WRONG models package sorts first.
+func TestResolveSelectorType_FullPathExactMatch(t *testing.T) {
+	meta, sp := newTypeResolverTestMeta()
+	meta.Packages = map[string]*metadata.Package{
+		"github.com/a/models": {Files: map[string]*metadata.File{"u.go": {Types: map[string]*metadata.Type{
+			"User": {Name: sp.Get("User"), Kind: sp.Get("struct"), Fields: []metadata.Field{
+				{Name: sp.Get("Name"), Type: sp.Get("int")}, // same SEGMENT "models", WRONG package, sorts first
+			}},
+		}}}},
+		"github.com/z/models": {Files: map[string]*metadata.File{"u.go": {Types: map[string]*metadata.Type{
+			"User": {Name: sp.Get("User"), Kind: sp.Get("struct"), Fields: []metadata.Field{
+				{Name: sp.Get("Name"), Type: sp.Get("string")}, // the receiver's exact package
+			}},
+		}}}},
+	}
+	resolver := newTestResolver(meta)
+
+	sel := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) { a.SetName("Name") })
+	x := makeArg(meta, metadata.KindIdent, func(a *metadata.CallArgument) {
+		a.SetName("u")
+		a.SetType("github.com/z/models.User") // full import path
+	})
+	arg := makeArg(meta, metadata.KindSelector, func(a *metadata.CallArgument) {
+		a.Sel = &sel
+		a.X = &x
+	})
+
+	// Exact full-path match → z/models.User.Name ("string"), never the same-segment
+	// a/models.User.Name ("int") that last-segment matching would have borrowed.
+	assert.Equal(t, "string", resolver.resolveSelectorType(arg))
+}
+
 func TestResolveSelectorType_WithPkgPrefix(t *testing.T) {
 	meta, sp := newTypeResolverTestMeta()
 

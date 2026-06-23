@@ -13,8 +13,9 @@ The analyzer now builds a structured type model (`TypeRef`) at the AST boundary
 and the OpenAPI schema generator walks that tree instead of re-parsing flattened
 type strings. This corrects several cases that were previously lossy:
 
-- **Fixed-length arrays** emit `minItems`/`maxItems` (and `maxLength` for
-  `[N]byte`), e.g. `[3]int`, `[16]byte`, `[4]Point` — slices stay unconstrained.
+- **Fixed-length arrays** emit `minItems`/`maxItems` — `[3]int`, `[4]Point`, and
+  `[16]byte` (a byte ARRAY marshals as a JSON array of integers; only a `[]byte`
+  SLICE is a base64 string). Slices stay unconstrained.
 - **Multi-parameter generics** (`Pair[K, V]`, `Result[T, E]`) resolve to a
   concrete schema instead of the empty type string the flattener produced.
 - **Generic envelope substitution** binds the concrete argument into every

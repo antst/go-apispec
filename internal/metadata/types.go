@@ -1412,7 +1412,7 @@ func (m *Metadata) resolveSelectorReturnType(returnVar *CallArgument, pkgName st
 			}
 			if r := ParseTypeRef(baseType); r != nil {
 				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType &&
-					lastPathSegment(candidatePkgName) == lastPathSegment(leaf.Pkg) {
+					pkgMatchesLeaf(candidatePkgName, leaf.Pkg) {
 					typeNames = append(typeNames, leaf.Name)
 				}
 			}
@@ -1441,6 +1441,18 @@ func lastPathSegment(p string) string {
 		return p[i+1:]
 	}
 	return p
+}
+
+// pkgMatchesLeaf reports whether the analyzed package pkgName (always a full
+// import path) is the package a selector leaf's qualifier names. When leafPkg is a
+// FULL import path (getTypeName qualified the leaf), match it EXACTLY — last-
+// segment matching would wrongly accept any other ".../<segment>" package. Only a
+// bare short qualifier (no "/") falls back to last-segment matching.
+func pkgMatchesLeaf(pkgName, leafPkg string) bool {
+	if strings.Contains(leafPkg, "/") {
+		return pkgName == leafPkg
+	}
+	return lastPathSegment(pkgName) == leafPkg
 }
 
 // resolveCallReturnType resolves the type of a function call return value

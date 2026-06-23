@@ -195,7 +195,7 @@ func (t *TypeResolverImpl) resolveSelectorType(arg metadata.CallArgument) string
 			typeNames := []string{baseType, pkgName + "." + baseType}
 			if r := metadata.ParseTypeRef(baseType); r != nil {
 				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType &&
-					lastPathSegment(pkgName) == lastPathSegment(leaf.Pkg) {
+					pkgMatchesLeaf(pkgName, leaf.Pkg) {
 					typeNames = append(typeNames, leaf.Name)
 				}
 			}
