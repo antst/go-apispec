@@ -364,7 +364,15 @@ func jsonNameForField(meta *metadata.Metadata, wrapperType *metadata.Type, struc
 			continue
 		}
 		tag := meta.StringPool.GetString(field.Tag)
-		if name := extractJSONName(tag); name != "" {
+		// Use the one true json-tag parser (same as the struct-schema path): a
+		// `json:"-"` field is never marshaled, so report "" and let the caller drop
+		// it (it skips on ""); `json:"-,"` names the field literally "-"; an empty
+		// name falls back to the Go field name.
+		name, skip, _ := jsonFieldName(tag)
+		if skip {
+			return ""
+		}
+		if name != "" {
 			return name
 		}
 		return structFieldName

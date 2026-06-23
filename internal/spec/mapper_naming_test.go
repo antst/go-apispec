@@ -1251,27 +1251,6 @@ func TestSetOperationOnPathItem_AllMethods(t *testing.T) {
 	}
 }
 
-func TestExtractJSONName_Naming(t *testing.T) {
-	tests := []struct {
-		tag      string
-		expected string
-	}{
-		{`json:"name,omitempty"`, "name"},
-		{`json:"user_id"`, "user_id"},
-		{`json:"-"`, ""},
-		{`json:""`, ""},
-		{"", ""},
-		{`yaml:"name"`, ""},
-		{`json:"field_name" validate:"required"`, "field_name"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.tag, func(t *testing.T) {
-			result := extractJSONName(tt.tag)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
 func TestEnsureAllPathParams(t *testing.T) {
 	params := []Parameter{
 		{Name: "id", In: "path", Required: true, Schema: &Schema{Type: "string"}},

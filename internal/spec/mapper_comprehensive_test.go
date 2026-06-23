@@ -1754,32 +1754,6 @@ func testIsPrimitiveTypeCustomTypes(t *testing.T) {
 }
 
 // TestExtractJSONName_Comprehensive tests JSON name extraction
-func TestExtractJSONName_Comprehensive(t *testing.T) {
-	tests := []struct {
-		tag      string
-		expected string
-	}{
-		{"", ""},
-		{`json:"name"`, "name"},
-		{`json:"user_name"`, "user_name"},
-		{`json:"name,omitempty"`, "name"},
-		{`json:"-"`, ""},
-		{`json:"name,omitempty,string"`, "name"},
-		{`other:"value"`, ""},
-		{`json:"name" other:"value"`, "name"},
-		{`other:"value" json:"name"`, "name"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.tag, func(t *testing.T) {
-			result := extractJSONName(tt.tag)
-			if result != tt.expected {
-				t.Errorf("Expected %s, got %s", tt.expected, result)
-			}
-		})
-	}
-}
-
 // TestFindTypesInMetadata_Comprehensive tests type finding in metadata
 func TestFindTypesInMetadata_Comprehensive(t *testing.T) {
 	tests := []struct {

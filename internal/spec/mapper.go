@@ -1737,40 +1737,14 @@ func hasOmitempty(tag string) bool {
 	return slices.Contains(parts[1:], "omitempty")
 }
 
-// extractJSONName extracts JSON name from a struct tag
-func extractJSONName(tag string) string {
-	if tag == "" {
-		return ""
-	}
-
-	// Simple JSON tag extraction
-	// In a more sophisticated implementation, you would use reflection or a proper parser
-	if strings.Contains(tag, "json:") {
-		parts := strings.Split(tag, "json:")
-		if len(parts) > 1 {
-			jsonPart := strings.Split(parts[1], " ")[0]
-			jsonName := strings.Trim(jsonPart, "\"")
-			// Remove ,omitempty and other options
-			if idx := strings.Index(jsonName, ","); idx != -1 {
-				jsonName = jsonName[:idx]
-			}
-			if jsonName != "" && jsonName != "-" {
-				return jsonName
-			}
-		}
-	}
-
-	return ""
-}
-
 // jsonFieldName parses a struct tag's json directive with encoding/json's exact
-// semantics, distinguishing the three cases extractJSONName collapses:
+// semantics, distinguishing the three cases a name-only tag reader collapses:
 //
 //   - present=false: no json tag at all (or a non-json tag). The caller keeps
 //     the Go field name.
 //   - skip=true: the tag is exactly `json:"-"`. encoding/json never marshals the
-//     field, so the caller must OMIT it entirely (issue: a `json:"-"` field used
-//     to leak under the Go field name because extractJSONName returned "").
+//     field, so the caller must OMIT it entirely (a `json:"-"` field otherwise
+//     leaks under the Go field name).
 //   - otherwise: name is the explicit JSON name, or "" when the name part is
 //     empty (e.g. `json:",omitempty"` / `json:",string"`), in which case the
 //     caller keeps the Go field name.

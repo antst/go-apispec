@@ -18,7 +18,7 @@ import (
 	"github.com/antst/go-apispec/internal/metadata"
 )
 
-// jsonFieldName distinguishes the three cases extractJSONName collapses:
+// jsonFieldName distinguishes the three cases a name-only tag reader collapses:
 // no tag, an explicit skip (`json:"-"`), and a name (possibly empty).
 func TestJSONFieldName(t *testing.T) {
 	cases := []struct {

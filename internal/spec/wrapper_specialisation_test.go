@@ -268,6 +268,18 @@ func TestJsonNameForField(t *testing.T) {
 	sp := meta.StringPool
 	noTag := &metadata.Type{Fields: []metadata.Field{{Name: sp.Get("Raw")}}}
 	assert.Equal(t, "Raw", jsonNameForField(meta, noTag, "Raw"))
+
+	// json-tag semantics match the struct-schema path (one parser): `json:"-"` is a
+	// skip so the field is dropped (caller treats "" as skip); `json:"-,"` names the
+	// field literally "-"; an explicit name wins over the Go field name.
+	tagged := &metadata.Type{Fields: []metadata.Field{
+		{Name: sp.Get("Hidden"), Tag: sp.Get(`json:"-"`)},
+		{Name: sp.Get("Dash"), Tag: sp.Get(`json:"-,"`)},
+		{Name: sp.Get("Named"), Tag: sp.Get(`json:"renamed,omitempty"`)},
+	}}
+	assert.Equal(t, "", jsonNameForField(meta, tagged, "Hidden"), `json:"-" drops the field`)
+	assert.Equal(t, "-", jsonNameForField(meta, tagged, "Dash"), `json:"-," is the literal name "-"`)
+	assert.Equal(t, "renamed", jsonNameForField(meta, tagged, "Named"))
 }
 
 func TestLookupWrapperType(t *testing.T) {

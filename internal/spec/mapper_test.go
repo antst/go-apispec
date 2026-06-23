@@ -961,59 +961,6 @@ func TestGetStringFromPool(t *testing.T) {
 	})
 }
 
-func TestExtractJSONName(t *testing.T) {
-	tests := []struct {
-		name     string
-		tag      string
-		expected string
-	}{
-		{
-			name:     "simple json tag",
-			tag:      `json:"name"`,
-			expected: "name",
-		},
-		{
-			name:     "json tag with omitempty",
-			tag:      `json:"name,omitempty"`,
-			expected: "name",
-		},
-		{
-			name:     "json tag with multiple options",
-			tag:      `json:"name,omitempty,string"`,
-			expected: "name",
-		},
-		{
-			name:     "json tag with dash",
-			tag:      `json:"-"`,
-			expected: "",
-		},
-		{
-			name:     "empty tag",
-			tag:      "",
-			expected: "",
-		},
-		{
-			name:     "tag without json",
-			tag:      `xml:"name"`,
-			expected: "",
-		},
-		{
-			name:     "tag with spaces",
-			tag:      `json: "name" `,
-			expected: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := extractJSONName(tt.tag)
-			if result != tt.expected {
-				t.Errorf("extractJSONName(%q) = %q, expected %q", tt.tag, result, tt.expected)
-			}
-		})
-	}
-}
-
 func TestCompleteNestedStructFlow(t *testing.T) {
 	defer RecoverFromPanic(t, "TestCompleteNestedStructFlow")
 
