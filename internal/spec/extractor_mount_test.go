@@ -3671,6 +3671,39 @@ func TestGenerateSchemas_WithMetadataType(t *testing.T) {
 	assert.NotEmpty(t, components.Schemas)
 }
 
+// A versioned external type that ALSO resolves in metadata must keep its
+// configured external component — metadata generation must NOT overwrite it.
+// Regression: the external match at the top of the type loop used a bare
+// `continue`, which only exited the inner ExternalTypes loop and fell through to
+// metadata generation, regenerating the struct schema over the external one.
+func TestGenerateSchemas_VersionedExternalNotOverwrittenByMetadata(t *testing.T) {
+	meta := newTestMeta()
+	sp := meta.StringPool
+	// A struct Map declared in a /v2 package: it resolves in metadata under the
+	// versioned key — the same key the external type matches (version-stripped).
+	meta.Packages["github.com/x/v2"] = &metadata.Package{
+		Files: map[string]*metadata.File{"m.go": {Types: map[string]*metadata.Type{
+			"Map": {
+				Name: sp.Get("Map"), Pkg: sp.Get("github.com/x/v2"), Kind: sp.Get("struct"),
+				Fields: []metadata.Field{{Name: sp.Get("K"), Type: sp.Get("string"), Tag: sp.Get(`json:"k"`)}},
+			},
+		}}},
+	}
+	cfg := &APISpecConfig{ExternalTypes: []ExternalType{
+		{Name: "github.com/x.Map", OpenAPIType: &Schema{Type: "object", Format: "EXTERNAL-SENTINEL"}},
+	}}
+	usedTypes := map[string]*Schema{"github.com/x/v2-->Map": nil}
+	components := Components{Schemas: make(map[string]*Schema)}
+
+	generateSchemas(usedTypes, cfg, components, meta)
+
+	key := schemaName("github.com/x/v2-->Map", cfg)
+	got := components.Schemas[key]
+	require.NotNil(t, got, "external component must be registered under the stripped name %q", key)
+	assert.Equal(t, "EXTERNAL-SENTINEL", got.Format,
+		"configured external type must win — metadata generation must not overwrite it")
+}
+
 // ===========================================================================
 // ExtractRoutes — integration test with routes in tree
 // ===========================================================================

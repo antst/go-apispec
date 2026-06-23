@@ -836,6 +836,7 @@ func schemaName(typeName string, cfg *APISpecConfig) string {
 }
 
 func generateSchemas(usedTypes map[string]*Schema, cfg *APISpecConfig, components Components, meta *metadata.Metadata) {
+nextType:
 	for _, typeName := range slices.Sorted(maps.Keys(usedTypes)) {
 		// Check external types
 		if cfg != nil {
@@ -848,7 +849,11 @@ func generateSchemas(usedTypes map[string]*Schema, cfg *APISpecConfig, component
 				// $ref — stripped to ".../Map" — is still emitted: a dangling $ref.
 				if externalType.Name == stripMajorVersion(strings.ReplaceAll(typeName, TypeSep, ".")) {
 					components.Schemas[schemaName(typeName, cfg)] = externalType.OpenAPIType
-					continue
+					// Skip to the NEXT type — a bare `continue` would only exit the
+					// inner ExternalTypes loop and fall through to metadata generation
+					// below, overwriting the external component with a generated schema
+					// (e.g. a versioned type that also resolves in metadata).
+					continue nextType
 				}
 			}
 		}
