@@ -1392,23 +1392,27 @@ func (m *Metadata) resolveSelectorReturnType(returnVar *CallArgument, pkgName st
 
 	// Try to find the field type in metadata. Iterate packages in sorted order so
 	// resolution is deterministic (a same-named type elsewhere can't win by
-	// map-iteration chance; the scoping below confines the bare-leaf candidate to
-	// its own package anyway).
-	for _, pkgName := range slices.Sorted(maps.Keys(m.Packages)) {
-		pkg := m.Packages[pkgName]
+	// map-iteration chance; the scoping below confines the candidates to the right
+	// package anyway).
+	lookupPkgName := pkgName // the caller's package, before the loop var shadows it
+	for _, candidatePkgName := range slices.Sorted(maps.Keys(m.Packages)) {
+		pkg := m.Packages[candidatePkgName]
 		for _, file := range pkg.Files {
-			// Try both with and without package prefix. baseType may be a qualified
-			// type string (getTypeName import-path-qualifies a cross-package
-			// selector), while file.Types is keyed by the BARE type name. Add the
-			// unqualified leaf so the field lookup resolves instead of falling
-			// through to the bogus "<qualified>.Field" concatenation below — but ONLY
-			// while scanning the leaf's own package, so a same-named type in an
-			// unrelated package can't be borrowed first. (Twin of the
+			// baseType may be a qualified type string (getTypeName import-path-
+			// qualifies a cross-package selector) or a bare name; file.Types is keyed
+			// by the BARE name. The bare baseType / pkg-prefixed candidates only make
+			// sense in the CALLER's package (a bare receiver `var u User` names THIS
+			// package's User, not the first sorted package with a User); the
+			// unqualified leaf is added only while scanning the leaf's OWN package, so
+			// a same-named type elsewhere is never borrowed. (Twin of the
 			// spec.resolveSelectorType fix; same package, ParseTypeRef is local.)
-			typeNames := []string{baseType, pkgName + "." + baseType}
+			var typeNames []string
+			if candidatePkgName == lookupPkgName {
+				typeNames = append(typeNames, baseType, candidatePkgName+"."+baseType)
+			}
 			if r := ParseTypeRef(baseType); r != nil {
 				if leaf := r.NamedLeaf(); leaf != nil && leaf.Name != "" && leaf.Name != baseType &&
-					lastPathSegment(pkgName) == lastPathSegment(leaf.Pkg) {
+					lastPathSegment(candidatePkgName) == lastPathSegment(leaf.Pkg) {
 					typeNames = append(typeNames, leaf.Name)
 				}
 			}

@@ -1108,17 +1108,26 @@ func typeByRefGated(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Ty
 // path is needed to disambiguate, which the ref-native resolution (spec 008)
 // provides. The sorted order keeps it at least deterministic.
 func typeByRefInSegment(ref *metadata.TypeRef, meta *metadata.Metadata) *metadata.Type {
+	var found *metadata.Type
 	for _, pkgName := range slices.Sorted(maps.Keys(meta.Packages)) {
 		if lastPathSegment(pkgName) != ref.Pkg {
 			continue
 		}
 		for _, file := range meta.Packages[pkgName].Files {
 			if typ, exists := file.Types[ref.Name]; exists {
-				return typ
+				if found != nil {
+					// Two same-last-segment packages both define ref.Name: a bare
+					// qualifier cannot say which, so resolve to neither rather than
+					// silently bind the wrong shape (CodeRabbit). The full path needed
+					// to disambiguate comes with the ref-native resolution (spec 008).
+					return nil
+				}
+				found = typ
+				break // a type name is unique within a package
 			}
 		}
 	}
-	return nil
+	return found
 }
 
 const generateSchemaFromTypeKey = "generateSchemaFromType"
@@ -1478,9 +1487,12 @@ func generateAliasSchema(usedTypes map[string]*Schema, typ *metadata.Type, meta 
 
 	// If the underlying type is a primitive (like string), try to detect enum values
 	if schema != nil && metadata.IsPrimitiveType(underlyingType) {
-		// Extract package name for enum detection
-		pkgName := ""
-		if ref := metadata.ParseTypeRef(originalTypeName); ref != nil {
+		// Extract package name for enum detection. typ.Name is the BARE type name
+		// ("Status"), so ParseTypeRef(it).Pkg is empty and the constants would be
+		// searched under package "" and missed — default to the alias's own package
+		// (typ.Pkg); a qualified original name (if any) overrides.
+		pkgName := getStringFromPool(meta, typ.Pkg)
+		if ref := metadata.ParseTypeRef(originalTypeName); ref != nil && ref.Pkg != "" {
 			pkgName = ref.Pkg
 		}
 

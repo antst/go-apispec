@@ -252,10 +252,14 @@ func TestExternalCollisionNotBorrowed(t *testing.T) {
 	assert.Equal(t, "", bodyTypeFromMetadataRef(ext, meta, &APISpecConfig{}), "external not borrowed")
 	assert.Equal(t, "github.com/me/app.User", bodyTypeFromMetadataRef(internal, meta, &APISpecConfig{}), "internal still resolves")
 
-	// schemaForNamedRef: external yields a dangling $ref, NOT the internal struct.
+	// schemaForNamedRef: an unconfigured external type yields a $ref by its raw name
+	// (NOT the internal struct). The $ref is intentionally dangling — keeping the
+	// unresolvable type VISIBLE by name is the deliberate, maintainer-chosen policy
+	// (see schemaForUnresolved's comment); this test locks the COLLISION guard (the
+	// external name must not borrow the internal User's fields), not the dangling.
 	schema, schemas, ok := schemaForNamedRef(map[string]*Schema{}, ext, "github.com/acme/extpkg.User", meta, &APISpecConfig{}, nil)
 	assert.True(t, ok)
-	assert.NotEmpty(t, schema.Ref, "external collision → dangling $ref")
+	assert.NotEmpty(t, schema.Ref, "external resolves to a (dangling, by policy) $ref, not the internal struct")
 	for _, s := range schemas {
 		assert.NotContains(t, s.Properties, "secret", "must not emit the internal User's fields under the external name")
 	}
@@ -438,6 +442,44 @@ func TestTypeByRefGated_BareQualifierScopedToSegment(t *testing.T) {
 	if assert.NotNil(t, got, "other.User resolves within */other") {
 		assert.Equal(t, "User", getStringFromPool(meta, got.Name))
 	}
+
+	// AMBIGUOUS bare qualifier (CodeRabbit fail-safe): two */models packages both
+	// define Dup, so a bare "models.Dup" resolves to NEITHER rather than silently
+	// binding the sorted-first one's shape.
+	amb := &metadata.Metadata{StringPool: sp, Packages: map[string]*metadata.Package{
+		"github.com/a/models": {Files: map[string]*metadata.File{"m.go": {Types: map[string]*metadata.Type{
+			"Dup": {Name: sp.Get("Dup"), Kind: sp.Get("struct")},
+		}}}},
+		"github.com/c/models": {Files: map[string]*metadata.File{"m.go": {Types: map[string]*metadata.Type{
+			"Dup": {Name: sp.Get("Dup"), Kind: sp.Get("struct")},
+		}}}},
+	}}
+	assert.Nil(t, typeByRefGated(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "models", Name: "Dup"}, amb),
+		"ambiguous bare models.Dup (two */models packages) must resolve to neither")
+}
+
+// TestGenerateAliasSchema_EnumViaPackage locks the alias-enum package fix
+// (CodeRabbit): typ.Name is the BARE name ("Status"), so the enum lookup must use
+// typ.Pkg — searching under package "" would miss the constants.
+func TestGenerateAliasSchema_EnumViaPackage(t *testing.T) {
+	sp := metadata.NewStringPool()
+	cst := func(name, val string) *metadata.Variable {
+		return &metadata.Variable{Name: sp.Get(name), Type: sp.Get("main.Status"),
+			ResolvedType: sp.Get("main.Status"), Tok: sp.Get("const"), Value: sp.Get(val), ComputedValue: val}
+	}
+	meta := &metadata.Metadata{StringPool: sp, Packages: map[string]*metadata.Package{
+		"main": {Files: map[string]*metadata.File{"t.go": {
+			Types: map[string]*metadata.Type{
+				"Status": {Name: sp.Get("Status"), Kind: sp.Get("alias"), Target: sp.Get("string"), Pkg: sp.Get("main")},
+			},
+			Variables: map[string]*metadata.Variable{"StatusA": cst("StatusA", "a"), "StatusB": cst("StatusB", "b")},
+		}}},
+	}}
+	typ := meta.Packages["main"].Files["t.go"].Types["Status"]
+	schema, _ := generateAliasSchema(map[string]*Schema{}, typ, meta, &APISpecConfig{}, map[string]bool{})
+	require.NotNil(t, schema)
+	assert.ElementsMatch(t, []interface{}{"a", "b"}, schema.Enum,
+		"alias enum detected via typ.Pkg (a bare typ.Name searched under pkg \"\" would miss)")
 }
 
 // otherKindType builds a metadata package holding a single Kind-"other" defined
