@@ -403,6 +403,15 @@ type Type struct {
 	// declaration (e.g. ["K","V"]); empty for non-generic types. Used to bind
 	// an instantiation's TypeRef.Args to parameter names during substitution.
 	TypeParams []string `yaml:"type_params,omitempty"`
+
+	// UnderlyingRef carries the underlying type of a defined type whose
+	// underlying is NOT a struct/alias(ident)/interface — i.e. a Kind "other"
+	// defined map/slice/array/func/chan (e.g. `type Tags map[string]string`).
+	// processTypeKind would otherwise collapse such a type to "other" with no
+	// shape captured, and a field of that type would emit a dangling $ref; the
+	// schema pipeline resolves this ref to recover precise output (map -> object,
+	// slice -> array, …). Nil for struct/alias/interface kinds.
+	UnderlyingRef *TypeRef `yaml:"underlying_ref,omitempty"`
 }
 
 // Field represents a struct field

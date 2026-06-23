@@ -1252,6 +1252,16 @@ func generateStructSchema(usedTypes map[string]*Schema, key string, typ *metadat
 		if fieldRef != nil && fieldRef.Kind != metadata.RefSlice && fieldRef.Kind != metadata.RefMap {
 			if resolvedType := resolveUnderlyingType(fieldType, meta); resolvedType != "" {
 				fieldType = resolvedType
+			} else if u := definedOtherUnderlying(fieldRef, meta); u != "" {
+				// A DEFINED non-struct/alias/interface type (Kind "other": a defined
+				// map/slice/array/func/chan, e.g. `type Tags map[string]string`).
+				// Inline it through its underlying — exactly like an alias — so the
+				// field gets a precise schema (map -> object+additionalProperties,
+				// slice -> array) instead of a dangling $ref to a never-generated
+				// component. A func/chan underlying resolves to no schema downstream
+				// and the field is omitted. Mirrors how the legacy generator emitted
+				// an inline (if imprecise) object for these.
+				fieldType = u
 			}
 		}
 
@@ -1497,6 +1507,33 @@ func resolveUnderlyingType(typeName string, meta *metadata.Metadata) string {
 		return ""
 	}
 	return rewrapUnderlying(ref, getStringFromPool(meta, typ.Target))
+}
+
+// definedOtherUnderlying returns the underlying type string of a DIRECTLY-named
+// defined type whose underlying is not a struct/alias/interface — Kind "other": a
+// defined map/slice/array/func/chan such as `type Tags map[string]string` (->
+// "map[string]string") or `type Codes []int` (-> "[]int"). It is the "other"-kind
+// analog of resolveUnderlyingType's alias unwrap, letting a struct field of such a
+// type inline through its underlying instead of dangling a $ref to a component
+// that is never generated.
+//
+// It unwraps leading POINTERS (transparent to the schema, so `*Tags` resolves
+// like `Tags`) but no other wrapper: a slice/array/map OF a defined "other" type
+// keeps its own shape here (the caller's gate already excludes RefSlice/RefMap),
+// and its element resolves through the normal named-ref path (schemaForOtherKind).
+// Returns "" for any non-"other" type, an unresolved ref, or a captured-less type.
+func definedOtherUnderlying(ref *metadata.TypeRef, meta *metadata.Metadata) string {
+	for ref != nil && ref.Kind == metadata.RefPointer {
+		ref = ref.Elem // a pointer to a defined "other" type resolves like the type itself
+	}
+	if ref == nil || ref.Kind != metadata.RefNamed {
+		return ""
+	}
+	typ := typeByRefGated(ref, meta)
+	if typ == nil || getStringFromPool(meta, typ.Kind) != "other" || typ.UnderlyingRef == nil {
+		return ""
+	}
+	return typ.UnderlyingRef.String()
 }
 
 // rewrapUnderlying rebuilds the full wrapper chain of ref around `underlying`,
@@ -2102,23 +2139,48 @@ func typeMatches(constantType, targetType string, meta *metadata.Metadata) bool 
 // suffix value is an opaque, in-process map key — it never reaches the output.
 const schemaCycleGuardKey = "schemaCycleGuard"
 
+// typeMappingForLeaf returns a configured TypeMapping override for a NAMED or
+// BASIC leaf, or nil. It keys on ref.String(), which yields the TypeMapping key
+// form (RefBasic{Pkg:"time",Name:"Time"}.String() == "time.Time"). Called at each
+// leaf by schemaFromTypeRef so an override wins over the built-in scalar wherever
+// the leaf appears — including inside pointer/slice/array/map wrappers.
+func typeMappingForLeaf(ref *metadata.TypeRef, cfg *APISpecConfig) *Schema {
+	if cfg == nil || (ref.Kind != metadata.RefBasic && ref.Kind != metadata.RefNamed) {
+		return nil
+	}
+	key := ref.String()
+	for _, m := range cfg.TypeMapping {
+		if m.GoType == key {
+			return m.OpenAPIType
+		}
+	}
+	return nil
+}
+
 // schemaFromTypeRef produces the OpenAPI schema for the pure leaf and structural
 // cases of a TypeRef (pointer, slice, array, map, basic, interface). It returns
 // nil for forms that need metadata lookup, component naming, or generic
 // substitution (named/struct/generic); the caller routes those through
 // schemaForRefTree / schemaForNamedRef.
-func schemaFromTypeRef(ref *metadata.TypeRef) *Schema {
+func schemaFromTypeRef(ref *metadata.TypeRef, cfg *APISpecConfig) *Schema {
 	if ref == nil {
 		return nil
 	}
+	// A configured TypeMapping wins over the built-in scalar at every leaf, not
+	// only the top level: the container cases below recurse into schemaFromTypeRef
+	// with the same cfg, so an override for e.g. time.Time fires for *time.Time,
+	// []time.Time, and map[string]time.Time alike.
+	if s := typeMappingForLeaf(ref, cfg); s != nil {
+		return s
+	}
 	switch ref.Kind {
 	case metadata.RefPointer:
-		return schemaFromTypeRef(ref.Elem) // a pointer is transparent to the schema
+		return schemaFromTypeRef(ref.Elem, cfg) // a pointer is transparent to the schema
 	case metadata.RefSlice:
 		if isByteRef(ref.Elem) {
 			return &Schema{Type: "string", Format: "byte"} // []byte -> base64 string
 		}
-		items := schemaFromTypeRef(ref.Elem)
+		items := schemaFromTypeRef(ref.Elem, cfg)
 		if items == nil {
 			return nil // unknown element — defer to the named-type resolver
 		}
@@ -2134,7 +2196,7 @@ func schemaFromTypeRef(ref *metadata.TypeRef) *Schema {
 			}
 			return s
 		}
-		items := schemaFromTypeRef(ref.Elem)
+		items := schemaFromTypeRef(ref.Elem, cfg)
 		if items == nil {
 			return nil
 		}
@@ -2145,7 +2207,7 @@ func schemaFromTypeRef(ref *metadata.TypeRef) *Schema {
 		if !isStringRef(ref.Key) {
 			return nil // only string-keyed maps map cleanly to an object
 		}
-		val := schemaFromTypeRef(ref.Elem)
+		val := schemaFromTypeRef(ref.Elem, cfg)
 		if val == nil {
 			return nil
 		}
@@ -2225,7 +2287,7 @@ func schemaForType(usedTypes map[string]*Schema, goType string, ref *metadata.Ty
 		}
 	}
 	if ref != nil {
-		if s := schemaFromTypeRef(ref); s != nil {
+		if s := schemaFromTypeRef(ref, cfg); s != nil {
 			return s, map[string]*Schema{}
 		}
 		// The caller's goType can differ from ref.String() in two cases, and in both
@@ -2310,7 +2372,7 @@ func schemaFromParsedString(usedTypes map[string]*Schema, goType string, meta *m
 	if pref == nil {
 		return nil, nil, false
 	}
-	if s := schemaFromTypeRef(pref); s != nil {
+	if s := schemaFromTypeRef(pref, cfg); s != nil {
 		return s, map[string]*Schema{}, true
 	}
 	if pref.Kind == metadata.RefNamed {
@@ -2386,7 +2448,10 @@ func aliasInlineSchema(ref *metadata.TypeRef, meta *metadata.Metadata) *Schema {
 	if !metadata.IsPrimitiveType(underlying) {
 		return nil
 	}
-	s := schemaFromTypeRef(metadata.ParseTypeRef(underlying))
+	// nil cfg: this resolves an alias-to-PRIMITIVE element to its built-in scalar
+	// (+ enum). A configured TypeMapping override is already honoured at the top
+	// level by schemaForType; an alias-element override is out of scope here.
+	s := schemaFromTypeRef(metadata.ParseTypeRef(underlying), nil)
 	if s == nil {
 		return nil
 	}
@@ -2472,6 +2537,11 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 	// the caller, which schemaForType handles before calling here.
 	switch getStringFromPool(meta, typ.Kind) {
 	case "struct", "alias", "interface":
+	case "other":
+		// A defined type whose underlying is not struct/alias/interface (a defined
+		// map/slice/array/func/chan). Resolve its captured UnderlyingRef directly
+		// here and return — it must NOT fall through to generateSchemaFromType.
+		return schemaForOtherKind(usedTypes, typ, goType, meta, cfg, visitedTypes)
 	default:
 		return nil, nil, false
 	}
@@ -2499,6 +2569,37 @@ func schemaForNamedRef(usedTypes map[string]*Schema, ref *metadata.TypeRef, key 
 	maps.Copy(schemas, newSchemas)
 	markUsedType(usedTypes, goType, schema)
 	return schema, schemas, true
+}
+
+// schemaForOtherKind resolves a defined type whose underlying is not a
+// struct/alias/interface (Kind "other": a defined map/slice/array/func/chan).
+// Its captured UnderlyingRef is resolved like any field type — a representable
+// underlying yields its schema (map -> object+additionalProperties, slice ->
+// array, etc.); a genuinely opaque func/chan underlying yields NO schema (the
+// field is omitted, not a dangling $ref). A self-referential definition is
+// broken with a generic object via the cycle guard.
+func schemaForOtherKind(usedTypes map[string]*Schema, typ *metadata.Type, goType string, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
+	u := typ.UnderlyingRef
+	if u == nil {
+		return &Schema{Type: "object"}, map[string]*Schema{}, true // legacy fallback when no underlying was captured
+	}
+	if visitedTypes[goType+schemaCycleGuardKey] {
+		return &Schema{Type: "object"}, map[string]*Schema{}, true // self-referential defined type
+	}
+	// Guard against a self-referential definition (type List []List) DURING this
+	// resolution, then unset it on return: unlike the struct path (whose usedTypes
+	// cache yields a $ref on re-entry) this path INLINES the underlying with no
+	// cache, so a persistent guard would falsely cycle-hit a SIBLING field of the
+	// same defined type and degrade it to a bare {object} — order-dependent output.
+	visitedTypes[goType+schemaCycleGuardKey] = true
+	defer delete(visitedTypes, goType+schemaCycleGuardKey)
+	if s := schemaFromTypeRef(u, cfg); s != nil { // pure-structural underlying (map[string]string, []int, …)
+		return s, map[string]*Schema{}, true
+	}
+	if s, ns, ok := schemaForRefTree(usedTypes, u, false, meta, cfg, visitedTypes); ok { // named-element underlying (e.g. type Codes []Foo)
+		return s, ns, true
+	}
+	return nil, nil, true // opaque (func/chan) underlying — omit the field
 }
 
 // setFixedArrayLen stamps minItems == maxItems == N on an array schema when ref

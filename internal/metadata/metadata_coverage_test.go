@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // newTestMetadata creates a minimal Metadata suitable for unit tests.
@@ -907,6 +908,64 @@ func TestProcessTypeKind_Other(t *testing.T) {
 	processTypeKind(tspec, nil, "pkg", fset, typ, allTypes, m)
 	assert.Equal(t, "other", m.StringPool.GetString(typ.Kind))
 	assert.Contains(t, allTypes, "HandlerFunc")
+}
+
+// TestProcessTypeKind_OtherCapturesUnderlyingRef covers the FIX-1 metadata change:
+// a defined map/slice/func type (Kind "other") captures its underlying type as a
+// structured TypeRef, so the schema pipeline can resolve it precisely instead of
+// emitting a dangling $ref.
+func TestProcessTypeKind_OtherCapturesUnderlyingRef(t *testing.T) {
+	cases := []struct {
+		name     string
+		src      string // the type expression source, e.g. "map[string]string"
+		wantKind RefKind
+		wantStr  string
+	}{
+		{"defined map", "map[string]string", RefMap, "map[string]string"},
+		{"defined slice", "[]int", RefSlice, "[]int"},
+		{"defined nested slice", "[][]float64", RefSlice, "[][]float64"},
+		{"defined func", "func()", RefFunc, "func"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Parse the underlying type expression from a tiny declaration so we get a
+			// real ast.Expr for tspec.Type.
+			expr, err := parser.ParseExpr(tc.src)
+			require.NoError(t, err)
+
+			m := newTestMetadata()
+			allTypes := make(map[string]*Type)
+			typ := &Type{}
+			tspec := &ast.TypeSpec{Name: &ast.Ident{Name: "T"}, Type: expr}
+
+			processTypeKind(tspec, nil, "pkg", token.NewFileSet(), typ, allTypes, m)
+
+			assert.Equal(t, "other", m.StringPool.GetString(typ.Kind))
+			require.NotNil(t, typ.UnderlyingRef, "underlying ref captured")
+			assert.Equal(t, tc.wantKind, typ.UnderlyingRef.Kind)
+			assert.Equal(t, tc.wantStr, typ.UnderlyingRef.String())
+		})
+	}
+}
+
+// TestType_UnderlyingRefYAMLRoundTrip covers serialization of the new
+// Type.UnderlyingRef field: it survives a YAML marshal/unmarshal cycle.
+func TestType_UnderlyingRefYAMLRoundTrip(t *testing.T) {
+	orig := &Type{
+		Name: 1, Kind: 2,
+		UnderlyingRef: &TypeRef{
+			Kind: RefMap,
+			Key:  &TypeRef{Kind: RefBasic, Name: "string"},
+			Elem: &TypeRef{Kind: RefSlice, Elem: &TypeRef{Kind: RefBasic, Name: "int"}},
+		},
+	}
+	data, err := yaml.Marshal(orig)
+	require.NoError(t, err)
+
+	var got Type
+	require.NoError(t, yaml.Unmarshal(data, &got))
+	require.NotNil(t, got.UnderlyingRef)
+	assert.Equal(t, "map[string][]int", got.UnderlyingRef.String())
 }
 
 // --- helpers for test setup ---

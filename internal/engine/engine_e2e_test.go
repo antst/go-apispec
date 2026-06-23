@@ -92,6 +92,11 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "maps_variety", inputDir: "../../testdata/maps_variety", configFn: spec.DefaultHTTPConfig},
 		{name: "arrays_variety", inputDir: "../../testdata/arrays_variety", configFn: spec.DefaultHTTPConfig},
 		{name: "fixed_arrays", inputDir: "../../testdata/fixed_arrays", configFn: spec.DefaultHTTPConfig},
+		// Defined non-struct/alias/interface types (Kind "other": a defined map,
+		// slice, nested-slice, func). A field of such a type must resolve from its
+		// captured underlying shape, not emit a dangling $ref; a func underlying is
+		// opaque and the field is omitted.
+		{name: "named_underlying", inputDir: "../../testdata/named_underlying", configFn: spec.DefaultHTTPConfig},
 		{name: "inline_structs", inputDir: "../../testdata/inline_structs", configFn: spec.DefaultHTTPConfig},
 		{name: "pointers_variety", inputDir: "../../testdata/pointers_variety", configFn: spec.DefaultHTTPConfig},
 		{name: "optional_fields", inputDir: "../../testdata/optional_fields", configFn: spec.DefaultHTTPConfig},

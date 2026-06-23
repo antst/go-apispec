@@ -53,31 +53,31 @@ func TestSchemaFromTypeRef_MatchesSchemaForType(t *testing.T) {
 		{Kind: metadata.RefArray, Len: 16, Elem: b("byte")}, // [16]byte -> string/byte/maxLength
 	}
 	for _, ref := range cases {
-		got := schemaFromTypeRef(ref)
+		got := schemaFromTypeRef(ref, nil)
 		require.NotNil(t, got, ref.String())
 		want, _ := schemaForType(map[string]*Schema{}, ref.String(), nil, meta, cfg, nil)
 		assert.Equal(t, want, got, "schema mismatch for %q", ref.String())
 	}
 
 	// A slice/array of an unrepresentable element defers (schemaFromTypeRef returns nil).
-	assert.Nil(t, schemaFromTypeRef(slice(&metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"})))
+	assert.Nil(t, schemaFromTypeRef(slice(&metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"}), nil))
 	// An unrecognized basic name also defers (e.g. error has no default mapping).
-	assert.Nil(t, schemaFromTypeRef(b("error")))
+	assert.Nil(t, schemaFromTypeRef(b("error"), nil))
 	// A string-keyed map with an unrepresentable value defers too.
-	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefMap, Key: b("string"), Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"}}))
+	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefMap, Key: b("string"), Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"}}, nil))
 	// A fixed array of an unrepresentable element defers (returns nil).
-	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: 3, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"}}))
+	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: 3, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"}}, nil))
 	// Inferred-length arrays ([...]T, Len -1) carry no length constraint.
 	assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "integer"}},
-		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: -1, Elem: b("int")}))
+		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: -1, Elem: b("int")}, nil))
 	assert.Equal(t, &Schema{Type: "string", Format: "byte"},
-		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: -1, Elem: b("byte")}))
+		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefArray, Len: -1, Elem: b("byte")}, nil))
 
 	// Forms schemaFromTypeRef does not handle directly (named/generic/struct).
-	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "User"}))
-	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefStruct}))
-	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefMap, Key: b("int"), Elem: b("int")})) // non-string key
-	assert.Nil(t, schemaFromTypeRef(nil))
+	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "User"}, nil))
+	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefStruct}, nil))
+	assert.Nil(t, schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefMap, Key: b("int"), Elem: b("int")}, nil)) // non-string key
+	assert.Nil(t, schemaFromTypeRef(nil, nil))
 }
 
 // TestSchemaForType_EmptyStringBridge covers schemaForType's fallback for a type

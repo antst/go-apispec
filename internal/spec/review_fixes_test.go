@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/antst/go-apispec/internal/metadata"
 )
@@ -30,13 +31,13 @@ func TestSchemaFromTypeRef_QualifiedPrimitiveInContainer(t *testing.T) {
 	timeRef := &metadata.TypeRef{Kind: metadata.RefBasic, Pkg: "time", Name: "Time"}
 	dateTime := &Schema{Type: "string", Format: "date-time"}
 
-	assert.Equal(t, dateTime, schemaFromTypeRef(timeRef), "scalar qualified time.Time")
+	assert.Equal(t, dateTime, schemaFromTypeRef(timeRef, nil), "scalar qualified time.Time")
 
 	slice := &metadata.TypeRef{Kind: metadata.RefSlice, Elem: timeRef}
-	assert.Equal(t, &Schema{Type: "array", Items: dateTime}, schemaFromTypeRef(slice), "[]time.Time")
+	assert.Equal(t, &Schema{Type: "array", Items: dateTime}, schemaFromTypeRef(slice, nil), "[]time.Time")
 
 	m := &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, Elem: timeRef}
-	assert.Equal(t, &Schema{Type: "object", AdditionalProperties: dateTime}, schemaFromTypeRef(m), "map[string]time.Time")
+	assert.Equal(t, &Schema{Type: "object", AdditionalProperties: dateTime}, schemaFromTypeRef(m, nil), "map[string]time.Time")
 }
 
 // TestResolveUnderlyingType_FixedArrayAliasKeepsLength covers D1: a [N]Alias field
@@ -437,4 +438,190 @@ func TestTypeByRefGated_BareQualifierScopedToSegment(t *testing.T) {
 	if assert.NotNil(t, got, "other.User resolves within */other") {
 		assert.Equal(t, "User", getStringFromPool(meta, got.Name))
 	}
+}
+
+// otherKindType builds a metadata package holding a single Kind-"other" defined
+// type named `name` in package `pkg`, whose captured UnderlyingRef is `u`.
+func otherKindType(name, pkg string, u *metadata.TypeRef) *metadata.Metadata {
+	meta := newTestMeta()
+	sp := meta.StringPool
+	meta.Packages = map[string]*metadata.Package{
+		pkg: {Files: map[string]*metadata.File{"f.go": {Types: map[string]*metadata.Type{
+			name: {Name: sp.Get(name), Pkg: sp.Get(pkg), Kind: sp.Get("other"), UnderlyingRef: u},
+		}}}},
+	}
+	return meta
+}
+
+// TestSchemaForOtherKind covers FIX 1: a DEFINED type whose underlying is not a
+// struct/alias/interface (Kind "other") resolves its captured UnderlyingRef
+// instead of dangling a $ref — a map underlying -> object+additionalProperties, a
+// slice -> array, and an OPAQUE func/chan underlying -> no schema (the field is
+// omitted, never a dangling $ref).
+func TestSchemaForOtherKind(t *testing.T) {
+	b := func(name string) *metadata.TypeRef { return &metadata.TypeRef{Kind: metadata.RefBasic, Name: name} }
+
+	t.Run("map underlying -> object+additionalProperties", func(t *testing.T) {
+		u := &metadata.TypeRef{Kind: metadata.RefMap, Key: b("string"), Elem: b("string")}
+		meta := otherKindType("Tags", "pkg", u)
+		typ := meta.Packages["pkg"].Files["f.go"].Types["Tags"]
+		s, ns, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Tags", meta, &APISpecConfig{}, map[string]bool{})
+		assert.True(t, ok)
+		assert.Equal(t, &Schema{Type: "object", AdditionalProperties: &Schema{Type: "string"}}, s)
+		assert.Empty(t, ns)
+	})
+
+	t.Run("slice underlying -> array+items", func(t *testing.T) {
+		u := &metadata.TypeRef{Kind: metadata.RefSlice, Elem: b("int")}
+		meta := otherKindType("Codes", "pkg", u)
+		typ := meta.Packages["pkg"].Files["f.go"].Types["Codes"]
+		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Codes", meta, &APISpecConfig{}, map[string]bool{})
+		assert.True(t, ok)
+		assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "integer"}}, s)
+	})
+
+	t.Run("nested-slice underlying -> array of array", func(t *testing.T) {
+		u := &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefSlice, Elem: b("float64")}}
+		meta := otherKindType("Matrix", "pkg", u)
+		typ := meta.Packages["pkg"].Files["f.go"].Types["Matrix"]
+		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Matrix", meta, &APISpecConfig{}, map[string]bool{})
+		assert.True(t, ok)
+		assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "array", Items: &Schema{Type: "number"}}}, s)
+	})
+
+	t.Run("func underlying -> no schema (field omitted, no dangling $ref)", func(t *testing.T) {
+		meta := otherKindType("Handler", "pkg", &metadata.TypeRef{Kind: metadata.RefFunc})
+		typ := meta.Packages["pkg"].Files["f.go"].Types["Handler"]
+		s, ns, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Handler", meta, &APISpecConfig{}, map[string]bool{})
+		assert.True(t, ok, "ok is true so the caller does not fall through to a terminal $ref")
+		assert.Nil(t, s, "opaque func underlying yields no schema")
+		assert.Nil(t, ns)
+	})
+
+	t.Run("named-element underlying -> array of $ref via schemaForRefTree", func(t *testing.T) {
+		// type Codes []Item, where Item is a struct: the underlying []Item is not
+		// pure-structural (schemaFromTypeRef returns nil for the named element), so it
+		// resolves through schemaForRefTree, yielding an array whose items $ref Item.
+		u := &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "Item"}}
+		meta := otherKindType("Codes", "pkg", u)
+		sp := meta.StringPool
+		// Add the Item struct to the same package/file so the named element resolves.
+		meta.Packages["pkg"].Files["f.go"].Types["Item"] = &metadata.Type{
+			Name: sp.Get("Item"), Pkg: sp.Get("pkg"), Kind: sp.Get("struct"),
+			Fields: []metadata.Field{{Name: sp.Get("id"), Type: sp.Get("int"), TypeRef: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "int"}, Tag: sp.Get(`json:"id"`)}},
+		}
+		typ := meta.Packages["pkg"].Files["f.go"].Types["Codes"]
+		s, ns, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Codes", meta, &APISpecConfig{}, map[string]bool{})
+		assert.True(t, ok)
+		require.NotNil(t, s)
+		assert.Equal(t, "array", s.Type)
+		require.NotNil(t, s.Items)
+		assert.Equal(t, refComponentsSchemasPrefix+"pkg.Item", s.Items.Ref, "items reference the named struct component")
+		assert.Contains(t, ns, "pkg.Item", "the named element's component is generated, not dangling")
+	})
+
+	t.Run("nil underlying -> legacy generic object", func(t *testing.T) {
+		meta := otherKindType("Mystery", "pkg", nil)
+		typ := meta.Packages["pkg"].Files["f.go"].Types["Mystery"]
+		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Mystery", meta, &APISpecConfig{}, map[string]bool{})
+		assert.True(t, ok)
+		assert.Equal(t, &Schema{Type: "object"}, s)
+	})
+
+	t.Run("self-referential underlying -> generic object via cycle guard", func(t *testing.T) {
+		// type List []List: the underlying's named leaf is List itself. Pre-seed the
+		// cycle guard for the goType so the recursion terminates with a generic object.
+		u := &metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "List"}}
+		meta := otherKindType("List", "pkg", u)
+		typ := meta.Packages["pkg"].Files["f.go"].Types["List"]
+		visited := map[string]bool{"pkg.List" + schemaCycleGuardKey: true}
+		s, _, ok := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.List", meta, &APISpecConfig{}, visited)
+		assert.True(t, ok)
+		assert.Equal(t, &Schema{Type: "object"}, s)
+	})
+
+	t.Run("sibling re-resolution not poisoned by the cycle guard", func(t *testing.T) {
+		// Defect-2 guard: visitedTypes is shared across a struct's fields, so
+		// resolving the SAME defined type twice with one map must yield the FULL
+		// schema both times — the guard is unset on return (no order-dependent
+		// degradation to a bare {object}).
+		u := &metadata.TypeRef{Kind: metadata.RefMap, Key: b("string"), Elem: b("string")}
+		meta := otherKindType("Tags", "pkg", u)
+		typ := meta.Packages["pkg"].Files["f.go"].Types["Tags"]
+		shared := map[string]bool{}
+		want := &Schema{Type: "object", AdditionalProperties: &Schema{Type: "string"}}
+		s1, _, _ := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Tags", meta, &APISpecConfig{}, shared)
+		s2, _, _ := schemaForOtherKind(map[string]*Schema{}, typ, "pkg.Tags", meta, &APISpecConfig{}, shared)
+		assert.Equal(t, want, s1)
+		assert.Equal(t, want, s2, "second resolution must not degrade to a bare {object}")
+		assert.Empty(t, shared, "cycle guard is unset on return")
+	})
+}
+
+// TestDefinedOtherUnderlying covers the struct-field inline path for FIX 1: a
+// field whose type is a DIRECTLY-named defined "other" type inlines through its
+// underlying string (the alias analog), while non-"other" and unresolved refs
+// return "".
+func TestDefinedOtherUnderlying(t *testing.T) {
+	b := func(name string) *metadata.TypeRef { return &metadata.TypeRef{Kind: metadata.RefBasic, Name: name} }
+	u := &metadata.TypeRef{Kind: metadata.RefMap, Key: b("string"), Elem: b("string")}
+	meta := otherKindType("Tags", "pkg", u)
+
+	// A named defined "other" type -> its underlying string.
+	assert.Equal(t, "map[string]string",
+		definedOtherUnderlying(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "Tags"}, meta))
+	// A POINTER to the defined type is transparent — it unwraps and resolves like
+	// the type itself (regression guard: *Tags must not dangle).
+	assert.Equal(t, "map[string]string",
+		definedOtherUnderlying(&metadata.TypeRef{Kind: metadata.RefPointer, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "Tags"}}, meta))
+	assert.Equal(t, "map[string]string",
+		definedOtherUnderlying(&metadata.TypeRef{Kind: metadata.RefPointer, Elem: &metadata.TypeRef{Kind: metadata.RefPointer, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "Tags"}}}, meta), "double pointer too")
+	// A basic ref is not a named "other" type.
+	assert.Equal(t, "", definedOtherUnderlying(b("int"), meta))
+	// A slice OF the defined type keeps its own shape here (element resolves via the
+	// named-ref path, not this inline helper).
+	assert.Equal(t, "",
+		definedOtherUnderlying(&metadata.TypeRef{Kind: metadata.RefSlice, Elem: &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "Tags"}}, meta))
+	// An unresolved name -> "".
+	assert.Equal(t, "", definedOtherUnderlying(&metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "Nope"}, meta))
+	assert.Equal(t, "", definedOtherUnderlying(nil, meta))
+}
+
+// TestSchemaFromTypeRef_TypeMappingInContainer covers FIX 2: a configured
+// TypeMapping override must fire for a NAMED/BASIC leaf wherever it appears, not
+// only at the top level — so an override for time.Time wins for *time.Time,
+// []time.Time, and a RefNamed leaf that matches a mapping.
+func TestSchemaFromTypeRef_TypeMappingInContainer(t *testing.T) {
+	override := &Schema{Type: "string", Format: "custom-date"}
+	cfg := &APISpecConfig{TypeMapping: []TypeMapping{{GoType: "time.Time", OpenAPIType: override}}}
+	timeRef := &metadata.TypeRef{Kind: metadata.RefBasic, Pkg: "time", Name: "Time"}
+
+	// Scalar leaf: the override replaces the built-in date-time.
+	assert.Equal(t, override, schemaFromTypeRef(timeRef, cfg), "scalar override")
+
+	// []time.Time: the override fires for the element, array-wrapped.
+	slice := &metadata.TypeRef{Kind: metadata.RefSlice, Elem: timeRef}
+	assert.Equal(t, &Schema{Type: "array", Items: override}, schemaFromTypeRef(slice, cfg), "[]time.Time override")
+
+	// *time.Time: a pointer is transparent — the override still wins.
+	ptr := &metadata.TypeRef{Kind: metadata.RefPointer, Elem: timeRef}
+	assert.Equal(t, override, schemaFromTypeRef(ptr, cfg), "*time.Time override")
+
+	// map[string]time.Time: the override fires for the value.
+	m := &metadata.TypeRef{Kind: metadata.RefMap, Key: &metadata.TypeRef{Kind: metadata.RefBasic, Name: "string"}, Elem: timeRef}
+	assert.Equal(t, &Schema{Type: "object", AdditionalProperties: override}, schemaFromTypeRef(m, cfg), "map value override")
+
+	// A RefNamed leaf that matches a mapping is returned directly (short-circuits the
+	// named resolver / terminal fallback — fixes the *pkg.Money dangling case).
+	moneyCfg := &APISpecConfig{TypeMapping: []TypeMapping{{GoType: "pkg.Money", OpenAPIType: &Schema{Type: "string"}}}}
+	moneyRef := &metadata.TypeRef{Kind: metadata.RefNamed, Pkg: "pkg", Name: "Money"}
+	assert.Equal(t, &Schema{Type: "string"}, schemaFromTypeRef(moneyRef, moneyCfg), "named leaf override")
+	assert.Equal(t, &Schema{Type: "array", Items: &Schema{Type: "string"}},
+		schemaFromTypeRef(&metadata.TypeRef{Kind: metadata.RefPointer, Elem: &metadata.TypeRef{Kind: metadata.RefSlice, Elem: moneyRef}}, moneyCfg),
+		"*[]pkg.Money override fires at the named leaf")
+
+	// Without cfg, the built-in still applies (no override leakage); a RefNamed leaf
+	// with no mapping still defers (nil) to the named resolver.
+	assert.Equal(t, &Schema{Type: "string", Format: "date-time"}, schemaFromTypeRef(timeRef, nil), "nil cfg keeps built-in")
+	assert.Nil(t, schemaFromTypeRef(moneyRef, &APISpecConfig{}), "unmapped named leaf defers")
 }

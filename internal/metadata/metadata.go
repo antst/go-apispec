@@ -888,6 +888,11 @@ func processTypeKind(tspec *ast.TypeSpec, info *types.Info, pkgName string, fset
 
 	default:
 		t.Kind = metadata.StringPool.Get("other")
+		// Capture the underlying type of a defined non-struct/alias/interface type
+		// (a defined map/slice/array/func/chan). Without this the field would carry
+		// only Kind "other" with no shape, and the schema pipeline would emit a
+		// dangling $ref; UnderlyingRef lets it resolve the real shape instead.
+		t.UnderlyingRef = TypeRefFromExpr(tspec.Type, info)
 		allTypes[tspec.Name.Name] = t
 	}
 }
