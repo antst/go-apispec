@@ -1939,16 +1939,19 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		respInfo.BodyType = preprocessingBodyType(bodyType)
 		// Phase 4: bodyRef is kept in lockstep with bodyType through every transform
 		// above (arg.TypeRef baseline, resolveTypeOrigin, resolveParamArgType, literal
-		// boundary, deref unwrap, invalid-type clear), so the schema generator consumes
-		// it directly. The generic-wrapper branch (bodyType contains "[") skips origin
-		// tracing, so a body whose arg carried no TypeRef can reach here with bodyRef
-		// still nil; refForResolved backfills the canonical ParseTypeRef(bodyType) there
-		// — byte-identical to schemaForType's own nil-ref re-parse — so the Phase-3
-		// carrier contract (every non-empty resolved body carries a ref,
-		// TestEveryResolvedBodyTypeReachesSchemaWithRef) holds for that path too. It
-		// never overwrites a non-nil ref, so canonical/stale handling is unchanged, and
-		// ParseTypeRef("") is nil so a cleared body stays exempt.
-		respInfo.BodyTypeRef = refForResolved(bodyRef, bodyType)
+		// boundary, deref unwrap, invalid-type clear). The generic-wrapper branch
+		// (bodyType contains "[") skips origin tracing, so a body whose arg carried no
+		// TypeRef can reach here with bodyRef still nil; refForResolved backfills the
+		// canonical ParseTypeRef(bodyType) there. Backfill bodyRef IN PLACE so both the
+		// carrier and the schemaForType call below consume the same threaded ref — no
+		// schema-layer re-parse (the Phase-3/4 goal; passing the raw nil here would send
+		// schemaForType back through its own ParseTypeRef). refForResolved never
+		// overwrites a non-nil ref, so canonical/stale handling is unchanged; and
+		// ParseTypeRef("") is nil, so a cleared body stays exempt and the Phase-3 carrier
+		// contract (TestEveryResolvedBodyTypeReachesSchemaWithRef) holds for the skip
+		// path too.
+		bodyRef = refForResolved(bodyRef, bodyType)
+		respInfo.BodyTypeRef = bodyRef
 
 		// In response-writer context, []byte means raw binary content.
 		if bodyType == "[]byte" {
