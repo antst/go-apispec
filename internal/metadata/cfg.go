@@ -233,7 +233,7 @@ func annotateBranches(graph *cfg.CFG, fset *token.FileSet, info *types.Info, met
 		// method in CaseValues lets splitByConditionalMethods fan the handler out per
 		// method whether it branches via switch or if.
 		if branchKind == "if-then" && block.Stmt != nil {
-			ctx.CaseValues = extractMethodGuard(block.Stmt)
+			ctx.CaseValues = extractMethodGuard(block.Stmt, info)
 		}
 		for _, node := range block.Nodes {
 			ast.Inspect(node, func(nn ast.Node) bool {
@@ -280,12 +280,17 @@ func extractCaseValues(stmt ast.Stmt) []string {
 	return values
 }
 
-// extractMethodGuard returns the HTTP method named by an `if <x>.Method == <M>`
-// (or `<M> == <x>.Method`) condition — "POST" for both `== "POST"` and
+// extractMethodGuard returns the HTTP method named by an `if <req>.Method == <M>`
+// (or `<M> == <req>.Method`) condition — "POST" for both `== "POST"` and
 // `== http.MethodPost` — so a method-conditional `if` dispatch fans out per method
-// the same way a `switch r.Method` does (spec 009, US2/FR-003). Returns nil for any
-// other condition.
-func extractMethodGuard(stmt ast.Stmt) []string {
+// the same way a `switch r.Method` does (spec 009, US2/FR-003).
+//
+// It is gated on TYPE INFO: the `.Method` operand must resolve to
+// net/http.Request.Method, and a `MethodXxx` constant operand must resolve from the
+// net/http package. This prevents unrelated business logic (`s.Method == "GET"`,
+// `foo.MethodPost == r.Method`) from being misread as route method dispatch.
+// Returns nil for any other condition (and when type info is unavailable).
+func extractMethodGuard(stmt ast.Stmt, info *types.Info) []string {
 	ifStmt, ok := stmt.(*ast.IfStmt)
 	if !ok || ifStmt.Cond == nil {
 		return nil
@@ -294,29 +299,56 @@ func extractMethodGuard(stmt ast.Stmt) []string {
 	if !ok || bin.Op != token.EQL {
 		return nil
 	}
-	if isMethodSelector(bin.X) {
-		if m := httpMethodName(bin.Y); m != "" {
+	if isHTTPRequestMethod(bin.X, info) {
+		if m := httpMethodName(bin.Y, info); m != "" {
 			return []string{m}
 		}
 	}
-	if isMethodSelector(bin.Y) {
-		if m := httpMethodName(bin.X); m != "" {
+	if isHTTPRequestMethod(bin.Y, info) {
+		if m := httpMethodName(bin.X, info); m != "" {
 			return []string{m}
 		}
 	}
 	return nil
 }
 
-// isMethodSelector reports whether e is a `<x>.Method` selector (e.g. r.Method).
-func isMethodSelector(e ast.Expr) bool {
+// isHTTPRequestMethod reports whether e is a `<req>.Method` selector whose receiver
+// type-resolves to net/http.Request (value or pointer). Requires type info; without
+// it (or for any non-Request `.Method`) returns false — conservative, so a business
+// type's `.Method` field is never mistaken for the HTTP method.
+func isHTTPRequestMethod(e ast.Expr, info *types.Info) bool {
 	sel, ok := e.(*ast.SelectorExpr)
-	return ok && sel.Sel != nil && sel.Sel.Name == "Method"
+	if !ok || sel.Sel == nil || sel.Sel.Name != "Method" || info == nil {
+		return false
+	}
+	return isNetHTTPNamed(info.TypeOf(sel.X), "Request")
+}
+
+// isNetHTTPNamed reports whether t (after one optional pointer deref) is the named
+// type `name` declared in package net/http. Type aliases are resolved: under Go's
+// default gotypesalias=1 an alias like `type Req = http.Request` is a *types.Alias,
+// not a *types.Named, so Unalias is needed before/after the deref to recognise an
+// aliased (or pointer-to-aliased) request type.
+func isNetHTTPNamed(t types.Type, name string) bool {
+	if t == nil {
+		return false
+	}
+	t = types.Unalias(t)
+	if p, ok := t.(*types.Pointer); ok {
+		t = types.Unalias(p.Elem())
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "net/http" && obj.Name() == name
 }
 
 // httpMethodName resolves an HTTP-method expression to its canonical method string:
-// a string literal ("post") or an `http.MethodXxx` selector (MethodPost → POST).
-// Returns "" when the expression is not a recognized HTTP method.
-func httpMethodName(e ast.Expr) string {
+// a string literal ("post"), or an `http.MethodXxx` selector that type info confirms
+// resolves from net/http (MethodPost → POST). Returns "" otherwise.
+func httpMethodName(e ast.Expr, info *types.Info) string {
 	switch v := e.(type) {
 	case *ast.BasicLit:
 		if v.Kind == token.STRING {
@@ -325,7 +357,15 @@ func httpMethodName(e ast.Expr) string {
 			}
 		}
 	case *ast.SelectorExpr:
-		if v.Sel != nil && strings.HasPrefix(v.Sel.Name, "Method") && len(v.Sel.Name) > len("Method") {
+		if v.Sel == nil || info == nil {
+			return ""
+		}
+		// Only a constant declared in net/http (http.MethodXxx) counts.
+		obj := info.ObjectOf(v.Sel)
+		if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != "net/http" {
+			return ""
+		}
+		if strings.HasPrefix(v.Sel.Name, "Method") && len(v.Sel.Name) > len("Method") {
 			if m := strings.ToUpper(strings.TrimPrefix(v.Sel.Name, "Method")); isHTTPMethodName(m) {
 				return m
 			}

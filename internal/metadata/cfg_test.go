@@ -443,23 +443,34 @@ func TestExtractMethodGuard(t *testing.T) {
 		cond string
 		want []string
 	}{
+		// Genuine net/http.Request.Method dispatch.
 		{"selector", "r.Method == http.MethodPost", []string{"POST"}},
 		{"string literal", `r.Method == "GET"`, []string{"GET"}},
 		{"reversed", "http.MethodPut == r.Method", []string{"PUT"}},
 		{"lowercase literal", `r.Method == "delete"`, []string{"DELETE"}},
-		{"non-method field", "r.Other == http.MethodPost", nil},
+		{"value receiver", `rv.Method == "PATCH"`, []string{"PATCH"}},                   // http.Request by value
+		{"alias receiver", "ra.Method == http.MethodGet", []string{"GET"}},              // type Req = http.Request → *Req
+		{"alias-to-pointer receiver", "rp.Method == http.MethodHead", []string{"HEAD"}}, // type ReqP = *http.Request → ReqP
 		{"not equality", "r.Method != http.MethodPost", nil},
-		{"unknown method const", "r.Method == http.MethodFoo", nil},
 		{"both sides non-method", "a == b", nil},
+		// Type-gated false-positive rejections (CodeRabbit): a `.Method` field on a
+		// non-Request type, or a `MethodXxx` constant not from net/http.
+		{"non-request .Method field", `s.Method == "GET"`, nil},
+		{"non-http method const", "foo.MethodPost == r.Method", nil},
+		{"non-http method field rhs", "r.Method == foo.MethodPost", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			src := "package p\nimport \"net/http\"\nfunc h(r *http.Request) {\n\tvar a, b int\n\t_ = a\n\t_ = b\n\tif " + tc.cond + " {\n\t}\n}"
-			f, _ := typeCheckSrc(t, src)
-			got := extractMethodGuard(tsFindIf(f))
+			src := "package p\nimport \"net/http\"\ntype biz struct{ Method string; MethodPost string }\ntype Req = http.Request\ntype ReqP = *http.Request\n" +
+				"func h(r *http.Request, rv http.Request, ra *Req, rp ReqP, s biz, foo biz) {\n\tvar a, b int\n\t_ = a\n\t_ = b\n\tif " + tc.cond + " {\n\t}\n}"
+			f, info := typeCheckSrc(t, src)
+			got := extractMethodGuard(tsFindIf(f), info)
 			assert.Equal(t, tc.want, got)
 		})
 	}
+	// Without type info, no method guard is detected (conservative).
+	fNo, _ := typeCheckSrc(t, "package p\nimport \"net/http\"\nfunc h(r *http.Request) { if r.Method == http.MethodPost {} }")
+	assert.Nil(t, extractMethodGuard(tsFindIf(fNo), nil))
 	// A non-if statement yields nothing.
-	assert.Nil(t, extractMethodGuard(&ast.ExprStmt{}))
+	assert.Nil(t, extractMethodGuard(&ast.ExprStmt{}, nil))
 }

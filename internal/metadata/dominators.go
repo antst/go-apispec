@@ -130,6 +130,11 @@ func computeDominators(succs [][]int32) []int32 { //nolint:gocyclo // cohesive C
 // dominator array from computeDominators (a is on b's idom chain, inclusive of b
 // and the entry). Returns false for out-of-range or unreachable blocks.
 func blockDominates(idom []int32, a, b int32) bool {
+	// Out-of-range indices dominate nothing — reject them before the reflexive
+	// a == b check, so a stale/invalid BlockLoc can't be reported as dominating.
+	if int(a) < 0 || int(a) >= len(idom) || int(b) < 0 || int(b) >= len(idom) {
+		return false
+	}
 	for x := b; ; {
 		if x == a {
 			return true

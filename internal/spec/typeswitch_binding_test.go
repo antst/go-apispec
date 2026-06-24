@@ -341,7 +341,10 @@ func TestClassifyHelperWrites_Partition(t *testing.T) {
 	switchArm := tsArmWrite(meta, "h.go:3:3", []*metadata.TypeRef{tsPtr(tsNamed("T"))}, "x")
 	nonResp := makeHelperEdge(meta, "doWork", "app", nil) // not a response write
 
-	host := &TrackerNode{key: "h", Children: []*TrackerNode{
+	// The host is the Respond helper; tsArmWrite tags each write's Caller as
+	// Respond/app, which classifyHelperWrites scopes to via sameFunc.
+	hostEdge := makeHelperEdge(meta, "Respond", "app", map[string]metadata.CallArgument{"x": {Meta: meta}})
+	host := &TrackerNode{key: "h", CallGraphEdge: &hostEdge, Children: []*TrackerNode{
 		{key: "nil"}, // nil edge → skipped
 		{key: "uncond", CallGraphEdge: &uncond},
 		{key: "ifthen", CallGraphEdge: &ifThen},

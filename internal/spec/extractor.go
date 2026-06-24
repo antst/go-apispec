@@ -958,6 +958,14 @@ func (n *callGraphEdgeNode) GetRootAssignmentMap() map[string][]metadata.Assignm
 // per method. Returns nil if no conditional methods are detected. The branch kind
 // is not gated: only the HTTP-method validity of the case values matters, so a
 // non-method switch (e.g. `case "active"`) contributes nothing.
+//
+// Known limitation: the dispatch FALLBACK arm — a `switch r.Method` default or a
+// bare `else` of an `if r.Method ==` — is not emitted as its own operation, because
+// it represents "any other method" and has no single HTTP method to attach to. Its
+// responses are therefore not carried onto the per-method operations (a 405 there
+// is not a response of the handled methods). This is consistent for switch and if.
+// Chain explicit arms (`else if r.Method == http.MethodGet`) to get an operation
+// for each method you handle.
 func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 	// Collect HTTP methods from response branch contexts
 	methodResponses := make(map[string]map[string]*ResponseInfo) // method → statusCode → response
@@ -982,8 +990,26 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 		return nil // Not enough methods to split
 	}
 
+	// UNCONDITIONAL responses (Branch == nil — a common 400/500 written regardless
+	// of method) are reachable on every method and belong on EVERY split operation.
+	// Method-conditional branches (incl. a `switch r.Method` default, which is the
+	// "other methods" negation, NOT a shared response) are deliberately excluded.
+	shared := make(map[string]*ResponseInfo)
+	for statusCode, resp := range route.Response {
+		if resp.Branch == nil {
+			shared[statusCode] = resp
+		}
+	}
+
 	var result []*RouteInfo
 	for method, responses := range methodResponses {
+		merged := make(map[string]*ResponseInfo, len(shared)+len(responses))
+		for s, r := range shared {
+			merged[s] = r
+		}
+		for s, r := range responses { // method-specific wins on any status overlap
+			merged[s] = r
+		}
 		mr := &RouteInfo{
 			Path:                route.Path,
 			MountPath:           route.MountPath,
@@ -996,7 +1022,7 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 			Description:         route.Description,
 			Tags:                route.Tags,
 			Request:             route.Request,
-			Response:            responses,
+			Response:            merged,
 			Params:              route.Params,
 			UsedTypes:           route.UsedTypes,
 			Metadata:            route.Metadata,
@@ -1378,9 +1404,22 @@ func (e *Extractor) isHelperInvocation(node TrackerNodeInterface, isRoot bool) b
 	return edge != nil && len(edge.ParamArgMap) > 0 && !e.matchesAnyResponse(node)
 }
 
-// classifyHelperWrites returns the response-writing children of a helper-invocation
-// node, partitioned by whether each is reachable unconditionally within the helper
-// or only under an internal branch. Non-response children are ignored.
+// classifyHelperWrites returns the response-writing DIRECT children of a helper-
+// invocation node, partitioned by whether each is reachable unconditionally or only
+// under an internal if-branch. Non-response children are ignored.
+//
+// It scans direct children only — deliberately NOT the whole subtree (CodeRabbit
+// suggested recursing to catch nested writes; that was evaluated and rejected — see
+// below). The #27 defensive-fallback shape it serves is
+// `WriteHeader(status); if err { http.Error }`, where both the unconditional primary
+// write and the if-then fallback are DIRECT children. A SUB-handler reached through a
+// wrapper, by contrast, writes its success body via a nested
+// `json.NewEncoder(w).Encode(v)` (a grandchild under NewEncoder) and its real error
+// via a direct `if err { http.Error(4xx) }`. Recursing would treat that nested
+// success write as the helper's "unconditional primary" and then wrongly filter the
+// sub-handler's genuine 4xx as a defensive fallback (regression observed on the
+// enum_validation fixture: POST drops its 400). Direct-children scanning is correct
+// for both shapes.
 func (e *Extractor) classifyHelperWrites(node TrackerNodeInterface) helperWrites {
 	var hw helperWrites
 	for _, child := range node.GetChildren() {
@@ -1602,7 +1641,21 @@ func (e *Extractor) applyTypeSwitchBinding(arm *switchArm, argRef *metadata.Type
 		return
 	}
 
-	// No typed arm selected → KEEP the default arm, filter every typed arm.
+	// No typed arm selected. When the binding is IMPRECISE and there is no default
+	// arm to fall back to, the runtime value will still hit one of the typed arms —
+	// we cannot tell which — so KEEP them all (over-approximate) and warn, rather
+	// than drop every response. (A precise concrete type that matches no case and
+	// has no default genuinely produces nothing, which is Go-correct.)
+	if !precise && len(arm.dflt) == 0 {
+		for _, c := range arm.typed {
+			ae.kept[c.GetEdge().Callee.ID()] = true
+		}
+		e.warn(e.contextProvider.GetString(edge.Position),
+			"helper type-switch: call-site argument type not statically known; emitting all arms")
+		return
+	}
+
+	// Otherwise KEEP the default arm, filter every typed arm.
 	for _, c := range arm.dflt {
 		ae.kept[c.GetEdge().Callee.ID()] = true
 	}

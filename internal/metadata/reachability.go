@@ -93,6 +93,10 @@ func (m *Metadata) Reaches(fnKey string, from, to BlockLoc) bool {
 	if fc == nil {
 		return false
 	}
+	n := int32(len(fc.Succs)) //nolint:gosec // CFG block count is small (tens); no int32 overflow
+	if from.Block < 0 || from.Block >= n || to.Block < 0 || to.Block >= n {
+		return false // a non-existent block reaches nothing
+	}
 	if from.Block == to.Block {
 		return from.Node <= to.Node
 	}
