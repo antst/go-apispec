@@ -1,25 +1,36 @@
 # go-apispec Documentation
 
-## Documentation Index
+Start with the [main README](../README.md) — project overview, quick start, the
+full feature list, and CLI usage. These docs go deeper on specific topics.
 
-### Setup
-- **[INSTALLATION.md](INSTALLATION.md)** — Installation methods (go install, from source, scripts)
-- **[RELEASE_WORKFLOW.md](RELEASE_WORKFLOW.md)** — Automated release process with GitHub Actions
+## Using go-apispec
 
-### Architecture
-- **[TRACKER_TREE_USAGE.md](TRACKER_TREE_USAGE.md)** — TrackerTree for call graph analysis
-- **[INTERFACE_RESOLUTION.md](INTERFACE_RESOLUTION.md)** — Interface resolution for dependency injection patterns
-- **[CYTOGRAPHE_README.md](CYTOGRAPHE_README.md)** — Call graph visualization (Cytoscape.js)
+- **[INSTALLATION.md](INSTALLATION.md)** — install methods (`go install`, source,
+  script, pre-built binaries), PATH setup, updating, troubleshooting
+- **[CONFIGURATION.md](CONFIGURATION.md)** — complete config reference: every
+  field, the two naming modes, type mappings, per-operation overrides,
+  include/exclude filtering, struct-tag options, and custom framework patterns
 
-### Package Documentation
-- **[../cmd/apispec/README.md](../cmd/apispec/README.md)** — CLI tool
-- **[../cmd/apidiag/README.md](../cmd/apidiag/README.md)** — Interactive diagram server
-- **[../generator/README.md](../generator/README.md)** — Programmatic generator API
-- **[../internal/metadata/README.md](../internal/metadata/README.md)** — Metadata extraction
-- **[../internal/spec/README.md](../internal/spec/README.md)** — Spec generation and mapping
+## Internals & contributing
 
-## Quick Links
+- **[INTERFACE_RESOLUTION.md](INTERFACE_RESOLUTION.md)** — how interface types are
+  resolved to concrete implementations (embedded-DI structs and interface-method
+  handlers)
+- **[RELEASE_WORKFLOW.md](RELEASE_WORKFLOW.md)** — the tag → GitHub Actions release
+  pipeline and build-time version injection
 
-- [Main README](../README.md) — Project overview and quick start
+## Package documentation
+
+- **[../cmd/apispec/README.md](../cmd/apispec/README.md)** — the CLI
+- **[../cmd/apidiag/README.md](../cmd/apidiag/README.md)** — interactive call-graph
+  diagram server
+- **[../generator/README.md](../generator/README.md)** — programmatic generator API
+- **[../internal/metadata/README.md](../internal/metadata/README.md)** — metadata,
+  AST, and call-graph extraction
+- **[../internal/spec/README.md](../internal/spec/README.md)** — OpenAPI mapping,
+  patterns, and schema generation
+
+## Links
+
 - [License](../LICENSE) — Apache License 2.0
-- [Contributing](../CONTRIBUTING.md) — How to contribute
+- [Contributing](../CONTRIBUTING.md)
