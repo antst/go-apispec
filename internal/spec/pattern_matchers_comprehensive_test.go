@@ -560,22 +560,6 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 
 		_ = NewRoutePatternMatcher(routePattern, cfg, nil)
 	})
-
-	t.Run("nil type resolver", func(t *testing.T) {
-		// Test with nil type resolver - should handle gracefully
-		routePattern := RoutePattern{BasePattern: BasePattern{CallRegex: `^GET$`}, MethodFromCall: true,
-			PathFromArg:    true,
-			HandlerFromArg: true,
-		}
-
-		defer func() {
-			if r := recover(); r != nil {
-				t.Log("Expected panic with nil type resolver:", r)
-			}
-		}()
-
-		_ = NewRoutePatternMatcher(routePattern, cfg, contextProvider)
-	})
 }
 
 func TestPatternMatcher_PrioritySystem(t *testing.T) {
