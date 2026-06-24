@@ -83,7 +83,7 @@ r.Get("/files/serve", server.Serve)
 
 - `RegisterInterfaceResolution(interfaceType, structType, pkg, concreteType string)` — register a mapping from interface to concrete type in a struct context
 - `ResolveInterface(interfaceType, structType, pkg string) string` — resolve interface to concrete type
-- `ResolveInterfaceFromMetadata(recvType, funcType, pkg string) string` — resolve using metadata's `ImplementedBy` tracking
+- `ResolveInterfaceFromMetadata(interfaceType, structType, pkg string) string` — resolve using metadata's `ImplementedBy` tracking
 - `GetInterfaceResolutions() map[interfaceKey]string` — return all registered resolutions
 - `SyncInterfaceResolutionsFromMetadata()` — populate resolutions from metadata analysis
 

@@ -1,95 +1,42 @@
 # Release Workflow
 
-This document explains how to create releases for go-apispec using the automated GitHub Actions workflow.
+Releases are automated by [`.github/workflows/release.yml`](../.github/workflows/release.yml).
+Pushing a `v*` tag validates, builds cross-platform binaries, and publishes a
+GitHub Release with assets and auto-generated notes. Version metadata is injected
+at build time via `-ldflags` — **no source files are edited or committed** by the
+workflow.
 
-## Overview
-
-The release process is fully automated through GitHub Actions. When you create and push a git tag, it automatically:
-
-1. **Extracts version information** from the tag
-2. **Updates source files** with the new version
-3. **Builds binaries** for multiple platforms
-4. **Creates a GitHub release** with all assets
-5. **Uploads release assets** (binaries, checksums, archives)
-
-## Quick Start
-
-### 1. Create a Release Tag
+## Cutting a release
 
 ```bash
-# Using the Makefile (recommended)
-make create-tag VERSION=1.0.0
+# 1. Create and tag (runs scripts/create-release.sh)
+make create-tag VERSION=1.2.3
 
-# Or manually
-./scripts/create-release.sh 1.0.0 "Major feature release"
+# 2. Push the tag
+git push origin v1.2.3
 ```
 
-### 2. Push the Tag
+Then watch the **Release** workflow under
+[Actions](https://github.com/antst/go-apispec/actions). Tags must be `vMAJOR.MINOR.PATCH`
+(semver, `v` prefix).
 
-```bash
-git push origin v1.0.0
-```
+## What the workflow does
 
-### 3. Monitor the Workflow
+Triggered on `push` of a tag matching `v*`. Two jobs:
 
-- Go to [Actions](https://github.com/antst/go-apispec/actions) in your GitHub repository
-- The "Release" workflow will automatically start
-- Monitor the progress and check for any errors
+1. **`validate`** (Go 1.26): `go test ./...` plus the golden-file regression
+   (`go test -run TestGolden ./internal/engine/`). The release job does not run if
+   this fails.
+2. **`release`** (Go 1.26, `needs: validate`):
+   - Extracts `VERSION` (tag minus `v`), `COMMIT`, `BUILD_DATE`, `GO_VERSION`.
+   - Builds every platform: `VERSION=… COMMIT=… BUILD_DATE=… GO_VERSION=… make release`.
+   - Publishes via `softprops/action-gh-release@v2` with the per-platform binaries,
+     `*.sha256` checksums, the `apispec-<version>.tar.gz` archive, and
+     `generate_release_notes: true`.
 
-## How It Works
+## Version injection
 
-### GitHub Actions Workflow (`.github/workflows/release.yml`)
-
-The workflow triggers when you push a tag matching the pattern `v*` (e.g., `v1.0.0`).
-
-#### Step 1: Extract Version Information
-```yaml
-- name: Extract version from tag
-  id: version
-  run: |
-    VERSION=${GITHUB_REF#refs/tags/}
-    VERSION=${VERSION#v}  # Remove 'v' prefix
-    COMMIT=$(git rev-parse --short HEAD)
-    BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    GO_VERSION=$(go version | awk '{print $3}')
-```
-
-#### Step 2: Update Source Files
-```yaml
-- name: Update version in Makefile
-  run: |
-    sed -i "s/^VERSION = .*/VERSION = ${{ steps.version.outputs.version }}/" Makefile
-
-- name: Update version constants in main.go
-  run: |
-    sed -i "s/Version   = \"[^\"]*\"/Version   = \"${{ steps.version.outputs.version }}\"/" cmd/apispec/main.go
-    sed -i "s/Commit    = \"[^\"]*\"/Commit    = \"${{ steps.version.outputs.commit }}\"/" cmd/apispec/main.go
-    sed -i "s/BuildDate = \"[^\"]*\"/BuildDate = \"${{ steps.version.outputs.build_date }}\"/" cmd/apispec/main.go
-    sed -i "s/GoVersion = \"[^\"]*\"/GoVersion = \"${{ steps.version.outputs.go_version }}\"/" cmd/apispec/main.go
-```
-
-#### Step 3: Build and Release
-```yaml
-- name: Build for multiple platforms
-  run: make release
-
-- name: Create Release
-  uses: softprops/action-gh-release@v1
-  with:
-    files: |
-      apispec-${{ github.ref_name }}.tar.gz
-      dist/apispec-linux-amd64
-      dist/apispec-linux-arm64
-      dist/apispec-darwin-amd64
-      dist/apispec-darwin-arm64
-      dist/apispec-windows-amd64.exe
-      dist/apispec-windows-arm64.exe
-      dist/*.sha256
-```
-
-### Version Injection
-
-The build process injects version information using Go's `-ldflags`:
+`make release` (and `make build`) compile with:
 
 ```makefile
 LDFLAGS = -X 'main.Version=$(VERSION)' \
@@ -98,165 +45,38 @@ LDFLAGS = -X 'main.Version=$(VERSION)' \
           -X 'main.GoVersion=$(GO_VERSION)'
 ```
 
-This updates the constants in `cmd/apispec/main.go`:
+These overwrite the defaults in `cmd/apispec/main.go` (`Version = "0.0.1"`,
+`Commit/BuildDate/GoVersion = "unknown"`). When built **without** ldflags (e.g.
+`go install`), `main.go` falls back to Go's embedded VCS build info at runtime, so
+`apispec --version` still reports a sensible value.
 
-```go
-var (
-    Version   = "1.0.0"        // Injected at build time
-    Commit    = "abc1234"      // Git commit hash
-    BuildDate = "2025-01-01T12:00:00Z"  // Build timestamp
-    GoVersion = "go1.24.3"     // Go version used
-)
-```
+## Platforms & assets
 
-## Supported Platforms
+Built for Linux, macOS, and Windows (amd64 + arm64). Each release includes the
+binaries, their `.sha256` checksums, a `.tar.gz` archive, and auto-generated
+release notes.
 
-The workflow builds binaries for:
-
-- **Linux**: AMD64, ARM64
-- **macOS**: AMD64, ARM64
-- **Windows**: AMD64, ARM64
-
-## Release Assets
-
-Each release includes:
-
-1. **Platform-specific binaries** (e.g., `apispec-linux-amd64`)
-2. **Checksums** (`.sha256` files for verification)
-3. **Release archive** (`.tar.gz` containing all binaries)
-4. **Release notes** (auto-generated from commits)
-
-## Local Development
-
-### Building with Custom Version
+## Local testing
 
 ```bash
-# Build with specific version
-make VERSION=1.0.0 build
+# Build with an explicit version stamp
+make VERSION=1.2.3 build
+./apispec --version
 
-# Build with all custom values
-make VERSION=1.0.0 COMMIT=abc123 BUILD_DATE=2025-01-01T00:00:00Z build
-```
+# Produce the full release artifact set locally
+make VERSION=0.0.0-test release
 
-### Testing Release Process
-
-```bash
-# Create a test tag (locally only)
-make create-tag VERSION=0.0.0-test
-
-# Build release package
-make release
-
-# Clean up
+# Remove a local test tag
 git tag -d v0.0.0-test
 ```
 
-## Best Practices
-
-### 1. Semantic Versioning
-Use [semantic versioning](https://semver.org/):
-- `MAJOR.MINOR.PATCH` (e.g., `1.2.3`)
-- `MAJOR`: Breaking changes
-- `MINOR`: New features (backward compatible)
-- `PATCH`: Bug fixes (backward compatible)
-
-### 2. Tag Naming
-- Always prefix with `v`: `v1.0.0`
-- Use descriptive commit messages for tags
-- Avoid pre-release tags in main branch
-
-### 3. Pre-release Testing
-- Test builds locally before tagging
-- Use `make test` to ensure all tests pass
-- Verify the binary works as expected
-
-### 4. Release Notes
-- Write clear, descriptive commit messages
-- Use conventional commits for better auto-generation
-- Review auto-generated release notes before publishing
-
 ## Troubleshooting
 
-### Common Issues
-
-#### 1. Workflow Fails on Version Update
-- Check that the tag format is correct (`v1.0.0`)
-- Ensure the source files exist and are writable
-- Verify the sed commands work on the target platform
-
-#### 2. Build Failures
-- Check Go version compatibility
-- Verify all dependencies are available
-- Check for platform-specific build issues
-
-#### 3. Asset Upload Failures
-- Verify GitHub token permissions
-- Check file sizes and GitHub limits
-- Ensure all required files exist
-
-#### 4. Missing Release Archive
-- Ensure the `make release` command completes successfully
-- Check that environment variables are passed correctly
-- Verify the release script creates the tar.gz file in the root directory
-
-### Debugging
-
-#### Enable Debug Output
-```yaml
-- name: Debug information
-  run: |
-    echo "Version: ${{ steps.version.outputs.version }}"
-    echo "Commit: ${{ steps.version.outputs.commit }}"
-    echo "Build Date: ${{ steps.version.outputs.build_date }}"
-    echo "Go Version: ${{ steps.version.outputs.go_version }}"
-```
-
-#### Common Fixes Applied
-
-1. **Environment Variables Not Passed**: Ensure the Makefile uses `?=` instead of `=` for variables that should be overridable
-2. **Missing Release Archive**: Verify that `make release` passes environment variables to the release script
-3. **File Path Mismatches**: Check that the workflow looks for files in the correct locations
-4. **Permission Issues**: Ensure the workflow has proper permissions to create releases (check repository settings)
-
-#### Check Generated Files
-```yaml
-- name: Verify version updates
-  run: |
-    echo "Makefile VERSION:"
-    grep "^VERSION = " Makefile
-    echo "main.go Version:"
-    grep "Version   = " cmd/apispec/main.go
-```
-
-## Manual Release Process
-
-If you need to create a release manually:
-
-1. **Update version manually** in source files
-2. **Build binaries** for all platforms
-3. **Create GitHub release** manually
-4. **Upload assets** manually
-
-However, the automated workflow is recommended for consistency and reliability.
-
-## Future Enhancements
-
-Potential improvements to consider:
-
-- **Pre-release builds** for testing
-- **Docker image builds** and publishing
-- **Changelog generation** from commits
-- **Release signing** for security
-- **Multi-architecture Docker builds**
-
-## Support
-
-If you encounter issues with the release workflow:
-
-1. Check the [Actions](https://github.com/antst/go-apispec/actions) tab
-2. Review the workflow logs for errors
-3. Verify your tag format and naming
-4. Ensure you have proper permissions
-5. Check for any recent changes to the workflow
-
-The automated release workflow makes it easy to maintain consistent, professional releases with minimal manual effort.
+- **Workflow didn't trigger** — the tag must match `v*` and be pushed
+  (`git push origin v1.2.3`).
+- **`validate` failed on golden files** — output drifted from the committed
+  goldens; regenerate intentionally with
+  `go test ./internal/engine/ -run TestUpdateGolden` and commit, or fix the
+  regression.
+- **Asset upload failed** — the workflow needs `contents: write` (already set in
+  `release.yml`); check repo Actions permissions.

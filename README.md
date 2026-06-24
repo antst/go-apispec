@@ -199,7 +199,7 @@ externalTypes:
     openapiType: { type: object, additionalProperties: true }
 ```
 
-Full configuration examples for each framework: see the `Default*Config()` functions in `internal/spec/config.go` for the built-in patterns.
+See **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)** for the complete configuration reference — every field, the two naming modes, framework pattern shapes, type mappings, overrides, and include/exclude filtering. For the built-in framework patterns themselves, see the `Default*Config()` functions in `internal/spec/config.go`.
 
 ## How It Works
 
@@ -270,7 +270,8 @@ go-apispec/
 ├── internal/
 │   ├── core/             Framework detection
 │   ├── engine/           Generation engine
-│   ├── metadata/         AST analysis and metadata extraction
+│   ├── metadata/         AST analysis, call graph, TypeRef model, CFG
+│   ├── profiler/         pprof + custom metrics
 │   └── spec/             OpenAPI mapping, patterns, schemas
 ├── pkg/patterns/         Gitignore-style pattern matching
 └── testdata/             Framework fixtures + golden files
@@ -282,7 +283,7 @@ Every `testdata/` directory has `expected_openapi.json` (short names) and `expec
 
 **One code path**: `generateGoldenSpec()` is the single function used by both comparison and generation. Tests never overwrite golden files.
 
-**Determinism is enforced, not assumed**: `TestGolden_Deterministic` regenerates every fixture several times in-process (Go randomizes map iteration each run, exercising different orderings) and asserts byte-identical output across runs — for both the default and legacy snapshots. This is what makes `make openapi` + `git diff --exit-code` a reliable CI staleness gate.
+**Determinism is enforced, not assumed**: `TestGolden_Deterministic` regenerates every fixture several times in-process (Go randomizes map iteration each run, exercising different orderings) and asserts byte-identical output across runs — for both the default and legacy snapshots. Together with the `TestGolden` comparison job that CI runs on every push, the committed golden files act as a reliable staleness gate: any unintended output drift fails CI.
 
 ```bash
 # Compare (runs in CI — fails on mismatch):
