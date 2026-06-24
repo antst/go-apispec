@@ -2581,7 +2581,8 @@ func schemaForUnresolved(goType string, cfg *APISpecConfig) (*Schema, map[string
 //     underlying-type expansion, and config overrides; and
 //   - the goType != ref.String() divergence (alias pre-resolved to its underlying,
 //     or a generic RefParam substituted to its concrete arg) where goType — not the
-//     placeholder ref — carries the answer (schemaForType:2061, research D1).
+//     placeholder ref — carries the answer (schemaForType's goType-wins guard,
+//     research D1).
 //
 // The other resolution-layer ParseTypeRef is traceGenericOrigin's generic-origin
 // unwrap (pattern_matchers.go), a structural boundary parse (FR-001), not a

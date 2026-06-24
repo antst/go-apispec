@@ -31,10 +31,6 @@ func TestRoutePatternMatcher_Comprehensive(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -140,10 +136,6 @@ func TestMountPatternMatcher_Comprehensive(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -236,10 +228,6 @@ func TestRequestPatternMatcher_Comprehensive(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -321,10 +309,6 @@ func TestResponsePatternMatcher_Comprehensive(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -408,10 +392,6 @@ func TestParamPatternMatcher_Comprehensive(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -497,10 +477,6 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -572,10 +548,6 @@ func TestPatternMatcher_PrioritySystem(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -641,10 +613,6 @@ func TestMountPatternMatcher_GetPattern(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -678,10 +646,6 @@ func TestMountPatternMatcher_ExtractMount(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -758,10 +722,6 @@ func TestRequestPatternMatcher_MatchNode(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -820,10 +780,6 @@ func TestRequestPatternMatcher_GetPattern(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -856,10 +812,6 @@ func TestRequestPatternMatcher_ExtractRequest(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -955,10 +907,6 @@ func TestBasePatternMatcher_traceVariable(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -995,10 +943,6 @@ func TestBasePatternMatcher_traceRouterOrigin(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -1152,10 +1096,6 @@ func TestBasePatternMatcher_findAssignmentFunction(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -1196,10 +1136,6 @@ func TestRequestPatternMatcher_resolveTypeOrigin(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -1300,10 +1236,6 @@ func TestTraceGenericOrigin(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)

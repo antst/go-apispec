@@ -1337,6 +1337,51 @@ func TestExtractResponse_TypeConversionArg(t *testing.T) {
 	assert.Equal(t, "string", resp.BodyType)
 }
 
+// A type conversion to a GENERIC target with a NON-literal inner arg exercises the
+// conversion-target bodyRef re-derive: bodyType becomes the conversion target
+// "List[int]" while the inner arg's ref is []int — the re-derive must re-align
+// bodyRef to the target so it stays in lockstep with bodyType (byte-identical).
+func TestExtractResponse_TypeConversionGenericArg(t *testing.T) {
+	meta := newTestMeta()
+
+	// List[int](xs): outer conversion target is the generic "List[int]"; inner is a
+	// non-literal ident typed []int (so the literal branch does not fire).
+	innerArg := makeIdentArg(meta, "xs", "[]int")
+	outerArg := makeCallArg(meta)
+	outerArg.SetKind(metadata.KindTypeConversion)
+	// The conversion target is read from .Fun (GetArgumentInfo -> callArgToString(Fun)).
+	outerArg.Fun = makeIdentArg(meta, "List", "List[int]")
+	outerArg.Args = []*metadata.CallArgument{innerArg}
+
+	statusArg := makeLiteralArg(meta, "200")
+	edge := makeEdge(meta, "handler", "main", "Write", "http",
+		[]*metadata.CallArgument{statusArg, outerArg})
+	node := makeTrackerNode(&edge)
+
+	cfg := &APISpecConfig{Defaults: Defaults{ResponseContentType: "application/json"}}
+	matcher := &ResponsePatternMatcherImpl{
+		BasePatternMatcher: &BasePatternMatcher{
+			contextProvider: NewContextProvider(meta),
+			cfg:             cfg,
+			schemaMapper:    NewSchemaMapper(cfg),
+		},
+		pattern: ResponsePattern{StatusFromArg: true, StatusArgIndex: 0, TypeFromArg: true, TypeArgIndex: 1},
+	}
+
+	route := NewRouteInfo()
+	route.Metadata = meta
+	resp := firstResponse(matcher.ExtractResponse(node, route))
+
+	require.NotNil(t, resp)
+	// bodyType is the conversion TARGET, not the inner []int.
+	assert.Equal(t, "List[int]", resp.BodyType)
+	// The re-derived bodyRef is in lockstep with bodyType (ParseTypeRef of the target),
+	// NOT the stale inner []int ref — that is exactly what the conversion re-derive restores.
+	require.NotNil(t, resp.BodyTypeRef)
+	assert.Equal(t, resp.BodyType, resp.BodyTypeRef.String(),
+		"bodyRef re-derived from the conversion target, in lockstep with bodyType")
+}
+
 // ---------------------------------------------------------------------------
 // 19. extractResponseFromNode — edge dedup and nil checks
 // ---------------------------------------------------------------------------
