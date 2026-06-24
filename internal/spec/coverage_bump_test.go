@@ -201,53 +201,6 @@ func TestCallArgToString_KindRaw(t *testing.T) {
 	assert.Equal(t, "anything", cp.callArgToString(arg, nil))
 }
 
-// TestResolveGenericType_NoParams_UnparseableInput exercises the
-// "no type params provided, base type empty" branch — a degenerate
-// input that resolveGenericType must echo back unchanged instead of
-// panicking. Lock the behavior so a future refactor of
-// extractBaseTypeAndParams can't silently break callers that pass
-// pre-resolved type names through.
-func TestResolveGenericType_NoParams_UnparseableInput(t *testing.T) {
-	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg)
-	// Empty input — extractBaseTypeAndParams returns "" base, no params.
-	got := resolver.ResolveGenericType("", nil)
-	assert.Equal(t, "", got)
-}
-
-// TestResolveGenericType_WithParams_UnparseableInput covers the
-// matching branch in the typeParams > 0 path: when the base-type
-// extraction fails, the function returns the original input rather
-// than partial garbage.
-func TestResolveGenericType_WithParams_UnparseableInput(t *testing.T) {
-	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg)
-	got := resolver.ResolveGenericType("", map[string]string{"T": "int"})
-	assert.Equal(t, "", got, "empty input must round-trip even when type params are supplied")
-}
-
-// TestResolveGenericType_WithParams_EmptyBrackets exercises the
-// degenerate `Foo[]` shape WITH type params supplied — the typeParams
-// > 0 branch's empty-paramStr collapse. Existing tests cover the
-// no-params equivalent; this one closes the second copy of the
-// collapse logic inside the typeParams branch.
-func TestResolveGenericType_WithParams_EmptyBrackets(t *testing.T) {
-	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg)
-	got := resolver.ResolveGenericType("Foo[]", map[string]string{"T": "int"})
-	assert.Equal(t, "Foo", got, "empty param block collapses to base type")
-}
-
-// TestResolveGenericType_WithParams_WhitespaceBrackets — whitespace-
-// only parameter block (`Foo[ ]`) with type params supplied. Same
-// collapse, different whitespace path.
-func TestResolveGenericType_WithParams_WhitespaceBrackets(t *testing.T) {
-	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(nil, cfg)
-	got := resolver.ResolveGenericType("Foo[   ]", map[string]string{"T": "int"})
-	assert.Equal(t, "Foo", got)
-}
-
 // TestMapGoTypeToOpenAPISchema_ArrayOfCachedComplexType locks the path
 // where the array element type is a complex (non-primitive) type that
 // was already mapped into usedTypes by an earlier call. The function

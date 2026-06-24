@@ -1544,81 +1544,6 @@ func TestConvertPathToOpenAPI_Mount(t *testing.T) {
 }
 
 // ===========================================================================
-// TypeResolver — getCallerName and getCallerPkg nil context branches
-// ===========================================================================
-
-func TestTypeResolver_GetCallerName_NilContext(t *testing.T) {
-	meta := newTestMeta()
-	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(meta, cfg)
-
-	// nil context
-	assert.Equal(t, "", resolver.getCallerName(nil))
-
-	// Node with nil edge
-	node := &TrackerNode{key: "no-edge"}
-	assert.Equal(t, "", resolver.getCallerName(node))
-}
-
-func TestTypeResolver_GetCallerPkg_NilContext(t *testing.T) {
-	meta := newTestMeta()
-	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(meta, cfg)
-
-	// nil context
-	assert.Equal(t, "", resolver.getCallerPkg(nil))
-
-	// Node with nil edge
-	node := &TrackerNode{key: "no-edge"}
-	assert.Equal(t, "", resolver.getCallerPkg(node))
-}
-
-// ===========================================================================
-// TypeResolver — extractParameterName more branches
-// ===========================================================================
-
-func TestTypeResolver_ExtractParameterName(t *testing.T) {
-	meta := newTestMeta()
-	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(meta, cfg)
-
-	// Single letter parameter
-	assert.Equal(t, "T", resolver.extractParameterName("T"))
-	assert.Equal(t, "K", resolver.extractParameterName("K"))
-
-	// Nested parameter List[V]
-	assert.Equal(t, "V", resolver.extractParameterName("List[V]"))
-
-	// Complex multi-word parameter
-	assert.Equal(t, "ComplexType", resolver.extractParameterName("ComplexType"))
-
-	// Single letter in words
-	assert.Equal(t, "T", resolver.extractParameterName("T constraint"))
-}
-
-// ===========================================================================
-// TypeResolver — ResolveGenericType
-// ===========================================================================
-
-func TestTypeResolver_ResolveGenericType_EmptyParams(t *testing.T) {
-	meta := newTestMeta()
-	cfg := &APISpecConfig{}
-	resolver := NewTypeResolver(meta, cfg)
-
-	// No brackets
-	result := resolver.ResolveGenericType("string", nil)
-	assert.Equal(t, "string", result)
-
-	// With empty brackets
-	result = resolver.ResolveGenericType("List[]", nil)
-	assert.Equal(t, "List", result)
-
-	// With non-empty params
-	result = resolver.ResolveGenericType("List[string]", map[string]string{"T": "string"})
-	assert.NotEmpty(t, result)
-}
-
-// ===========================================================================
 // ExtractRequest — chained Decode with non-Body source
 // ===========================================================================
 
@@ -1645,7 +1570,6 @@ func TestExtractRequest_ChainedDecodeNonBody(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := RequestBodyPattern{
 		BasePattern:  BasePattern{CallRegex: "^Decode$"},
@@ -1658,7 +1582,6 @@ func TestExtractRequest_ChainedDecodeNonBody(t *testing.T) {
 			contextProvider: contextProvider,
 			cfg:             cfg,
 			schemaMapper:    schemaMapper,
-			typeResolver:    typeResolver,
 		},
 		pattern: pattern,
 	}
@@ -1692,7 +1615,6 @@ func TestExtractRequest_ResolvedType_Mount(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := RequestBodyPattern{
 		BasePattern:  BasePattern{CallRegex: "^BindJSON$"},
@@ -1704,7 +1626,6 @@ func TestExtractRequest_ResolvedType_Mount(t *testing.T) {
 			contextProvider: contextProvider,
 			cfg:             cfg,
 			schemaMapper:    schemaMapper,
-			typeResolver:    typeResolver,
 		},
 		pattern: pattern,
 	}
@@ -1736,7 +1657,6 @@ func TestExtractRequest_DerefPointer(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := RequestBodyPattern{
 		BasePattern:  BasePattern{CallRegex: "^BindJSON$"},
@@ -1749,7 +1669,6 @@ func TestExtractRequest_DerefPointer(t *testing.T) {
 			contextProvider: contextProvider,
 			cfg:             cfg,
 			schemaMapper:    schemaMapper,
-			typeResolver:    typeResolver,
 		},
 		pattern: pattern,
 	}
@@ -2241,7 +2160,6 @@ func TestResolveTypeOrigin_GenericOrigin(t *testing.T) {
 	}
 	contextProvider := NewContextProvider(meta)
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	// Build a node with type parameters
 	edge := makeEdge(meta, "handler", "main", "BindJSON", "gin", nil)
@@ -2261,7 +2179,6 @@ func TestResolveTypeOrigin_GenericOrigin(t *testing.T) {
 			contextProvider: contextProvider,
 			cfg:             cfg,
 			schemaMapper:    schemaMapper,
-			typeResolver:    typeResolver,
 		},
 		pattern: pattern,
 	}
@@ -2270,9 +2187,11 @@ func TestResolveTypeOrigin_GenericOrigin(t *testing.T) {
 	route.Metadata = meta
 
 	// Call resolveTypeOrigin directly
-	result := matcher.resolveTypeOrigin(bodyArg, node, "T")
-	// Should resolve T to ConcreteType via type param map
-	assert.NotEmpty(t, result)
+	result, _ := matcher.resolveTypeOrigin(bodyArg, node, "T")
+	// Should resolve the bare type parameter T to its concrete binding
+	// (TypeParamMap T->ConcreteType), not leave it as "T". Asserting exact
+	// equality so a regression that emits the bare parameter is caught.
+	assert.Equal(t, "ConcreteType", result)
 }
 
 // ===========================================================================

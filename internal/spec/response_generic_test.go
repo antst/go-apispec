@@ -29,8 +29,13 @@ func TestResponseResolveTypeOrigin_ResolvedTypeWins(t *testing.T) {
 			cfg:             cfg,
 		},
 	}
-	got := matcher.resolveTypeOrigin(arg, node, "T")
+	got, ref := matcher.resolveTypeOrigin(arg, node, "T")
 	assert.Equal(t, "pkg.ConcreteType", got)
+	// FIX 1: the resolved-type read site carries the lockstep ref (set by
+	// SetResolvedType), not a bare string.
+	if assert.NotNil(t, ref) {
+		assert.Equal(t, metadata.ParseTypeRef("pkg.ConcreteType").String(), ref.String())
+	}
 }
 
 // TestSharedResolveTypeOrigin_ResolvedTypeShortCircuit covers the
@@ -44,8 +49,33 @@ func TestSharedResolveTypeOrigin_ResolvedTypeShortCircuit(t *testing.T) {
 	arg.SetResolvedType("pkg.Resolved")
 	node := makeTrackerNode(nil)
 
-	got := sharedResolveTypeOrigin(arg, node, "original", cp, false)
+	got, ref := sharedResolveTypeOrigin(arg, node, "original", cp, false)
 	assert.Equal(t, "pkg.Resolved", got)
+	// FIX 1: lockstep ref threaded out of the resolved-type branch.
+	if assert.NotNil(t, ref) {
+		assert.Equal(t, metadata.ParseTypeRef("pkg.Resolved").String(), ref.String())
+	}
+}
+
+// TestSharedResolveTypeOrigin_ResolvedTypeNilRefBackfilled drives the FIX 1
+// boundary fallback at a read site: a deserialized arg can carry a non-empty
+// ResolvedType (the exported field) with a nil ResolvedTypeRef. The read site
+// must backfill a non-nil ref (refForResolved → ParseTypeRef) — the same parse
+// schemaForType would otherwise perform — rather than thread the nil it found.
+func TestSharedResolveTypeOrigin_ResolvedTypeNilRefBackfilled(t *testing.T) {
+	meta := newTestMeta()
+	cp := NewContextProvider(meta)
+	arg := makeIdentArg(meta, "x", "")
+	// Simulate deserialization: pooled ResolvedType present, structured ref absent.
+	arg.ResolvedType = meta.StringPool.Get("pkg.Resolved")
+	arg.ResolvedTypeRef = nil
+	node := makeTrackerNode(nil)
+
+	got, ref := sharedResolveTypeOrigin(arg, node, "original", cp, false)
+	assert.Equal(t, "pkg.Resolved", got)
+	if assert.NotNil(t, ref, "a deserialized ResolvedType without its ref must be backfilled") {
+		assert.Equal(t, metadata.ParseTypeRef("pkg.Resolved").String(), ref.String())
+	}
 }
 
 // TestResponseResolveTypeOrigin_GenericTypeParamSubstituted exercises the
@@ -70,6 +100,6 @@ func TestResponseResolveTypeOrigin_GenericTypeParamSubstituted(t *testing.T) {
 			cfg:             cfg,
 		},
 	}
-	got := matcher.resolveTypeOrigin(arg, node, "T")
+	got, _ := matcher.resolveTypeOrigin(arg, node, "T")
 	assert.Equal(t, "pkg.ConcreteType", got)
 }

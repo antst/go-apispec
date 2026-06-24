@@ -127,16 +127,14 @@ type BasePatternMatcher struct {
 	contextProvider ContextProvider
 	cfg             *APISpecConfig
 	schemaMapper    SchemaMapper
-	typeResolver    TypeResolver
 }
 
 // NewBasePatternMatcher creates a new base pattern matcher
-func NewBasePatternMatcher(cfg *APISpecConfig, contextProvider ContextProvider, typeResolver TypeResolver) *BasePatternMatcher {
+func NewBasePatternMatcher(cfg *APISpecConfig, contextProvider ContextProvider) *BasePatternMatcher {
 	return &BasePatternMatcher{
 		contextProvider: contextProvider,
 		cfg:             cfg,
 		schemaMapper:    NewSchemaMapper(cfg),
-		typeResolver:    typeResolver,
 	}
 }
 
@@ -147,9 +145,9 @@ type RoutePatternMatcherImpl struct {
 }
 
 // NewRoutePatternMatcher creates a new route pattern matcher
-func NewRoutePatternMatcher(pattern RoutePattern, cfg *APISpecConfig, contextProvider ContextProvider, typeResolver TypeResolver) *RoutePatternMatcherImpl {
+func NewRoutePatternMatcher(pattern RoutePattern, cfg *APISpecConfig, contextProvider ContextProvider) *RoutePatternMatcherImpl {
 	return &RoutePatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, contextProvider, typeResolver),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, contextProvider),
 		pattern:            pattern,
 	}
 }
@@ -443,9 +441,9 @@ type MountPatternMatcherImpl struct {
 }
 
 // NewMountPatternMatcher creates a new mount pattern matcher
-func NewMountPatternMatcher(pattern MountPattern, cfg *APISpecConfig, contextProvider ContextProvider, typeResolver TypeResolver) *MountPatternMatcherImpl {
+func NewMountPatternMatcher(pattern MountPattern, cfg *APISpecConfig, contextProvider ContextProvider) *MountPatternMatcherImpl {
 	return &MountPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, contextProvider, typeResolver),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, contextProvider),
 		pattern:            pattern,
 	}
 }
@@ -498,9 +496,9 @@ type RequestPatternMatcherImpl struct {
 }
 
 // NewRequestPatternMatcher creates a new request pattern matcher
-func NewRequestPatternMatcher(pattern RequestBodyPattern, cfg *APISpecConfig, contextProvider ContextProvider, typeResolver TypeResolver) *RequestPatternMatcherImpl {
+func NewRequestPatternMatcher(pattern RequestBodyPattern, cfg *APISpecConfig, contextProvider ContextProvider) *RequestPatternMatcherImpl {
 	return &RequestPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, contextProvider, typeResolver),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, contextProvider),
 		pattern:            pattern,
 	}
 }
@@ -541,10 +539,15 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 	if r.pattern.TypeFromArg && len(edge.Args) > r.pattern.TypeArgIndex {
 		arg := edge.Args[r.pattern.TypeArgIndex]
 		bodyType := r.contextProvider.GetArgumentInfo(arg)
+		var bodyRef *metadata.TypeRef // resolution-emitted structured type (Phase 3)
 
 		// Check if this is a literal value - if so, determine appropriate type
 		if arg.GetKind() == metadata.KindLiteral {
 			bodyType = determineLiteralType(bodyType)
+			// The literal type is a freshly-determined primitive string — parse it
+			// once here, at the boundary where it originates (Phase 4: keep bodyRef
+			// in lockstep so the schema path never re-derives it).
+			bodyRef = metadata.ParseTypeRef(bodyType)
 		} else if s := bodyTypeFromMetadataRef(arg.TypeRef, route.Metadata, r.cfg); s != "" {
 			// The decode target (&dto) carries a TypeRef whose named leaf is a type
 			// in metadata — its declared type IS the body type, no origin tracing
@@ -553,6 +556,7 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 			// field of that type. Generic/helper decode targets (leaf RefParam) get
 			// "" here and fall through to the resolution chain below (T009/T011).
 			bodyType = strings.TrimPrefix(s, "*")
+			bodyRef = metadata.ParseTypeRef(bodyType)
 		} else {
 			// Check for resolved type information in the CallArgument
 			if resolvedType := arg.GetResolvedType(); resolvedType != "" {
@@ -564,12 +568,14 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 				}
 			}
 
-			// Trace type origin
-			bodyType = r.resolveTypeOrigin(arg, node, bodyType)
+			// Trace type origin (sets bodyRef in lockstep with bodyType)
+			bodyType, bodyRef = r.resolveTypeOrigin(arg, node, bodyType)
 
-			// Apply dereferencing if needed
+			// Apply dereferencing if needed — unwrap the ref's pointer layer in
+			// lockstep with the string strip (Phase 4).
 			if r.pattern.Deref && strings.HasPrefix(bodyType, "*") {
 				bodyType = strings.TrimPrefix(bodyType, "*")
+				bodyRef = derefPointerRef(bodyRef)
 			}
 		}
 
@@ -580,9 +586,19 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		// extracted (possibly shared or generic) helper, recover the concrete
 		// type from the route handler's call site and re-anchor the decode
 		// target + field-inference frame onto the handler.
-		bodyType, fieldFrameBaseID = r.refineBodyTypeThroughHelper(node, reqInfo, bodyType, fieldFrameBaseID, route)
+		bodyType, fieldFrameBaseID, bodyRef = r.refineBodyTypeThroughHelper(node, reqInfo, bodyType, fieldFrameBaseID, bodyRef, route)
 
-		schema, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, r.cfg, nil)
+		// Phase 4: bodyRef has been kept in lockstep with bodyType through every
+		// transform above (resolution, deref, literal/metadata-ref boundary, helper
+		// refinement), so the schema generator consumes the structure directly with
+		// no re-parse. The corpus guard TestEveryResolvedBodyTypeReachesSchemaWithRef
+		// (internal/engine) asserts the invariant it actually enforces: every resolved
+		// (non-empty) request/response BodyType reaches schema generation with a
+		// non-nil BodyTypeRef. Exact String()==bodyType equality is not asserted —
+		// resolution/qualification can canonicalise the rendering — but byte-identical
+		// schema output is held by the SC-003 golden.
+		reqInfo.BodyTypeRef = bodyRef
+		schema, _ := schemaForType(route.UsedTypes, bodyType, bodyRef, route.Metadata, r.cfg, nil)
 		reqInfo.Schema = schema
 	}
 
@@ -724,23 +740,28 @@ func argReferencesRequest(arg *metadata.CallArgument) bool {
 //
 // reqInfo is mutated in place; the returned (bodyType, fieldFrameBaseID) replace
 // the caller's locals for schema generation and field inference.
-func (r *RequestPatternMatcherImpl) refineBodyTypeThroughHelper(node TrackerNodeInterface, reqInfo *RequestInfo, bodyType, fieldFrameBaseID string, route *RouteInfo) (string, string) {
+// refineBodyTypeThroughHelper returns the (possibly interprocedurally refined)
+// body type, its field-inference frame, and a *TypeRef kept in lockstep with the
+// returned string (Phase 4): when the call-site recovery replaces the body type,
+// the ref is re-derived from the new concrete string at that boundary; otherwise
+// the caller's existing bodyRef passes through unchanged.
+func (r *RequestPatternMatcherImpl) refineBodyTypeThroughHelper(node TrackerNodeInterface, reqInfo *RequestInfo, bodyType, fieldFrameBaseID string, bodyRef *metadata.TypeRef, route *RouteInfo) (string, string, *metadata.TypeRef) {
 	if node == nil || route == nil || route.Metadata == nil {
-		return bodyType, fieldFrameBaseID
+		return bodyType, fieldFrameBaseID, bodyRef
 	}
 	edge := node.GetEdge()
 	if edge == nil {
-		return bodyType, fieldFrameBaseID
+		return bodyType, fieldFrameBaseID, bodyRef
 	}
 	// Inline decode: the decode call sits directly in the route handler, so the
 	// frame is already correct — nothing to resolve across a call boundary.
 	if edgeCallerIsRouteHandler(edge, route) {
-		return bodyType, fieldFrameBaseID
+		return bodyType, fieldFrameBaseID, bodyRef
 	}
 
 	resolved, varName, frameBaseID := resolveBodyTypeThroughCallSite(node, reqInfo.DecodeTargetVar, route, r.contextProvider)
 	if resolved == "" {
-		return bodyType, fieldFrameBaseID
+		return bodyType, fieldFrameBaseID, bodyRef
 	}
 
 	reqInfo.DecodeTargetVar = varName
@@ -749,8 +770,9 @@ func (r *RequestPatternMatcherImpl) refineBodyTypeThroughHelper(node TrackerNode
 	if isFreeFormBodyType(reqInfo.BodyType) && !isFreeFormBodyType(resolved) {
 		reqInfo.BodyType = preprocessingBodyType(resolved)
 		bodyType = resolved
+		bodyRef = metadata.ParseTypeRef(bodyType)
 	}
-	return bodyType, fieldFrameBaseID
+	return bodyType, fieldFrameBaseID, bodyRef
 }
 
 // maxCallSiteDepth bounds how far up the tracker tree resolveBodyTypeThroughCallSite
@@ -1046,21 +1068,21 @@ func (b *BasePatternMatcher) findAssignmentFunction(arg *metadata.CallArgument) 
 }
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
-func (r *RequestPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
+func (r *RequestPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) (string, *metadata.TypeRef) {
 	// Request-specific: trace generic origin through the type-param tree before shared logic
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
-		return resolvedType
+		return resolvedType, refForResolved(arg.ResolvedTypeRef, resolvedType)
 	}
 
-	if genericType := traceGenericOrigin(node, originalType); genericType != "" {
-		return genericType
+	if genericType, ref := traceGenericOrigin(node, originalType); genericType != "" {
+		return genericType, ref
 	}
 
 	// Delegate to shared logic (checkFuncLit=true to match original Request behavior)
 	return sharedResolveTypeOrigin(arg, node, originalType, r.contextProvider, true)
 }
 
-func traceGenericOrigin(node TrackerNodeInterface, originalType string) string {
+func traceGenericOrigin(node TrackerNodeInterface, originalType string) (string, *metadata.TypeRef) {
 	typeParams := node.GetTypeParamMap()
 
 	// The bare type name (a type parameter like T resolves through the call site's
@@ -1081,10 +1103,10 @@ func traceGenericOrigin(node TrackerNodeInterface, originalType string) string {
 		}
 		// Only return the concrete type if we found a mapping
 		if foundMapping {
-			return searchType
+			return searchType, metadata.ParseTypeRef(searchType)
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func (b *BasePatternMatcher) extractMethodFromFunctionNameWithConfig(funcName string, config *MethodExtractionConfig) string {

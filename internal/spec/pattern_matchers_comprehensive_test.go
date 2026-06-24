@@ -31,11 +31,6 @@ func TestRoutePatternMatcher_Comprehensive(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -109,7 +104,7 @@ func TestRoutePatternMatcher_Comprehensive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matcher := NewRoutePatternMatcher(tt.pattern, cfg, contextProvider, typeResolver)
+			matcher := NewRoutePatternMatcher(tt.pattern, cfg, contextProvider)
 			if matcher == nil {
 				t.Fatal("Route pattern matcher should not be nil")
 				return
@@ -140,11 +135,6 @@ func TestMountPatternMatcher_Comprehensive(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -208,7 +198,7 @@ func TestMountPatternMatcher_Comprehensive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matcher := NewMountPatternMatcher(tt.pattern, cfg, contextProvider, typeResolver)
+			matcher := NewMountPatternMatcher(tt.pattern, cfg, contextProvider)
 			if matcher == nil {
 				t.Fatal("Mount pattern matcher should not be nil")
 				return
@@ -237,11 +227,6 @@ func TestRequestPatternMatcher_Comprehensive(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -293,7 +278,7 @@ func TestRequestPatternMatcher_Comprehensive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matcher := NewRequestPatternMatcher(tt.pattern, cfg, contextProvider, typeResolver)
+			matcher := NewRequestPatternMatcher(tt.pattern, cfg, contextProvider)
 			if matcher == nil {
 				t.Fatal("Request pattern matcher should not be nil")
 				return
@@ -324,11 +309,6 @@ func TestResponsePatternMatcher_Comprehensive(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -383,7 +363,7 @@ func TestResponsePatternMatcher_Comprehensive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matcher := NewResponsePatternMatcher(tt.pattern, cfg, contextProvider, typeResolver)
+			matcher := NewResponsePatternMatcher(tt.pattern, cfg, contextProvider)
 			if matcher == nil {
 				t.Fatal("Response pattern matcher should not be nil")
 				return
@@ -412,11 +392,6 @@ func TestParamPatternMatcher_Comprehensive(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -472,7 +447,7 @@ func TestParamPatternMatcher_Comprehensive(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			matcher := NewParamPatternMatcher(tt.pattern, cfg, contextProvider, typeResolver)
+			matcher := NewParamPatternMatcher(tt.pattern, cfg, contextProvider)
 			if matcher == nil {
 				t.Fatal("Param pattern matcher should not be nil")
 				return
@@ -502,11 +477,6 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -517,7 +487,7 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 			PathFromArg:    true,
 			HandlerFromArg: true,
 		}
-		routeMatcher := NewRoutePatternMatcher(routePattern, cfg, contextProvider, typeResolver)
+		routeMatcher := NewRoutePatternMatcher(routePattern, cfg, contextProvider)
 		if routeMatcher == nil {
 			t.Fatal("Should handle empty regex pattern")
 			return
@@ -528,7 +498,7 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 			RouterFromArg: true,
 			IsMount:       true,
 		}
-		mountMatcher := NewMountPatternMatcher(mountPattern, cfg, contextProvider, typeResolver)
+		mountMatcher := NewMountPatternMatcher(mountPattern, cfg, contextProvider)
 		if mountMatcher == nil {
 			t.Fatal("Should handle empty regex pattern")
 			return
@@ -548,7 +518,7 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 			}
 		}()
 
-		_ = NewRoutePatternMatcher(routePattern, nil, contextProvider, typeResolver)
+		_ = NewRoutePatternMatcher(routePattern, nil, contextProvider)
 	})
 
 	t.Run("nil context provider", func(t *testing.T) {
@@ -564,23 +534,7 @@ func TestPatternMatcher_EdgeCases(t *testing.T) {
 			}
 		}()
 
-		_ = NewRoutePatternMatcher(routePattern, cfg, nil, typeResolver)
-	})
-
-	t.Run("nil type resolver", func(t *testing.T) {
-		// Test with nil type resolver - should handle gracefully
-		routePattern := RoutePattern{BasePattern: BasePattern{CallRegex: `^GET$`}, MethodFromCall: true,
-			PathFromArg:    true,
-			HandlerFromArg: true,
-		}
-
-		defer func() {
-			if r := recover(); r != nil {
-				t.Log("Expected panic with nil type resolver:", r)
-			}
-		}()
-
-		_ = NewRoutePatternMatcher(routePattern, cfg, contextProvider, nil)
+		_ = NewRoutePatternMatcher(routePattern, cfg, nil)
 	})
 }
 
@@ -593,11 +547,6 @@ func TestPatternMatcher_PrioritySystem(t *testing.T) {
 
 	// Create config
 	cfg := DefaultGinConfig()
-
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
@@ -616,8 +565,8 @@ func TestPatternMatcher_PrioritySystem(t *testing.T) {
 			HandlerFromArg: true,
 		}
 
-		highMatcher := NewRoutePatternMatcher(highPriorityPattern, cfg, contextProvider, typeResolver)
-		lowMatcher := NewRoutePatternMatcher(lowPriorityPattern, cfg, contextProvider, typeResolver)
+		highMatcher := NewRoutePatternMatcher(highPriorityPattern, cfg, contextProvider)
+		lowMatcher := NewRoutePatternMatcher(lowPriorityPattern, cfg, contextProvider)
 
 		highPriority := highMatcher.GetPriority()
 		lowPriority := lowMatcher.GetPriority()
@@ -641,8 +590,8 @@ func TestPatternMatcher_PrioritySystem(t *testing.T) {
 			IsMount:       true,
 		}
 
-		highMatcher := NewMountPatternMatcher(highPriorityPattern, cfg, contextProvider, typeResolver)
-		lowMatcher := NewMountPatternMatcher(lowPriorityPattern, cfg, contextProvider, typeResolver)
+		highMatcher := NewMountPatternMatcher(highPriorityPattern, cfg, contextProvider)
+		lowMatcher := NewMountPatternMatcher(lowPriorityPattern, cfg, contextProvider)
 
 		highPriority := highMatcher.GetPriority()
 		lowPriority := lowMatcher.GetPriority()
@@ -664,11 +613,6 @@ func TestMountPatternMatcher_GetPattern(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -679,7 +623,7 @@ func TestMountPatternMatcher_GetPattern(t *testing.T) {
 	}
 
 	// Create mount pattern matcher
-	matcher := NewMountPatternMatcher(pattern, cfg, contextProvider, typeResolver)
+	matcher := NewMountPatternMatcher(pattern, cfg, contextProvider)
 
 	// Test GetPattern
 	result := matcher.GetPattern()
@@ -703,11 +647,6 @@ func TestMountPatternMatcher_ExtractMount(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -719,7 +658,7 @@ func TestMountPatternMatcher_ExtractMount(t *testing.T) {
 	}
 
 	// Create mount pattern matcher
-	matcher := NewMountPatternMatcher(pattern, cfg, contextProvider, typeResolver)
+	matcher := NewMountPatternMatcher(pattern, cfg, contextProvider)
 
 	// Create a mock node with edge
 	edge := &metadata.CallGraphEdge{
@@ -783,11 +722,6 @@ func TestRequestPatternMatcher_MatchNode(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -802,7 +736,7 @@ func TestRequestPatternMatcher_MatchNode(t *testing.T) {
 	}
 
 	// Create request pattern matcher
-	matcher := NewRequestPatternMatcher(pattern, cfg, contextProvider, typeResolver)
+	matcher := NewRequestPatternMatcher(pattern, cfg, contextProvider)
 
 	// Create a mock node with edge
 	edge := &metadata.CallGraphEdge{
@@ -846,11 +780,6 @@ func TestRequestPatternMatcher_GetPattern(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -860,7 +789,7 @@ func TestRequestPatternMatcher_GetPattern(t *testing.T) {
 	}
 
 	// Create request pattern matcher
-	matcher := NewRequestPatternMatcher(pattern, cfg, contextProvider, typeResolver)
+	matcher := NewRequestPatternMatcher(pattern, cfg, contextProvider)
 
 	// Test GetPattern
 	result := matcher.GetPattern()
@@ -884,11 +813,6 @@ func TestRequestPatternMatcher_ExtractRequest(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
@@ -899,7 +823,7 @@ func TestRequestPatternMatcher_ExtractRequest(t *testing.T) {
 	}
 
 	// Create request pattern matcher
-	matcher := NewRequestPatternMatcher(pattern, cfg, contextProvider, typeResolver)
+	matcher := NewRequestPatternMatcher(pattern, cfg, contextProvider)
 
 	// Create a mock node with edge
 	edge := &metadata.CallGraphEdge{
@@ -983,16 +907,11 @@ func TestBasePatternMatcher_traceVariable(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
 	// Create base pattern matcher
-	matcher := NewBasePatternMatcher(cfg, contextProvider, typeResolver)
+	matcher := NewBasePatternMatcher(cfg, contextProvider)
 
 	// Test traceVariable
 	originVar, originPkg, originType, originFunc := matcher.traceVariable("user", "main", "main")
@@ -1025,16 +944,11 @@ func TestBasePatternMatcher_traceRouterOrigin(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
 	// Create base pattern matcher
-	matcher := NewBasePatternMatcher(cfg, contextProvider, typeResolver)
+	matcher := NewBasePatternMatcher(cfg, contextProvider)
 
 	// Create a mock node with edge
 	edge := &metadata.CallGraphEdge{
@@ -1182,16 +1096,11 @@ func TestBasePatternMatcher_findAssignmentFunction(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
 	// Create base pattern matcher
-	matcher := NewBasePatternMatcher(cfg, contextProvider, typeResolver)
+	matcher := NewBasePatternMatcher(cfg, contextProvider)
 
 	// Create router argument
 	routerArg := metadata.CallArgument{
@@ -1228,16 +1137,11 @@ func TestRequestPatternMatcher_resolveTypeOrigin(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
 	// Create request pattern matcher
-	matcher := NewRequestPatternMatcher(RequestBodyPattern{}, cfg, contextProvider, typeResolver)
+	matcher := NewRequestPatternMatcher(RequestBodyPattern{}, cfg, contextProvider)
 
 	// Create a mock node with edge
 	edge := &metadata.CallGraphEdge{
@@ -1313,7 +1217,7 @@ func TestRequestPatternMatcher_resolveTypeOrigin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := matcher.resolveTypeOrigin(tt.arg, mockNode, tt.originalType)
+			result, _ := matcher.resolveTypeOrigin(tt.arg, mockNode, tt.originalType)
 			// Since the metadata setup is complex, we just verify the method doesn't panic
 			// and returns some reasonable value
 			if result == "" {
@@ -1333,16 +1237,11 @@ func TestTraceGenericOrigin(t *testing.T) {
 	// Create config
 	cfg := DefaultGinConfig()
 
-	// Create schema mapper
-
-	// Create type resolver
-	typeResolver := NewTypeResolver(meta, cfg)
-
 	// Create context provider
 	contextProvider := NewContextProvider(meta)
 
 	// Create base pattern matcher (not used in this test)
-	_ = NewBasePatternMatcher(cfg, contextProvider, typeResolver)
+	_ = NewBasePatternMatcher(cfg, contextProvider)
 
 	// Create a mock node with type parameters
 	mockNode := &TrackerNode{
@@ -1387,7 +1286,7 @@ func TestTraceGenericOrigin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := traceGenericOrigin(mockNode, tt.typeString)
+			result, _ := traceGenericOrigin(mockNode, tt.typeString)
 			if result != tt.expected {
 				t.Errorf("Expected %s, got %s", tt.expected, result)
 			}

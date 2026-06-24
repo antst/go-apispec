@@ -1248,10 +1248,9 @@ func TestNewResponsePatternMatcher(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
 	contextProvider := NewContextProvider(meta)
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := ResponsePattern{BasePattern: BasePattern{CallRegex: "^JSON$"}, DefaultStatus: 200}
-	matcher := NewResponsePatternMatcher(pattern, cfg, contextProvider, typeResolver)
+	matcher := NewResponsePatternMatcher(pattern, cfg, contextProvider)
 	require.NotNil(t, matcher)
 	assert.Equal(t, 200, matcher.pattern.DefaultStatus)
 }
@@ -1260,10 +1259,9 @@ func TestNewParamPatternMatcher(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
 	contextProvider := NewContextProvider(meta)
-	typeResolver := NewTypeResolver(meta, cfg)
 
 	pattern := ParamPattern{BasePattern: BasePattern{CallRegex: "^Param$"}, ParamIn: "path"}
-	matcher := NewParamPatternMatcher(pattern, cfg, contextProvider, typeResolver)
+	matcher := NewParamPatternMatcher(pattern, cfg, contextProvider)
 	require.NotNil(t, matcher)
 	assert.Equal(t, "path", matcher.pattern.ParamIn)
 }
@@ -1337,6 +1335,94 @@ func TestExtractResponse_TypeConversionArg(t *testing.T) {
 	assert.Equal(t, 200, resp.StatusCode)
 	// The type conversion unwraps to the inner arg (literal "hello") -> determineLiteralType -> "string"
 	assert.Equal(t, "string", resp.BodyType)
+}
+
+// A type conversion to a GENERIC target with a NON-literal inner arg exercises the
+// conversion-target bodyRef re-derive: bodyType becomes the conversion target
+// "List[int]" while the inner arg's ref is []int — the re-derive must re-align
+// bodyRef to the target so it stays in lockstep with bodyType (byte-identical).
+func TestExtractResponse_TypeConversionGenericArg(t *testing.T) {
+	meta := newTestMeta()
+
+	// List[int](xs): outer conversion target is the generic "List[int]"; inner is a
+	// non-literal ident typed []int (so the literal branch does not fire).
+	innerArg := makeIdentArg(meta, "xs", "[]int")
+	outerArg := makeCallArg(meta)
+	outerArg.SetKind(metadata.KindTypeConversion)
+	// The conversion target is read from .Fun (GetArgumentInfo -> callArgToString(Fun)).
+	outerArg.Fun = makeIdentArg(meta, "List", "List[int]")
+	outerArg.Args = []*metadata.CallArgument{innerArg}
+
+	statusArg := makeLiteralArg(meta, "200")
+	edge := makeEdge(meta, "handler", "main", "Write", "http",
+		[]*metadata.CallArgument{statusArg, outerArg})
+	node := makeTrackerNode(&edge)
+
+	cfg := &APISpecConfig{Defaults: Defaults{ResponseContentType: "application/json"}}
+	matcher := &ResponsePatternMatcherImpl{
+		BasePatternMatcher: &BasePatternMatcher{
+			contextProvider: NewContextProvider(meta),
+			cfg:             cfg,
+			schemaMapper:    NewSchemaMapper(cfg),
+		},
+		pattern: ResponsePattern{StatusFromArg: true, StatusArgIndex: 0, TypeFromArg: true, TypeArgIndex: 1},
+	}
+
+	route := NewRouteInfo()
+	route.Metadata = meta
+	resp := firstResponse(matcher.ExtractResponse(node, route))
+
+	require.NotNil(t, resp)
+	// bodyType is the conversion TARGET, not the inner []int.
+	assert.Equal(t, "List[int]", resp.BodyType)
+	// The re-derived bodyRef is in lockstep with bodyType (ParseTypeRef of the target),
+	// NOT the stale inner []int ref — that is exactly what the conversion re-derive restores.
+	require.NotNil(t, resp.BodyTypeRef)
+	assert.Equal(t, resp.BodyType, resp.BodyTypeRef.String(),
+		"bodyRef re-derived from the conversion target, in lockstep with bodyType")
+}
+
+// TestExtractResponse_GenericBodyNilTypeRefBackfillsRef covers the generic-wrapper
+// branch (bodyType contains "[", not []/map) that intentionally skips origin
+// tracing to preserve the wrapper. When the body arg carries no structured TypeRef
+// (makeIdentArg leaves it nil), bodyRef would otherwise reach the carrier nil —
+// violating the Phase-3 contract that every non-empty resolved body carries a ref
+// (TestEveryResolvedBodyTypeReachesSchemaWithRef). refForResolved must backfill the
+// canonical ParseTypeRef(bodyType) at the carrier-assignment point. Byte-neutral:
+// schemaForType re-parses a nil ref to the same canonical tree.
+func TestExtractResponse_GenericBodyNilTypeRefBackfillsRef(t *testing.T) {
+	meta := newTestMeta()
+
+	// A generic body ident whose arg has NO TypeRef; GetArgumentInfo yields the
+	// generic string, so the wrapper branch skips resolveTypeOrigin and bodyRef
+	// stays nil through to the carrier.
+	bodyArg := makeIdentArg(meta, "resp", "APIResponse[int]") // TypeRef stays nil
+	require.Nil(t, bodyArg.TypeRef, "precondition: the body arg carries no structured ref")
+	statusArg := makeLiteralArg(meta, "200")
+	edge := makeEdge(meta, "handler", "main", "Write", "http",
+		[]*metadata.CallArgument{statusArg, bodyArg})
+	node := makeTrackerNode(&edge)
+
+	cfg := &APISpecConfig{Defaults: Defaults{ResponseContentType: "application/json"}}
+	matcher := &ResponsePatternMatcherImpl{
+		BasePatternMatcher: &BasePatternMatcher{
+			contextProvider: NewContextProvider(meta),
+			cfg:             cfg,
+			schemaMapper:    NewSchemaMapper(cfg),
+		},
+		pattern: ResponsePattern{StatusFromArg: true, StatusArgIndex: 0, TypeFromArg: true, TypeArgIndex: 1},
+	}
+
+	route := NewRouteInfo()
+	route.Metadata = meta
+	resp := firstResponse(matcher.ExtractResponse(node, route))
+
+	require.NotNil(t, resp)
+	require.NotEmpty(t, resp.BodyType, "the generic wrapper body type must be preserved")
+	require.NotNil(t, resp.BodyTypeRef,
+		"a non-empty resolved body must carry a ref even when arg.TypeRef was nil (Phase-3 contract)")
+	assert.Equal(t, metadata.ParseTypeRef(resp.BodyType).String(), resp.BodyTypeRef.String(),
+		"backfilled ref is the canonical ParseTypeRef of the body type")
 }
 
 // ---------------------------------------------------------------------------
@@ -1995,7 +2081,7 @@ func TestResponseResolveTypeOrigin_GenericType(t *testing.T) {
 	edge.TypeParamMap = map[string]string{"T": "UserDTO"}
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "T")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "T")
 	assert.Equal(t, "UserDTO", result)
 }
 
@@ -2028,7 +2114,7 @@ func TestResponseResolveTypeOrigin_AssignmentMap(t *testing.T) {
 	}
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "interface{}")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "interface{}")
 	assert.Equal(t, "UserResponse", result)
 }
 
@@ -2053,7 +2139,7 @@ func TestResponseResolveTypeOrigin_Fallback(t *testing.T) {
 	edge := makeEdge(meta, "handler", "main", "Send", "lib", nil)
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "SomeType")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "SomeType")
 	assert.Equal(t, "SomeType", result)
 }
 
@@ -2084,7 +2170,7 @@ func TestParamResolveTypeOrigin_GenericType(t *testing.T) {
 	edge.TypeParamMap = map[string]string{"T": "int"}
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "T")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "T")
 	assert.Equal(t, "int", result)
 }
 
@@ -2114,7 +2200,7 @@ func TestParamResolveTypeOrigin_AssignmentMap(t *testing.T) {
 	}
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "interface{}")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "interface{}")
 	assert.Equal(t, "int64", result)
 }
 
@@ -2137,7 +2223,7 @@ func TestParamResolveTypeOrigin_Fallback(t *testing.T) {
 	edge := makeEdge(meta, "handler", "main", "GetParam", "lib", nil)
 	node := makeTrackerNode(&edge)
 
-	result := matcher.resolveTypeOrigin(arg, node, "string")
+	result, _ := matcher.resolveTypeOrigin(arg, node, "string")
 	assert.Equal(t, "string", result)
 }
 

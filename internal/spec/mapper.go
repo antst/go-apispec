@@ -646,6 +646,7 @@ func buildResponses(respInfo map[string]*ResponseInfo) map[string]Response {
 				if bodyResp.Schema != nil {
 					if statusResp.Schema == nil {
 						statusResp.BodyType = bodyResp.BodyType
+						statusResp.BodyTypeRef = bodyResp.BodyTypeRef
 						statusResp.Schema = bodyResp.Schema
 					} else if !schemasEqual(statusResp.Schema, bodyResp.Schema) {
 						statusResp.AlternativeSchemas = append(statusResp.AlternativeSchemas, bodyResp.Schema)
@@ -1065,18 +1066,6 @@ func lastPathSegment(p string) string {
 		return p[i+1:]
 	}
 	return p
-}
-
-// pkgMatchesLeaf reports whether the analyzed package pkgName (always a full
-// import path) is the package a selector leaf's qualifier names. When leafPkg is a
-// FULL import path (getTypeName qualified the leaf), match it EXACTLY — last-
-// segment matching would wrongly accept any other ".../<segment>" package. Only a
-// bare short qualifier (no "/") falls back to last-segment matching.
-func pkgMatchesLeaf(pkgName, leafPkg string) bool {
-	if strings.Contains(leafPkg, "/") {
-		return pkgName == leafPkg
-	}
-	return lastPathSegment(pkgName) == leafPkg
 }
 
 // typeByRefGated is typeByRef with the collision guard applied: it resolves a
@@ -2579,6 +2568,28 @@ func schemaForUnresolved(goType string, cfg *APISpecConfig) (*Schema, map[string
 // separator) so a consumer that looks the component up by that exact key —
 // field-format inference — still finds it. Returns ok=false for generic and
 // otherwise-unresolved leaves (the caller applies its terminal fallback).
+//
+// SC-001 boundary (Phase 3, spec 008): this ParseTypeRef is the schema layer's
+// sole remaining re-parse, and it is BYPASSED for a resolved body/param/return
+// type whose threaded ref is canonical (goType == ref.String()) — the common case;
+// a resolved position with a non-canonical spelling (e.g. goType's internal "-->"
+// separator vs the ref's normalized String()) still reaches the goType !=
+// ref.String() case below. Those positions thread a structured ref (RequestInfo/ResponseInfo
+// BodyTypeRef, or a param-local) materialized at the resolution boundary
+// (type_utils.go sharedResolveTypeOrigin, extractor.go resolveParamArgType — the
+// parse MOVED there per research D1, not duplicated). When that ref is present and
+// canonical (goType == ref.String()), schemaForType walks it via schemaForRefTree
+// parse-free and never calls here. schemaFromParsedString is entered only for
+//   - genuine string-only callers (ref == nil): struct-field recursion, named
+//     underlying-type expansion, and config overrides; and
+//   - the goType != ref.String() divergence (alias pre-resolved to its underlying,
+//     or a generic RefParam substituted to its concrete arg) where goType — not the
+//     placeholder ref — carries the answer (schemaForType's goType-wins guard,
+//     research D1).
+//
+// The other resolution-layer ParseTypeRef is traceGenericOrigin's generic-origin
+// unwrap (pattern_matchers.go), a structural boundary parse (FR-001), not a
+// resolved-type re-parse. Enforced by TestResolvedPathThreadsTypeRef.
 func schemaFromParsedString(usedTypes map[string]*Schema, goType string, meta *metadata.Metadata, cfg *APISpecConfig, visitedTypes map[string]bool) (*Schema, map[string]*Schema, bool) {
 	pref := metadata.ParseTypeRef(goType)
 	if pref == nil {

@@ -175,7 +175,8 @@ func (r *ResponsePatternMatcherImpl) resolveOverrideGoType(ctorArg *metadata.Cal
 		return ""
 	}
 	if ctorArg.GetKind() == metadata.KindIdent {
-		if t := cleanOverrideType(r.resolveParamArgType(node, ctorArg.GetName())); t != "" {
+		paramType, _ := r.resolveParamArgType(node, ctorArg.GetName())
+		if t := cleanOverrideType(paramType); t != "" {
 			return t
 		}
 	}

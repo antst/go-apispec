@@ -213,6 +213,9 @@ func (r *RouteInfo) IsValid() bool {
 type RequestInfo struct {
 	ContentType string
 	BodyType    string
+	// BodyTypeRef is the structured resolved body type (Phase 3) consumed by
+	// schema generation; BodyType (the string) stays for component naming.
+	BodyTypeRef *metadata.TypeRef
 	Schema      *Schema
 
 	// Required indicates whether the OpenAPI requestBody.required flag should be
@@ -234,6 +237,9 @@ type ResponseInfo struct {
 	StatusCode  int
 	ContentType string
 	BodyType    string
+	// BodyTypeRef is the structured resolved body type (Phase 3) consumed by
+	// schema generation; BodyType (the string) stays for component naming.
+	BodyTypeRef *metadata.TypeRef
 	Schema      *Schema
 	// AlternativeSchemas holds additional schemas when multiple response
 	// types share the same status code (e.g., ErrorResponse and map[string]string
@@ -249,7 +255,6 @@ type Extractor struct {
 	cfg             *APISpecConfig
 	contextProvider ContextProvider
 	schemaMapper    SchemaMapper
-	typeResolver    TypeResolver
 	overrideApplier OverrideApplier
 
 	// Pattern matchers
@@ -352,7 +357,6 @@ func (e *Extractor) checkContentTypePattern(node TrackerNodeInterface, route *Ro
 func NewExtractor(tree TrackerTreeInterface, cfg *APISpecConfig) *Extractor {
 	contextProvider := NewContextProvider(tree.GetMetadata())
 	schemaMapper := NewSchemaMapper(cfg)
-	typeResolver := NewTypeResolver(tree.GetMetadata(), cfg)
 	overrideApplier := NewOverrideApplier(cfg)
 
 	extractor := &Extractor{
@@ -360,7 +364,6 @@ func NewExtractor(tree TrackerTreeInterface, cfg *APISpecConfig) *Extractor {
 		cfg:             cfg,
 		contextProvider: contextProvider,
 		schemaMapper:    schemaMapper,
-		typeResolver:    typeResolver,
 		overrideApplier: overrideApplier,
 	}
 
@@ -374,31 +377,31 @@ func NewExtractor(tree TrackerTreeInterface, cfg *APISpecConfig) *Extractor {
 func (e *Extractor) initializePatternMatchers() {
 	// Initialize route matchers
 	for _, pattern := range e.cfg.Framework.RoutePatterns {
-		matcher := NewRoutePatternMatcher(pattern, e.cfg, e.contextProvider, e.typeResolver)
+		matcher := NewRoutePatternMatcher(pattern, e.cfg, e.contextProvider)
 		e.routeMatchers = append(e.routeMatchers, matcher)
 	}
 
 	// Initialize mount matchers
 	for _, pattern := range e.cfg.Framework.MountPatterns {
-		matcher := NewMountPatternMatcher(pattern, e.cfg, e.contextProvider, e.typeResolver)
+		matcher := NewMountPatternMatcher(pattern, e.cfg, e.contextProvider)
 		e.mountMatchers = append(e.mountMatchers, matcher)
 	}
 
 	// Initialize request matchers
 	for _, pattern := range e.cfg.Framework.RequestBodyPatterns {
-		matcher := NewRequestPatternMatcher(pattern, e.cfg, e.contextProvider, e.typeResolver)
+		matcher := NewRequestPatternMatcher(pattern, e.cfg, e.contextProvider)
 		e.requestMatchers = append(e.requestMatchers, matcher)
 	}
 
 	// Initialize response matchers
 	for _, pattern := range e.cfg.Framework.ResponsePatterns {
-		matcher := NewResponsePatternMatcher(pattern, e.cfg, e.contextProvider, e.typeResolver)
+		matcher := NewResponsePatternMatcher(pattern, e.cfg, e.contextProvider)
 		e.responseMatchers = append(e.responseMatchers, matcher)
 	}
 
 	// Initialize param matchers
 	for _, pattern := range e.cfg.Framework.ParamPatterns {
-		matcher := NewParamPatternMatcher(pattern, e.cfg, e.contextProvider, e.typeResolver)
+		matcher := NewParamPatternMatcher(pattern, e.cfg, e.contextProvider)
 		e.paramMatchers = append(e.paramMatchers, matcher)
 	}
 }
@@ -738,25 +741,41 @@ func (r *ResponsePatternMatcherImpl) resolveParamArgStatus(node TrackerNodeInter
 //	func respondJSON(w http.ResponseWriter, code int, data interface{}) {
 //	    json.Encode(data)  // ← data is interface{}, but user is User
 //	}
-func (r *ResponsePatternMatcherImpl) resolveParamArgType(node TrackerNodeInterface, paramName string) string {
+func (r *ResponsePatternMatcherImpl) resolveParamArgType(node TrackerNodeInterface, paramName string) (string, *metadata.TypeRef) {
 	for parent := node.GetParent(); parent != nil; parent = parent.GetParent() {
 		parentEdge := parent.GetEdge()
 		if parentEdge == nil {
 			continue
 		}
 		if arg, exists := parentEdge.ParamArgMap[paramName]; exists {
-			// Use GetArgumentInfo first — it produces the fully-qualified type
-			// (e.g., "error_helpers.User" instead of just "User")
+			// Byte-identical to main: GetArgumentInfo's fully-qualified string IS the
+			// param's type, and we thread ParseTypeRef of that exact string — the PR's
+			// "ParseTypeRef of the string the call sites pass" design — so schemaForType
+			// consumes the ref without its own re-parse (Phase 3).
+			//
+			// We deliberately do NOT source the string natively from arg.TypeRef.String()
+			// or a concrete arg.GetResolvedType() here (the reverted Phase-4 D6 fast-paths).
+			// Both render the canonical "."-separated form, but the resolution layer — and
+			// main — carry the "-->" TypeSep form. resolveParamArgType feeds the
+			// SEPARATOR-SENSITIVE cleanOverrideType (via resolveOverrideGoType,
+			// wrapper_specialisation.go), whose `ContainsAny(t, "./[")` test ACCEPTS
+			// "pkg.Order" but REJECTS "pkg-->Order"; a native "." string there flips the
+			// wrapper allOf override on for a payload where main emitted a bare $ref — a
+			// byte-identical break confirmed by the PR #62 full review (golden-invisible:
+			// the same-package envelope shape isn't in the corpus). GetArgumentInfo keeps
+			// every resolution-layer consumer aligned with main; the threaded ParseTypeRef
+			// still spares schemaForType its re-parse. (The body consumer normalizes
+			// "."/"-->" identically, which is why this hid behind a clean golden.)
 			if info := r.contextProvider.GetArgumentInfo(&arg); info != "" && info != "interface{}" && info != "any" {
-				return info
+				return info, metadata.ParseTypeRef(info)
 			}
-			// Fallback to raw type
+			// Fallback to the raw arg type, likewise threaded.
 			if argType := arg.GetType(); argType != "" && argType != "interface{}" && argType != "any" {
-				return argType
+				return argType, metadata.ParseTypeRef(argType)
 			}
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // writeDestTracesToResponseWriter reports whether a free-function write's
@@ -790,7 +809,7 @@ func (r *ResponsePatternMatcherImpl) writeDestTracesToResponseWriter(node Tracke
 	}
 	// Parameter the caller bound to a response writer (helper(w io.Writer)
 	// invoked with the handler's http.ResponseWriter).
-	if t := r.resolveParamArgType(node, dst.GetName()); strings.Contains(t, "http.ResponseWriter") {
+	if t, _ := r.resolveParamArgType(node, dst.GetName()); strings.Contains(t, "http.ResponseWriter") {
 		return true
 	}
 	return false
@@ -1009,11 +1028,13 @@ func (e *Extractor) addResponse(route *RouteInfo, resp *ResponseInfo) {
 		resp.Schema = nil
 		resp.AlternativeSchemas = nil
 		resp.BodyType = ""
+		resp.BodyTypeRef = nil
 	}
 	key := fmt.Sprintf("%d", resp.StatusCode)
 	if existing, ok := route.Response[key]; ok && resp.Schema != nil {
 		if existing.Schema == nil {
 			existing.BodyType = resp.BodyType
+			existing.BodyTypeRef = resp.BodyTypeRef
 			existing.Schema = resp.Schema
 		} else {
 			isDuplicate := schemasEqual(existing.Schema, resp.Schema)
@@ -1144,7 +1165,7 @@ func (e *Extractor) expandHelperFunctionResponses(routeNode TrackerNodeInterface
 					if bodyArg, ok := call.edge.ParamArgMap[bodyParam]; ok {
 						bodyType := e.contextProvider.GetArgumentInfo(&bodyArg)
 						if bodyType != "" && bodyType != "interface{}" && bodyType != "any" {
-							if s, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, e.cfg, nil); s != nil {
+							if s, _ := schemaForType(route.UsedTypes, bodyType, metadata.ParseTypeRef(bodyType), route.Metadata, e.cfg, nil); s != nil {
 								schema = s
 							}
 						}
@@ -1668,9 +1689,9 @@ type ResponsePatternMatcherImpl struct {
 }
 
 // NewResponsePatternMatcher creates a new response pattern matcher
-func NewResponsePatternMatcher(pattern ResponsePattern, cfg *APISpecConfig, contextProvider ContextProvider, typeResolver TypeResolver) *ResponsePatternMatcherImpl {
+func NewResponsePatternMatcher(pattern ResponsePattern, cfg *APISpecConfig, contextProvider ContextProvider) *ResponsePatternMatcherImpl {
 	return &ResponsePatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, contextProvider, typeResolver),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, contextProvider),
 		pattern:            pattern,
 	}
 }
@@ -1802,6 +1823,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		}
 
 		bodyType := r.contextProvider.GetArgumentInfo(arg)
+		var bodyRef *metadata.TypeRef // resolution-emitted structured type (Phase 3)
 		// For a composite literal whose named leaf is a type we have in metadata,
 		// prefer the lossless TypeRef string: its canonical fully-qualified form is
 		// what the field path uses, so the body references the same component. A
@@ -1831,26 +1853,44 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		// (T009/T011).
 		if arg.TypeRef != nil {
 			rawArgType = arg.TypeRef.String()
+			// Phase 4: baseline the ref from the arg's own structured type — native,
+			// no parse. resolveTypeOrigin / literal / deref below refine it in
+			// lockstep with bodyType where they change the string.
+			bodyRef = arg.TypeRef
 		}
 		if strings.Contains(rawArgType, "[") && !strings.HasPrefix(rawArgType, "[]") && !strings.HasPrefix(rawArgType, "map[") {
 			if !genericArgsAreConcrete(bodyType) {
 				bodyType = rawArgType
+				bodyRef = arg.TypeRef // rawArgType == arg.TypeRef.String()
 			}
+		}
+
+		// A type conversion overrode bodyType with the conversion TARGET above, but the
+		// bodyRef baseline came from the INNER (converted) arg, so they can diverge —
+		// e.g. List[int](xs) gives bodyType "List[T any]" while bodyRef is []int. Re-
+		// derive bodyRef from the target string so it stays in lockstep with bodyType
+		// (the Phase-4 byte-identical invariant); the literal/origin branches below do
+		// not re-resolve a generic target. A non-generic target is re-traced by
+		// resolveTypeOrigin next, which overwrites this in lockstep.
+		if conversionTargetType != "" && bodyType == conversionTargetType {
+			bodyRef = metadata.ParseTypeRef(bodyType)
 		}
 
 		// Check if this is a literal value - if so, determine appropriate type
 		if arg.GetKind() == metadata.KindLiteral {
 			// For literal values, determine the appropriate type based on the value
 			bodyType = determineLiteralType(bodyType)
+			bodyRef = metadata.ParseTypeRef(bodyType) // literal-type boundary (Phase 4)
 		} else if !strings.Contains(bodyType, "[") || strings.HasPrefix(bodyType, "[]") || strings.HasPrefix(bodyType, "map[") {
 			// Trace type origin for non-literal, non-generic arguments.
 			// Skip type resolution for generic types (e.g., "APIResponse[User]")
 			// to preserve the wrapper type and enable generic struct instantiation.
-			bodyType = r.resolveTypeOrigin(arg, node, bodyType)
+			bodyType, bodyRef = r.resolveTypeOrigin(arg, node, bodyType)
 
-			// Apply dereferencing if needed
+			// Apply dereferencing if needed — unwrap the ref's pointer in lockstep.
 			if r.pattern.Deref && strings.HasPrefix(bodyType, "*") {
 				bodyType = strings.TrimPrefix(bodyType, "*")
+				bodyRef = derefPointerRef(bodyRef)
 			}
 		}
 
@@ -1858,8 +1898,9 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		// function parameter, resolve the concrete type from the caller's argument
 		// via ParamArgMap (e.g., respondJSON(w, 201, user) where data is interface{}).
 		if (bodyType == "interface{}" || bodyType == "" || bodyType == "any") && arg.GetKind() == metadata.KindIdent {
-			if concreteType := r.resolveParamArgType(node, arg.GetName()); concreteType != "" {
+			if concreteType, concreteRef := r.resolveParamArgType(node, arg.GetName()); concreteType != "" {
 				bodyType = concreteType
+				bodyRef = concreteRef
 			}
 		}
 
@@ -1872,15 +1913,31 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 		// in from the caller's ParamArgMap arg instead (issue #27).
 		if strings.Contains(bodyType, "invalid type") {
 			bodyType = ""
+			bodyRef = nil
 		}
 
 		respInfo.BodyType = preprocessingBodyType(bodyType)
+		// Phase 4: bodyRef is kept in lockstep with bodyType through every transform
+		// above (arg.TypeRef baseline, resolveTypeOrigin, resolveParamArgType, literal
+		// boundary, deref unwrap, invalid-type clear). The generic-wrapper branch
+		// (bodyType contains "[") skips origin tracing, so a body whose arg carried no
+		// TypeRef can reach here with bodyRef still nil; refForResolved backfills the
+		// canonical ParseTypeRef(bodyType) there. Backfill bodyRef IN PLACE so both the
+		// carrier and the schemaForType call below consume the same threaded ref — no
+		// schema-layer re-parse (the Phase-3/4 goal; passing the raw nil here would send
+		// schemaForType back through its own ParseTypeRef). refForResolved never
+		// overwrites a non-nil ref, so canonical/stale handling is unchanged; and
+		// ParseTypeRef("") is nil, so a cleared body stays exempt and the Phase-3 carrier
+		// contract (TestEveryResolvedBodyTypeReachesSchemaWithRef) holds for the skip
+		// path too.
+		bodyRef = refForResolved(bodyRef, bodyType)
+		respInfo.BodyTypeRef = bodyRef
 
 		// In response-writer context, []byte means raw binary content.
 		if bodyType == "[]byte" {
 			respInfo.Schema = &Schema{Type: "string", Format: "binary"}
 		} else {
-			schema, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, r.cfg, nil)
+			schema, _ := schemaForType(route.UsedTypes, bodyType, bodyRef, route.Metadata, r.cfg, nil)
 			respInfo.Schema = schema
 
 			// Wrapper/envelope specialisation: when the body flows through a
@@ -1899,6 +1956,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 	if respInfo.BodyType == "" && r.pattern.DefaultBodyType != "" {
 		bodyType := r.pattern.DefaultBodyType
 		respInfo.BodyType = preprocessingBodyType(bodyType)
+		respInfo.BodyTypeRef = metadata.ParseTypeRef(bodyType) // Phase 3 carrier
 		if bodyType == "[]byte" {
 			// For io.Copy, try to trace the reader source to distinguish
 			// binary (os.Open) from text (strings.NewReader).
@@ -1925,7 +1983,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 				respInfo.Schema = &Schema{Type: "string"}
 			}
 		} else {
-			schema, _ := schemaForType(route.UsedTypes, bodyType, nil, route.Metadata, r.cfg, nil)
+			schema, _ := schemaForType(route.UsedTypes, bodyType, respInfo.BodyTypeRef, route.Metadata, r.cfg, nil)
 			respInfo.Schema = schema
 		}
 	}
@@ -1951,6 +2009,7 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 					StatusCode:  st,
 					ContentType: respInfo.ContentType,
 					BodyType:    respInfo.BodyType,
+					BodyTypeRef: respInfo.BodyTypeRef,
 					Schema:      respInfo.Schema,
 					Branch:      respInfo.Branch,
 				})
@@ -2095,11 +2154,11 @@ func positionLineCol(pos string) (line, col int, ok bool) {
 }
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
-func (r *ResponsePatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
+func (r *ResponsePatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) (string, *metadata.TypeRef) {
 	// Honour explicit resolved-type info on the argument first — set when an
 	// earlier analysis pass already pinned the concrete type.
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
-		return resolvedType
+		return resolvedType, refForResolved(arg.ResolvedTypeRef, resolvedType)
 	}
 
 	// Substitute generic type parameters using the call site's TypeParamMap.
@@ -2107,8 +2166,8 @@ func (r *ResponsePatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgumen
 	// `WriteJSON[T any](w, status, v T)` would emit the bare type parameter
 	// (e.g. `pkg.T`) instead of the concrete instantiation at the call site
 	// (e.g. `dto.CheckRoomHTTPResponse`). Mirrors the request-side logic.
-	if genericType := traceGenericOrigin(node, originalType); genericType != "" {
-		return genericType
+	if genericType, ref := traceGenericOrigin(node, originalType); genericType != "" {
+		return genericType, ref
 	}
 
 	return sharedResolveTypeOrigin(arg, node, originalType, r.contextProvider, false)
@@ -2121,9 +2180,9 @@ type ParamPatternMatcherImpl struct {
 }
 
 // NewParamPatternMatcher creates a new param pattern matcher
-func NewParamPatternMatcher(pattern ParamPattern, cfg *APISpecConfig, contextProvider ContextProvider, typeResolver TypeResolver) *ParamPatternMatcherImpl {
+func NewParamPatternMatcher(pattern ParamPattern, cfg *APISpecConfig, contextProvider ContextProvider) *ParamPatternMatcherImpl {
 	return &ParamPatternMatcherImpl{
-		BasePatternMatcher: NewBasePatternMatcher(cfg, contextProvider, typeResolver),
+		BasePatternMatcher: NewBasePatternMatcher(cfg, contextProvider),
 		pattern:            pattern,
 	}
 }
@@ -2157,22 +2216,28 @@ func (p *ParamPatternMatcherImpl) ExtractParam(node TrackerNodeInterface, route 
 	if p.pattern.TypeFromArg && len(edge.Args) > p.pattern.TypeArgIndex {
 		arg := edge.Args[p.pattern.TypeArgIndex]
 		paramType := p.contextProvider.GetArgumentInfo(arg)
+		var paramRef *metadata.TypeRef // resolution-emitted structured type (Phase 3; param-path local, no carrier field)
 
 		// Check if this is a literal value - if so, determine appropriate type
 		if arg.GetKind() == metadata.KindLiteral {
 			// For literal values, determine the appropriate type based on the value
 			paramType = determineLiteralType(paramType)
+			paramRef = metadata.ParseTypeRef(paramType) // literal-type boundary (Phase 4)
 		} else {
-			// Trace type origin for non-literal arguments
-			paramType = p.resolveTypeOrigin(arg, node, paramType)
+			// Trace type origin for non-literal arguments (sets paramRef in lockstep)
+			paramType, paramRef = p.resolveTypeOrigin(arg, node, paramType)
 
-			// Apply dereferencing if needed
+			// Apply dereferencing if needed — unwrap the ref's pointer in lockstep.
 			if p.pattern.Deref && strings.HasPrefix(paramType, "*") {
 				paramType = strings.TrimPrefix(paramType, "*")
+				paramRef = derefPointerRef(paramRef)
 			}
 		}
 
-		schema, _ := schemaForType(route.UsedTypes, paramType, nil, route.Metadata, p.cfg, nil)
+		// Phase 4: paramRef is kept in lockstep with paramType (resolveTypeOrigin,
+		// literal boundary, deref unwrap), so the schema generator consumes it
+		// directly — no reconcile re-parse.
+		schema, _ := schemaForType(route.UsedTypes, paramType, paramRef, route.Metadata, p.cfg, nil)
 		param.Schema = schema
 	}
 
@@ -2204,7 +2269,7 @@ func (p *ParamPatternMatcherImpl) ExtractParam(node TrackerNodeInterface, route 
 }
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters
-func (p *ParamPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) string {
+func (p *ParamPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) (string, *metadata.TypeRef) {
 	return sharedResolveTypeOrigin(arg, node, originalType, p.contextProvider, false)
 }
 
@@ -2238,6 +2303,7 @@ func (o *OverrideApplierImpl) ApplyOverrides(routeInfo *RouteInfo) {
 			if override.ResponseType != "" && routeInfo.Response != nil {
 				for _, key := range slices.Sorted(maps.Keys(routeInfo.Response)) {
 					routeInfo.Response[key].BodyType = preprocessingBodyType(override.ResponseType)
+					routeInfo.Response[key].BodyTypeRef = metadata.ParseTypeRef(override.ResponseType)
 				}
 			}
 			if len(override.Tags) > 0 {

@@ -18,6 +18,37 @@ import (
 	"github.com/antst/go-apispec/internal/metadata"
 )
 
+// derefPointerRef unwraps one pointer layer from ref to stay in lockstep with a
+// body/param STRING from which the caller has just stripped a leading "*"
+// (pattern.Deref). ParseTypeRef("*X") is RefPointer{Elem}, so the unwrapped Elem
+// renders to the stripped string — keeping ref == ParseTypeRef(string) without a
+// re-parse. Returns ref unchanged when it is not a pointer (the string had no "*"
+// to strip, or resolution produced no ref), so callers can apply it
+// unconditionally after the string strip.
+func derefPointerRef(ref *metadata.TypeRef) *metadata.TypeRef {
+	if ref != nil && ref.Kind == metadata.RefPointer && ref.Elem != nil {
+		return ref.Elem
+	}
+	return ref
+}
+
+// refForResolved returns the lockstep ResolvedTypeRef for a resolved-type string,
+// re-deriving it from the string only when it is absent. CallArgument.ResolvedType
+// (string) and ResolvedTypeRef (*TypeRef) are kept in lockstep by SetResolvedType
+// (ResolvedTypeRef = ParseTypeRef(ResolvedType)), so the materialized ref is reused
+// directly. But ResolvedType is a serialized/exported field: a deserialized or
+// hand-constructed CallArgument can carry a non-empty ResolvedType with a nil ref.
+// At the resolved-type read sites the contract is "carry a ref", so this backfills
+// ParseTypeRef(resolvedType) — the same parse schemaForType would otherwise perform
+// on the string — keeping the boundary parse-free in the common case and byte-
+// identical in the deserialized fallback.
+func refForResolved(ref *metadata.TypeRef, resolvedType string) *metadata.TypeRef {
+	if ref != nil {
+		return ref
+	}
+	return metadata.ParseTypeRef(resolvedType)
+}
+
 // sharedResolveTypeOrigin consolidates the common type origin resolution logic
 // used by RequestPatternMatcherImpl, ResponsePatternMatcherImpl, and ParamPatternMatcherImpl.
 //
@@ -27,16 +58,29 @@ import (
 //  3. Whether the argument's variable has assignments with concrete types (for KindIdent,
 //     and optionally KindFuncLit when checkFuncLit is true)
 //  4. Falls back to originalType
-func sharedResolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string, contextProvider ContextProvider, checkFuncLit bool) string {
+//
+// It returns the resolved type both as the (naming) string and as a structured
+// *TypeRef (Phase 3). For the resolved-type branch the materialized
+// arg.ResolvedTypeRef is reused (it is kept in lockstep with the string by
+// SetResolvedType); the other branches parse their own resolved string at this
+// boundary (research D1). The ref always equals ParseTypeRef of the returned
+// string, so threading it into schemaForType is byte-identical to re-parsing.
+//
+// SC-001 (spec 008): these ParseTypeRef calls are the resolution boundary where
+// the parse LIVES — moved off the schema path, not added. Each call here lets the
+// downstream schemaForType consume the tree directly instead of re-parsing the
+// resolved string (mapper.go schemaFromParsedString documents the retained-parse
+// counterpart).
+func sharedResolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string, contextProvider ContextProvider, checkFuncLit bool) (string, *metadata.TypeRef) {
 	// If the argument has resolved type information, use it
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
-		return resolvedType
+		return resolvedType, refForResolved(arg.ResolvedTypeRef, resolvedType)
 	}
 
 	// If it's a generic type with a concrete resolution, use it
 	if arg.IsGenericType && arg.GenericTypeName != -1 {
 		if concreteType, exists := node.GetTypeParamMap()[arg.GetGenericTypeName()]; exists {
-			return concreteType
+			return concreteType, metadata.ParseTypeRef(concreteType)
 		}
 	}
 
@@ -49,12 +93,12 @@ func sharedResolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterfa
 				if assignment.ConcreteType != 0 {
 					concreteType := contextProvider.GetString(assignment.ConcreteType)
 					if concreteType != "" {
-						return concreteType
+						return concreteType, metadata.ParseTypeRef(concreteType)
 					}
 				}
 			}
 		}
 	}
 
-	return originalType
+	return originalType, metadata.ParseTypeRef(originalType)
 }

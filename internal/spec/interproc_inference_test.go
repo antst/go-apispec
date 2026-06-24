@@ -582,19 +582,18 @@ func TestResolveBodyTypeThroughCallSite_Guards(t *testing.T) {
 func TestRefineBodyTypeThroughHelper(t *testing.T) {
 	meta := newTestMeta()
 	cfg := DefaultChiConfig()
-	matcher := NewRequestPatternMatcher(RequestBodyPattern{}, cfg, NewContextProvider(meta),
-		NewTypeResolver(meta, cfg))
+	matcher := NewRequestPatternMatcher(RequestBodyPattern{}, cfg, NewContextProvider(meta))
 
 	// Nil node or no route metadata → returned unchanged.
 	concrete := &RequestInfo{BodyType: "pkg.Req", DecodeTargetVar: "body"}
-	bt, frame := matcher.refineBodyTypeThroughHelper(nil, concrete, "pkg.Req", "frameA", &RouteInfo{Metadata: meta})
+	bt, frame, _ := matcher.refineBodyTypeThroughHelper(nil, concrete, "pkg.Req", "frameA", metadata.ParseTypeRef("pkg.Req"), &RouteInfo{Metadata: meta})
 	assert.Equal(t, "pkg.Req", bt)
 	assert.Equal(t, "frameA", frame)
 	assert.Equal(t, "body", concrete.DecodeTargetVar)
 
 	// Node with no edge → returned unchanged.
 	noEdge := &RequestInfo{BodyType: "any", DecodeTargetVar: "dst"}
-	bt, frame = matcher.refineBodyTypeThroughHelper(&TrackerNode{}, noEdge, "any", "frameNoEdge", &RouteInfo{Metadata: meta})
+	bt, frame, _ = matcher.refineBodyTypeThroughHelper(&TrackerNode{}, noEdge, "any", "frameNoEdge", metadata.ParseTypeRef("any"), &RouteInfo{Metadata: meta})
 	assert.Equal(t, "any", bt)
 	assert.Equal(t, "frameNoEdge", frame)
 
@@ -603,8 +602,8 @@ func TestRefineBodyTypeThroughHelper(t *testing.T) {
 		[]*metadata.CallArgument{wrapUnary(meta, makeIdentArg(meta, "body", "pkg.Req"), "&")})
 	inlineNode := makeTrackerNode(&inlineEdge)
 	inlineReq := &RequestInfo{BodyType: "pkg.Req", DecodeTargetVar: "body"}
-	bt, frame = matcher.refineBodyTypeThroughHelper(inlineNode, inlineReq, "pkg.Req", "frameInline",
-		&RouteInfo{Metadata: meta, Function: "Copy", Package: "pkg"})
+	bt, frame, _ = matcher.refineBodyTypeThroughHelper(inlineNode, inlineReq, "pkg.Req", "frameInline",
+		metadata.ParseTypeRef("pkg.Req"), &RouteInfo{Metadata: meta, Function: "Copy", Package: "pkg"})
 	assert.Equal(t, "pkg.Req", bt)
 	assert.Equal(t, "frameInline", frame, "inline decode is not re-anchored")
 
@@ -621,16 +620,20 @@ func TestRefineBodyTypeThroughHelper(t *testing.T) {
 
 	// Variant A: free-form `any` → body type overridden AND frame re-anchored.
 	varA := &RequestInfo{BodyType: "any", DecodeTargetVar: "dst"}
-	bt, frame = matcher.refineBodyTypeThroughHelper(decodeNode, varA, "any", "helperFrame", copyRoute)
+	bt, frame, refA := matcher.refineBodyTypeThroughHelper(decodeNode, varA, "any", "helperFrame", metadata.ParseTypeRef("any"), copyRoute)
 	assert.Equal(t, "pkg.CopyReq", bt)
 	assert.Equal(t, "pkg.CopyReq", varA.BodyType, "free-form type upgraded")
 	assert.Equal(t, "body", varA.DecodeTargetVar, "decode target re-anchored to the caller var")
 	assert.Equal(t, copyEdge.Caller.BaseID(), frame, "field inference re-anchored to the handler frame")
+	// Phase 4: the refined body type carries a ref in lockstep with the new string.
+	if assert.NotNil(t, refA) {
+		assert.Equal(t, metadata.ParseTypeRef("pkg.CopyReq").String(), refA.String(), "ref tracks the upgraded body type")
+	}
 
 	// Variant B: concrete generic type already resolved → type kept, but the
 	// field-inference frame is still re-anchored onto the handler.
 	varB := &RequestInfo{BodyType: "pkg.CopyReq", DecodeTargetVar: "dst"}
-	bt, frame = matcher.refineBodyTypeThroughHelper(decodeNode, varB, "pkg.CopyReq", "helperFrame", copyRoute)
+	bt, frame, _ = matcher.refineBodyTypeThroughHelper(decodeNode, varB, "pkg.CopyReq", "helperFrame", metadata.ParseTypeRef("pkg.CopyReq"), copyRoute)
 	assert.Equal(t, "pkg.CopyReq", bt, "concrete generic type is not overridden")
 	assert.Equal(t, "pkg.CopyReq", varB.BodyType)
 	assert.Equal(t, "body", varB.DecodeTargetVar, "frame re-anchored even when type already concrete")

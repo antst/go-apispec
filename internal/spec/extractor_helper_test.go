@@ -274,7 +274,7 @@ func TestResolveParamArgType_FoundType(t *testing.T) {
 	}
 
 	rm := ext.responseMatchers[0].(*ResponsePatternMatcherImpl)
-	result := rm.resolveParamArgType(child, "data")
+	result, _ := rm.resolveParamArgType(child, "data")
 	assert.NotEmpty(t, result)
 	assert.NotEqual(t, "interface{}", result)
 }
@@ -302,7 +302,7 @@ func TestResolveParamArgType_SkipsInterface(t *testing.T) {
 	}
 
 	rm := ext.responseMatchers[0].(*ResponsePatternMatcherImpl)
-	result := rm.resolveParamArgType(child, "data")
+	result, _ := rm.resolveParamArgType(child, "data")
 	assert.Empty(t, result)
 }
 
@@ -328,7 +328,7 @@ func TestResolveParamArgType_SkipsAny(t *testing.T) {
 	}
 
 	rm := ext.responseMatchers[0].(*ResponsePatternMatcherImpl)
-	result := rm.resolveParamArgType(child, "data")
+	result, _ := rm.resolveParamArgType(child, "data")
 	assert.Empty(t, result)
 }
 
@@ -339,7 +339,7 @@ func TestResolveParamArgType_NilParent(t *testing.T) {
 	child := &TrackerNode{key: "child"}
 
 	rm := ext.responseMatchers[0].(*ResponsePatternMatcherImpl)
-	result := rm.resolveParamArgType(child, "data")
+	result, _ := rm.resolveParamArgType(child, "data")
 	assert.Empty(t, result)
 }
 
@@ -366,7 +366,7 @@ func TestResolveParamArgType_ParamNotFound(t *testing.T) {
 	}
 
 	rm := ext.responseMatchers[0].(*ResponsePatternMatcherImpl)
-	result := rm.resolveParamArgType(child, "data")
+	result, _ := rm.resolveParamArgType(child, "data")
 	assert.Empty(t, result)
 }
 
@@ -395,7 +395,7 @@ func TestResolveParamArgType_FallbackToRawType(t *testing.T) {
 	}
 
 	rm := ext.responseMatchers[0].(*ResponsePatternMatcherImpl)
-	result := rm.resolveParamArgType(child, "data")
+	result, _ := rm.resolveParamArgType(child, "data")
 	// Should get some type back (either via GetArgumentInfo or fallback)
 	assert.NotEmpty(t, result)
 	assert.NotEqual(t, "interface{}", result)
