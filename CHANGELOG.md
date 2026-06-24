@@ -5,6 +5,46 @@ All notable changes to this project are documented here. This project follows
 (Principle VI), output changes that are *strictly more accurate* are MINOR, not
 breaking.
 
+## [Unreleased] — Control-Flow Graph Foundation
+
+### Added — more accurate conditional analysis (MINOR)
+
+The per-function control-flow graph (previously used only to annotate branches)
+is now retained as a compact, queryable reachability + dominance model, and the
+conditional-analysis consumers resolve over it instead of a source-text-position
+heuristic. This sharpens several cases:
+
+- **Conditional status codes** (the #39 / #50 / #57 pain) are computed
+  structurally: a status contributes iff its assignment can *reach* the response
+  write and is not overwritten on every path by a later, call-dominating
+  assignment. Mutually-exclusive `if`/`else` (and `switch`) arms fan out; an
+  early-`return` before the write is excluded; an unconditional overwrite shadows
+  earlier assignments. **A value assigned inside a loop body now reaches a write
+  after the loop** (the analysis terminates across the back-edge).
+- **Helper-internal type-switch binding**: when a handler funnels a value into a
+  shared responder that `switch v.(type)`s on it, the call-site argument is bound
+  to the matching arm — `Respond(w, &NotFound{})` fans out only that arm's status,
+  not every arm. When the argument's concrete type is not statically known (a bare
+  `error`/`any`), the analyzer degrades to the unconditionally-reachable result
+  and emits a warning rather than over-approximating.
+- **Method dispatch via `if r.Method == http.MethodPost`** now splits into one
+  operation per method, the same as a `switch r.Method` already did.
+- **Branch-dependent response bodies** are attributed to the status on which they
+  are written (e.g. `FullUser`/200 vs `ErrorBody`/404), never merged.
+
+Each behavior ships with its own targeted fixture (`cfg_helper_typeswitch`,
+`cfg_loop_status`, `cfg_method_if_dispatch`, `cfg_branch_bodies`); the existing
+framework golden corpus does not exercise these constructs, so it — and the
+determinism suite — stays byte-identical.
+
+### Changed — internals
+
+- The conditional-status fan-out's source-position heuristic (`positionAfter`,
+  `positionLineCol`, and the "last unconditional index") was **removed** in favor
+  of the structural reachability predicate. When control flow cannot be modeled,
+  the analyzer falls back to the unconditionally-reachable (single-path) result
+  and warns — it never guesses a conditional set.
+
 ## [Unreleased] — TypeRef Metadata Integration (Phase 2)
 
 ### Added — more accurate schema output (MINOR)

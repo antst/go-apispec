@@ -62,6 +62,19 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "writejson_helper", inputDir: "../../testdata/writejson_helper", configFn: spec.DefaultHTTPConfig},
 		{name: "error_switch_minimal", inputDir: "../../testdata/error_switch_minimal", configFn: spec.DefaultChiConfig},
 		{name: "error_switch_file_service", inputDir: "../../testdata/error_switch_file_service", configFn: spec.DefaultChiConfig},
+		// spec 009: a response helper that type-switches on its argument. The
+		// concrete-type route fans out only the matched arm; the imprecise route
+		// degrades to the default arm + warns (FR-011/FR-012).
+		{name: "cfg_helper_typeswitch", inputDir: "../../testdata/cfg_helper_typeswitch", configFn: spec.DefaultHTTPConfig},
+		// spec 009: a status assigned inside a loop body still reaches the response
+		// write (FR-010 — the loop back-edge terminates and the value contributes).
+		{name: "cfg_loop_status", inputDir: "../../testdata/cfg_loop_status", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: an `if r.Method == …` dispatch splits into one operation per
+		// method, the same as a `switch r.Method` (FR-003).
+		{name: "cfg_method_if_dispatch", inputDir: "../../testdata/cfg_method_if_dispatch", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US3: branch-dependent response bodies are attributed to the status
+		// on which they are written — 200/FullUser vs 404/ErrorBody, not merged (FR-005).
+		{name: "cfg_branch_bodies", inputDir: "../../testdata/cfg_branch_bodies", configFn: spec.DefaultHTTPConfig},
 		{name: "bodyless_status", inputDir: "../../testdata/bodyless_status", configFn: spec.DefaultHTTPConfig},
 		{name: "wrapped_response", inputDir: "../../testdata/wrapped_response", configFn: spec.DefaultHTTPConfig},
 		{name: "echo_handler_factory", inputDir: "../../testdata/echo_handler_factory", configFn: spec.DefaultEchoConfig},

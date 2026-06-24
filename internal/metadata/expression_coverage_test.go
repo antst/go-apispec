@@ -1121,7 +1121,7 @@ func TestBuildFunctionCFGs_NilBody(_ *testing.T) {
 		Body: nil,
 	}
 	// Should not panic
-	BuildFunctionCFGs([]*ast.FuncDecl{decl}, fset, meta)
+	BuildFunctionCFGs([]*ast.FuncDecl{decl}, nil, fset, meta)
 }
 
 func TestBuildFunctionCFGs_WithMatchingEdges(t *testing.T) {
@@ -1158,7 +1158,7 @@ func handler(method string) {
 		},
 	}
 
-	BuildFunctionCFGs([]*ast.FuncDecl{funcDecl}, fset, meta)
+	BuildFunctionCFGs([]*ast.FuncDecl{funcDecl}, nil, fset, meta)
 	// Just verify it doesn't panic and runs correctly
 }
 
@@ -1187,7 +1187,7 @@ func dispatch(method string) {
 	require.NotNil(t, funcDecl)
 
 	meta := newTestMeta()
-	BuildFunctionCFGs([]*ast.FuncDecl{funcDecl}, fset, meta)
+	BuildFunctionCFGs([]*ast.FuncDecl{funcDecl}, nil, fset, meta)
 }
 
 // ------------------------------------------------------------
@@ -1546,7 +1546,7 @@ func f(x int) int {
 		},
 	}
 
-	BuildFunctionCFGs([]*ast.FuncDecl{funcDecl}, fset, meta)
+	BuildFunctionCFGs([]*ast.FuncDecl{funcDecl}, nil, fset, meta)
 }
 
 // Test ExprToCallArgument dispatches IndexListExpr via the switch

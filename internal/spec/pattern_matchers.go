@@ -127,6 +127,19 @@ type BasePatternMatcher struct {
 	contextProvider ContextProvider
 	cfg             *APISpecConfig
 	schemaMapper    SchemaMapper
+	warnings        *WarningSink // non-fatal analysis warnings → stderr (spec 009, FR-008)
+}
+
+// warn records a non-fatal analysis warning (lazily creating a stderr sink). Used by
+// the conditional-analysis degrade paths (FR-008/FR-012).
+func (b *BasePatternMatcher) warn(pos, msg string) {
+	if b == nil {
+		return
+	}
+	if b.warnings == nil {
+		b.warnings = NewWarningSink()
+	}
+	b.warnings.Warn(pos, msg)
 }
 
 // NewBasePatternMatcher creates a new base pattern matcher

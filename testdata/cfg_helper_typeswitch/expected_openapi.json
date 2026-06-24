@@ -1,0 +1,76 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/concrete": {
+      "get": {
+        "summary": "handleConcrete passes a statically-known *NotFoundError → only 404.",
+        "operationId": "cfg_helper_typeswitch.handleConcrete",
+        "responses": {
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/cfg_helper_typeswitch.NotFoundError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/imprecise": {
+      "get": {
+        "summary": "handleImprecise passes a bare error (as any) whose concrete type is unknown\nhere → degrade to the default arm (500) + warn.",
+        "operationId": "cfg_helper_typeswitch.handleImprecise",
+        "responses": {
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/cfg_helper_typeswitch.DefaultError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "cfg_helper_typeswitch.DefaultError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "cfg_helper_typeswitch.NotFoundError": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "resource"
+        ]
+      }
+    }
+  }
+}

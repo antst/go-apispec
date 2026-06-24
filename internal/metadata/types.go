@@ -135,6 +135,19 @@ type Metadata struct {
 	Packages   map[string]*Package `yaml:"packages,omitempty"`
 	CallGraph  []CallGraphEdge     `yaml:"call_graph,omitempty"`
 
+	// FunctionCFGs holds the per-function compact control-flow model (reachability +
+	// dominance), keyed by function identity (the function body's position string).
+	// Built by BuildFunctionCFGs (spec 009, FR-001). Transient: it is an in-memory
+	// analysis structure consumed during extraction and rebuilt on each run, so it is
+	// NOT serialized — persisting it (without its companion cfgPosToFn index, which is
+	// also transient) would bloat the metadata dump with a model unusable after load.
+	FunctionCFGs map[string]*FunctionCFG `yaml:"-"`
+	// cfgPosToFn maps a source position (both raw and repo-root-stripped forms, like
+	// the edge/assignment position indexes — #27) to the FunctionCFGs key of the
+	// function that position lives in, so a consumer holding only a position can find
+	// its function's model. Transient (rebuilt with FunctionCFGs).
+	cfgPosToFn map[string]string `yaml:"-"`
+
 	Callers         map[string][]*CallGraphEdge `yaml:"-"`
 	ParentFunctions map[string][]*CallGraphEdge `yaml:"-"`
 	Callees         map[string][]*CallGraphEdge `yaml:"-"`
@@ -519,6 +532,39 @@ type BranchContext struct {
 	BlockKind     string   `yaml:"block_kind,omitempty"` // "if-then", "if-else", "switch-case", ""
 	ParentStmtPos int      `yaml:"parent_stmt_pos,omitempty"`
 	CaseValues    []string `yaml:"case_values,omitempty"` // For switch-case: literal values from case clause (e.g., "GET", "POST")
+	// CaseTypeRefs holds the case TYPES for a type-switch arm (switch x.(type) { case *T: ... }).
+	// Disjoint from CaseValues (which carries string/method literals); empty for value-switches
+	// and for case nil:/default: (the unconditional arm). Populated by extractCaseTypeRefs (spec 009).
+	CaseTypeRefs []*TypeRef `yaml:"case_type_refs,omitempty"`
+	// SwitchOperand is the variable being type-switched (`switch x := v.(type)` → "v")
+	// for a type-switch arm. It lets a consumer bind the switched parameter to the
+	// call-site argument via CallGraphEdge.ParamArgMap (spec 009, FR-011). Empty when
+	// the operand is not a simple ident, or for non-type-switch blocks.
+	SwitchOperand string `yaml:"switch_operand,omitempty"`
+}
+
+// FunctionCFG is the compact, retained per-function control-flow model built by
+// BuildFunctionCFGs (spec 009, FR-001). The raw *cfg.CFG is dropped after build;
+// this int-only form answers reachability/dominance queries and is serializable.
+type FunctionCFG struct {
+	Blocks     []BlockInfo         `yaml:"blocks,omitempty"`
+	Succs      [][]int32           `yaml:"succs,omitempty"`      // Succs[i] = successor block indices of block i
+	Dominators []int32             `yaml:"dominators,omitempty"` // immediate dominator idom[i]; entry idom = -1
+	PosToBlock map[string]BlockLoc `yaml:"pos_to_block,omitempty"`
+}
+
+// BlockInfo is one CFG basic block in the compact model.
+type BlockInfo struct {
+	Index     int32  `yaml:"index"`
+	Kind      string `yaml:"kind,omitempty"`
+	NodeCount int32  `yaml:"node_count,omitempty"`
+}
+
+// BlockLoc locates a statement/call within the CFG: its block, and its node index
+// within that block (node order disambiguates defs/uses inside one block).
+type BlockLoc struct {
+	Block int32 `yaml:"block"`
+	Node  int32 `yaml:"node"`
 }
 
 type Assignment struct {
