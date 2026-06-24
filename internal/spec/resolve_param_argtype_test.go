@@ -108,6 +108,69 @@ func TestResolveParamArgType_RefBranches(t *testing.T) {
 		assert.Equal(t, "error_helpers.User", got, "a *T leaf is non-concrete → fall through")
 	})
 
+	// D6 gate (tightened, PR #62 review): a generic-instantiation leaf (RefNamed
+	// with Args) must NOT take the fast-path — arg.TypeRef.String() keeps the base
+	// qualifier ("svc.APIResponse[svc.User]") where GetArgumentInfo drops it, a
+	// different component name. Falls through to the GetArgumentInfo string.
+	t.Run("generic-instantiation typeref skips the fast-path and falls through", func(t *testing.T) {
+		arg := makeIdentArg(meta, "u", "error_helpers.User")
+		arg.TypeRef = &metadata.TypeRef{
+			Kind: metadata.RefNamed, Pkg: "svc", Name: "APIResponse",
+			Args: []*metadata.TypeRef{{Kind: metadata.RefNamed, Pkg: "svc", Name: "User"}},
+		}
+		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
+		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
+		child := makeTrackerNode(&childEdge)
+		child.Parent = makeTrackerNode(&parent)
+
+		got, ref := m.resolveParamArgType(child, "p")
+		assert.Equal(t, "error_helpers.User", got,
+			"a generic leaf must fall through to the GetArgumentInfo string")
+		assert.NotEqual(t, "svc.APIResponse[svc.User]", got,
+			"the native generic rendering must not leak through")
+		if assert.NotNil(t, ref) {
+			assert.Equal(t, metadata.ParseTypeRef(got).String(), ref.String())
+		}
+	})
+
+	// D6 gate (tightened, PR #62 review): an unqualified RefNamed leaf (Pkg == "",
+	// the AST-only fallback when info.TypeOf is unavailable) must NOT take the
+	// fast-path — its String() is the bare name ("User") where GetArgumentInfo
+	// re-qualifies from arg.Pkg. Falls through, recovering the qualified form.
+	t.Run("unqualified RefNamed typeref skips the fast-path and falls through", func(t *testing.T) {
+		arg := makeIdentArg(meta, "u", "error_helpers.User")
+		arg.TypeRef = &metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"} // Pkg ""
+		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
+		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
+		child := makeTrackerNode(&childEdge)
+		child.Parent = makeTrackerNode(&parent)
+
+		got, ref := m.resolveParamArgType(child, "p")
+		assert.Equal(t, "error_helpers.User", got,
+			"an unqualified leaf must fall through to the qualified GetArgumentInfo string")
+		assert.NotEqual(t, "User", got, "the bare unqualified name must not leak through")
+		if assert.NotNil(t, ref) {
+			assert.Equal(t, metadata.ParseTypeRef(got).String(), ref.String())
+		}
+	})
+
+	// D6 gate (tightened, PR #62 review): RefBasic is NOT gated — a qualified
+	// primitive (time.Time) renders whole via String() and matches GetArgumentInfo,
+	// so it keeps the native fast-path.
+	t.Run("qualified-primitive RefBasic keeps the fast-path", func(t *testing.T) {
+		tr := &metadata.TypeRef{Kind: metadata.RefBasic, Pkg: "time", Name: "Time"}
+		arg := makeIdentArg(meta, "u", "shadowed.ByTypeRef")
+		arg.TypeRef = tr
+		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
+		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
+		child := makeTrackerNode(&childEdge)
+		child.Parent = makeTrackerNode(&parent)
+
+		got, ref := m.resolveParamArgType(child, "p")
+		assert.Equal(t, "time.Time", got, "a qualified primitive renders whole and stays on the fast-path")
+		assert.Same(t, tr, ref, "ref is the arg's own TypeRef pointer")
+	})
+
 	// D6 ordering (FIX 2): a concrete RESOLVED type wins over the declared TypeRef.
 	// Generic binding pins the concrete instantiation on ResolvedType while the
 	// declared TypeRef may still be the bare parameter; even when the declared

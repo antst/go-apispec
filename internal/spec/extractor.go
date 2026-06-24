@@ -763,9 +763,22 @@ func (r *ResponsePatternMatcherImpl) resolveParamArgType(node TrackerNodeInterfa
 			// fall through. NamedLeaf unwraps ptr/slice/array/map to reach the leaf — so
 			// an anonymous-struct (RefStruct) or interface-leaf container ([]interface{})
 			// arg also falls through to GetArgumentInfo, i.e. the pre-D6, main-aligned path.
+			//
+			// Two further RefNamed shapes are EXCLUDED because arg.TypeRef.String()
+			// diverges from the GetArgumentInfo fallback for them — a latent break of
+			// byte-identity (neither shape appears in the golden corpus):
+			//   - generic instantiations (len(leaf.Args) > 0): String() keeps the base
+			//     qualifier ("mypkg.APIResponse[…]") where GetArgumentInfo drops it
+			//     ("APIResponse[…]"), a different component name; and
+			//   - an unqualified leaf (leaf.Pkg == ""): an AST-only RefNamed fallback
+			//     (info.TypeOf unavailable) renders the bare name ("User") where
+			//     GetArgumentInfo re-qualifies from arg.Pkg ("mypkg.User").
+			// Both fall through to GetArgumentInfo. RefBasic stays faithful (a qualified
+			// primitive like time.Time still renders whole), so it is not gated.
 			if arg.TypeRef != nil {
 				if leaf := arg.TypeRef.NamedLeaf(); leaf != nil &&
-					(leaf.Kind == metadata.RefNamed || leaf.Kind == metadata.RefBasic) {
+					(leaf.Kind == metadata.RefBasic ||
+						(leaf.Kind == metadata.RefNamed && len(leaf.Args) == 0 && leaf.Pkg != "")) {
 					if s := arg.TypeRef.String(); s != "" && s != "interface{}" && s != "any" {
 						return s, arg.TypeRef
 					}
