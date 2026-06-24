@@ -23,12 +23,15 @@ import (
 )
 
 // TestResolveParamArgType_RefBranches exercises every return path of
-// resolveParamArgType and locks the Phase-3 invariant: the returned *TypeRef is
-// non-nil exactly when the string is non-empty, and always equals ParseTypeRef
-// of that string (so threading it into schemaForType is byte-identical to
-// re-parsing — research D1). Covers the GetArgumentInfo branch, the raw-type
-// fallback (the branch a KindKeyValue arg forces, since GetArgumentInfo returns
-// "" for it), the nil-parent-edge continue, and the terminal no-match.
+// resolveParamArgType and locks two invariants:
+//   - Phase-3: the returned *TypeRef is non-nil exactly when the string is
+//     non-empty, and always equals ParseTypeRef of that string (so threading it
+//     into schemaForType is byte-identical to re-parsing).
+//   - Byte-identical-to-main (PR #62 review): the returned STRING comes from
+//     GetArgumentInfo (the "-->"/TypeSep form main emits), never natively from
+//     arg.TypeRef.String() or a concrete arg.GetResolvedType() (the "."-form).
+//     The "."-form diverges at the separator-sensitive cleanOverrideType (wrapper
+//     allOf override), so sourcing it would break byte-identity vs main.
 func TestResolveParamArgType_RefBranches(t *testing.T) {
 	meta := newTestMeta()
 	cfg := &APISpecConfig{}
@@ -53,163 +56,43 @@ func TestResolveParamArgType_RefBranches(t *testing.T) {
 		}
 	})
 
-	// Branch D6 (Phase 4): when the bound arg carries its own structured TypeRef,
-	// resolveParamArgType sources it directly — the returned ref is that very
-	// pointer (no re-parse), and the string is its rendering.
-	t.Run("typeref branch sources the ref natively", func(t *testing.T) {
-		tr := metadata.ParseTypeRef("svc.Account")
-		arg := makeIdentArg(meta, "u", "shadowed.ByTypeRef")
-		arg.TypeRef = tr
+	// Byte-identical guard (PR #62 review): even when the bound arg carries its own
+	// concrete declared TypeRef, GetArgumentInfo's string wins. The reverted Phase-4
+	// D6 fast-path returned arg.TypeRef.String() ("svc.Account", "."-form) here; that
+	// is accepted by cleanOverrideType where main's GetArgumentInfo "-->"-form is
+	// rejected, flipping the wrapper override on — a byte-identical break.
+	t.Run("GetArgumentInfo wins over a declared TypeRef (no native fast-path)", func(t *testing.T) {
+		arg := makeIdentArg(meta, "u", "error_helpers.User") // GetArgumentInfo => this
+		arg.TypeRef = metadata.ParseTypeRef("svc.Account")   // a concrete declared ref...
 		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
 		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
 		child := makeTrackerNode(&childEdge)
 		child.Parent = makeTrackerNode(&parent)
 
 		got, ref := m.resolveParamArgType(child, "p")
-		assert.Equal(t, "svc.Account", got, "string comes from arg.TypeRef, not GetArgumentInfo")
-		assert.Same(t, tr, ref, "ref is the arg's own TypeRef pointer — native, not re-parsed")
-	})
-
-	// D6 gate (FIX 2): a declared TypeRef whose leaf is a generic type parameter
-	// (RefParam) must NOT take the fast-path — its String() renders to the bare
-	// parameter name ("T"), a degraded type. Resolution falls through to the
-	// GetArgumentInfo string instead, recovering the concrete bound type.
-	t.Run("RefParam typeref skips the fast-path and falls through", func(t *testing.T) {
-		arg := makeIdentArg(meta, "u", "error_helpers.User")
-		arg.TypeRef = &metadata.TypeRef{Kind: metadata.RefParam, Name: "T"}
-		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
-		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
-		child := makeTrackerNode(&childEdge)
-		child.Parent = makeTrackerNode(&parent)
-
-		got, ref := m.resolveParamArgType(child, "p")
-		assert.NotEqual(t, "T", got, "the bare type parameter must not leak through")
-		assert.Equal(t, "error_helpers.User", got, "must fall through to the concrete bound type")
+		assert.Equal(t, "error_helpers.User", got,
+			"the GetArgumentInfo string wins; the native arg.TypeRef.String() must NOT leak through")
+		assert.NotEqual(t, "svc.Account", got, "the declared-ref native string must not win")
 		if assert.NotNil(t, ref) {
-			assert.Equal(t, metadata.ParseTypeRef(got).String(), ref.String())
+			assert.Equal(t, metadata.ParseTypeRef(got).String(), ref.String(),
+				"ref is ParseTypeRef of the returned (GetArgumentInfo) string")
 		}
 	})
 
-	// D6 gate (FIX 2): a pointer-to-RefParam (*T) is likewise non-concrete — its
-	// leaf (NamedLeaf unwraps the pointer) is RefParam — so it also skips the
-	// fast-path. Guards the unwrap path of the leaf check.
-	t.Run("pointer-to-RefParam typeref also skips the fast-path", func(t *testing.T) {
-		arg := makeIdentArg(meta, "u", "error_helpers.User")
-		arg.TypeRef = &metadata.TypeRef{
-			Kind: metadata.RefPointer,
-			Elem: &metadata.TypeRef{Kind: metadata.RefParam, Name: "T"},
-		}
+	// Byte-identical guard (PR #62 review): a concrete ResolvedType is likewise NOT
+	// preferred over GetArgumentInfo (the reverted Phase-4 ordering). GetResolvedType
+	// renders the go/types "."-form, which would diverge at cleanOverrideType too.
+	t.Run("GetArgumentInfo wins over a concrete ResolvedType", func(t *testing.T) {
+		arg := makeIdentArg(meta, "u", "error_helpers.User") // GetArgumentInfo => this
+		arg.SetResolvedType("svc.Resolved")                  // must NOT preempt it
 		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
 		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
 		child := makeTrackerNode(&childEdge)
 		child.Parent = makeTrackerNode(&parent)
 
 		got, _ := m.resolveParamArgType(child, "p")
-		assert.Equal(t, "error_helpers.User", got, "a *T leaf is non-concrete → fall through")
-	})
-
-	// D6 gate (tightened, PR #62 review): a generic-instantiation leaf (RefNamed
-	// with Args) must NOT take the fast-path — arg.TypeRef.String() keeps the base
-	// qualifier ("svc.APIResponse[svc.User]") where GetArgumentInfo drops it, a
-	// different component name. Falls through to the GetArgumentInfo string.
-	t.Run("generic-instantiation typeref skips the fast-path and falls through", func(t *testing.T) {
-		arg := makeIdentArg(meta, "u", "error_helpers.User")
-		arg.TypeRef = &metadata.TypeRef{
-			Kind: metadata.RefNamed, Pkg: "svc", Name: "APIResponse",
-			Args: []*metadata.TypeRef{{Kind: metadata.RefNamed, Pkg: "svc", Name: "User"}},
-		}
-		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
-		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
-		child := makeTrackerNode(&childEdge)
-		child.Parent = makeTrackerNode(&parent)
-
-		got, ref := m.resolveParamArgType(child, "p")
 		assert.Equal(t, "error_helpers.User", got,
-			"a generic leaf must fall through to the GetArgumentInfo string")
-		assert.NotEqual(t, "svc.APIResponse[svc.User]", got,
-			"the native generic rendering must not leak through")
-		if assert.NotNil(t, ref) {
-			assert.Equal(t, metadata.ParseTypeRef(got).String(), ref.String())
-		}
-	})
-
-	// D6 gate (tightened, PR #62 review): an unqualified RefNamed leaf (Pkg == "",
-	// the AST-only fallback when info.TypeOf is unavailable) must NOT take the
-	// fast-path — its String() is the bare name ("User") where GetArgumentInfo
-	// re-qualifies from arg.Pkg. Falls through, recovering the qualified form.
-	t.Run("unqualified RefNamed typeref skips the fast-path and falls through", func(t *testing.T) {
-		arg := makeIdentArg(meta, "u", "error_helpers.User")
-		arg.TypeRef = &metadata.TypeRef{Kind: metadata.RefNamed, Name: "User"} // Pkg ""
-		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
-		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
-		child := makeTrackerNode(&childEdge)
-		child.Parent = makeTrackerNode(&parent)
-
-		got, ref := m.resolveParamArgType(child, "p")
-		assert.Equal(t, "error_helpers.User", got,
-			"an unqualified leaf must fall through to the qualified GetArgumentInfo string")
-		assert.NotEqual(t, "User", got, "the bare unqualified name must not leak through")
-		if assert.NotNil(t, ref) {
-			assert.Equal(t, metadata.ParseTypeRef(got).String(), ref.String())
-		}
-	})
-
-	// D6 gate (tightened, PR #62 review): RefBasic is NOT gated — a qualified
-	// primitive (time.Time) renders whole via String() and matches GetArgumentInfo,
-	// so it keeps the native fast-path.
-	t.Run("qualified-primitive RefBasic keeps the fast-path", func(t *testing.T) {
-		tr := &metadata.TypeRef{Kind: metadata.RefBasic, Pkg: "time", Name: "Time"}
-		arg := makeIdentArg(meta, "u", "shadowed.ByTypeRef")
-		arg.TypeRef = tr
-		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
-		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
-		child := makeTrackerNode(&childEdge)
-		child.Parent = makeTrackerNode(&parent)
-
-		got, ref := m.resolveParamArgType(child, "p")
-		assert.Equal(t, "time.Time", got, "a qualified primitive renders whole and stays on the fast-path")
-		assert.Same(t, tr, ref, "ref is the arg's own TypeRef pointer")
-	})
-
-	// D6 ordering (FIX 2): a concrete RESOLVED type wins over the declared TypeRef.
-	// Generic binding pins the concrete instantiation on ResolvedType while the
-	// declared TypeRef may still be the bare parameter; even when the declared
-	// TypeRef is itself concrete, the resolved type is preferred first.
-	t.Run("resolved type wins over declared typeref", func(t *testing.T) {
-		arg := makeIdentArg(meta, "u", "ignored.Declared")
-		arg.TypeRef = metadata.ParseTypeRef("ignored.Declared") // concrete, but must lose
-		arg.SetResolvedType("svc.Resolved")                     // keeps ref in lockstep
-		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
-		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
-		child := makeTrackerNode(&childEdge)
-		child.Parent = makeTrackerNode(&parent)
-
-		got, ref := m.resolveParamArgType(child, "p")
-		assert.Equal(t, "svc.Resolved", got, "the resolved type is preferred first")
-		if assert.NotNil(t, ref) {
-			assert.Equal(t, "svc.Resolved", ref.String(), "ref is the lockstep resolved ref")
-		}
-	})
-
-	// FIX 1 boundary fallback driven through a read site: a deserialized arg can
-	// carry a non-empty ResolvedType (the exported field) with a nil ResolvedTypeRef.
-	// resolveParamArgType (via refForResolved) must backfill a non-nil ref rather
-	// than thread the nil it found.
-	t.Run("resolved type with nil ref is backfilled", func(t *testing.T) {
-		arg := makeIdentArg(meta, "u", "ignored.Declared")
-		// Simulate deserialization: pooled ResolvedType present, structured ref absent.
-		arg.ResolvedType = meta.StringPool.Get("svc.Resolved")
-		arg.ResolvedTypeRef = nil
-		parent := makeEdge(meta, "Handler", "app", "helper", "app", nil)
-		parent.ParamArgMap = map[string]metadata.CallArgument{"p": *arg}
-		child := makeTrackerNode(&childEdge)
-		child.Parent = makeTrackerNode(&parent)
-
-		got, ref := m.resolveParamArgType(child, "p")
-		assert.Equal(t, "svc.Resolved", got)
-		if assert.NotNil(t, ref, "a deserialized ResolvedType without its ref must be backfilled") {
-			assert.Equal(t, metadata.ParseTypeRef("svc.Resolved").String(), ref.String())
-		}
+			"GetArgumentInfo wins; a concrete ResolvedType must not preempt it")
 	})
 
 	// Branch 2 (Phase-3 fallback ref): GetArgumentInfo returns "" for a

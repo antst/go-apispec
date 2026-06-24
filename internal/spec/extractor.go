@@ -748,48 +748,28 @@ func (r *ResponsePatternMatcherImpl) resolveParamArgType(node TrackerNodeInterfa
 			continue
 		}
 		if arg, exists := parentEdge.ParamArgMap[paramName]; exists {
-			// D6 (Phase 4): prefer a concrete RESOLVED type first. Generic binding can
-			// pin the bound arg's concrete instantiation on ResolvedType/ResolvedTypeRef,
-			// while the DECLARED arg.TypeRef may still be the bare type parameter ("T").
-			// refForResolved supplies the lockstep ref (or re-parses a deserialized one).
-			if rt := arg.GetResolvedType(); rt != "" {
-				return rt, refForResolved(arg.ResolvedTypeRef, rt)
-			}
-			// Then the bound arg's declared structured type — source the ref directly,
-			// no re-parse, but ONLY when its leaf is a concrete kind (RefNamed/RefBasic).
-			// arg.TypeRef.String() is lossy for the opaque kinds: a RefParam leaf renders
-			// to the bare parameter name ("T"), RefFunc→"func", RefChan→"chan". Taking
-			// those would degrade the type vs the GetArgumentInfo fallback below, so they
-			// fall through. NamedLeaf unwraps ptr/slice/array/map to reach the leaf — so
-			// an anonymous-struct (RefStruct) or interface-leaf container ([]interface{})
-			// arg also falls through to GetArgumentInfo, i.e. the pre-D6, main-aligned path.
+			// Byte-identical to main: GetArgumentInfo's fully-qualified string IS the
+			// param's type, and we thread ParseTypeRef of that exact string — the PR's
+			// "ParseTypeRef of the string the call sites pass" design — so schemaForType
+			// consumes the ref without its own re-parse (Phase 3).
 			//
-			// Two further RefNamed shapes are EXCLUDED because arg.TypeRef.String()
-			// diverges from the GetArgumentInfo fallback for them — a latent break of
-			// byte-identity (neither shape appears in the golden corpus):
-			//   - generic instantiations (len(leaf.Args) > 0): String() keeps the base
-			//     qualifier ("mypkg.APIResponse[…]") where GetArgumentInfo drops it
-			//     ("APIResponse[…]"), a different component name; and
-			//   - an unqualified leaf (leaf.Pkg == ""): an AST-only RefNamed fallback
-			//     (info.TypeOf unavailable) renders the bare name ("User") where
-			//     GetArgumentInfo re-qualifies from arg.Pkg ("mypkg.User").
-			// Both fall through to GetArgumentInfo. RefBasic stays faithful (a qualified
-			// primitive like time.Time still renders whole), so it is not gated.
-			if arg.TypeRef != nil {
-				if leaf := arg.TypeRef.NamedLeaf(); leaf != nil &&
-					(leaf.Kind == metadata.RefBasic ||
-						(leaf.Kind == metadata.RefNamed && len(leaf.Args) == 0 && leaf.Pkg != "")) {
-					if s := arg.TypeRef.String(); s != "" && s != "interface{}" && s != "any" {
-						return s, arg.TypeRef
-					}
-				}
-			}
-			// Otherwise fall back to GetArgumentInfo's (fully-qualified) string and
-			// parse it at this boundary.
+			// We deliberately do NOT source the string natively from arg.TypeRef.String()
+			// or a concrete arg.GetResolvedType() here (the reverted Phase-4 D6 fast-paths).
+			// Both render the canonical "."-separated form, but the resolution layer — and
+			// main — carry the "-->" TypeSep form. resolveParamArgType feeds the
+			// SEPARATOR-SENSITIVE cleanOverrideType (via resolveOverrideGoType,
+			// wrapper_specialisation.go), whose `ContainsAny(t, "./[")` test ACCEPTS
+			// "pkg.Order" but REJECTS "pkg-->Order"; a native "." string there flips the
+			// wrapper allOf override on for a payload where main emitted a bare $ref — a
+			// byte-identical break confirmed by the PR #62 full review (golden-invisible:
+			// the same-package envelope shape isn't in the corpus). GetArgumentInfo keeps
+			// every resolution-layer consumer aligned with main; the threaded ParseTypeRef
+			// still spares schemaForType its re-parse. (The body consumer normalizes
+			// "."/"-->" identically, which is why this hid behind a clean golden.)
 			if info := r.contextProvider.GetArgumentInfo(&arg); info != "" && info != "interface{}" && info != "any" {
 				return info, metadata.ParseTypeRef(info)
 			}
-			// Fallback to raw type
+			// Fallback to the raw arg type, likewise threaded.
 			if argType := arg.GetType(); argType != "" && argType != "interface{}" && argType != "any" {
 				return argType, metadata.ParseTypeRef(argType)
 			}
