@@ -1382,6 +1382,49 @@ func TestExtractResponse_TypeConversionGenericArg(t *testing.T) {
 		"bodyRef re-derived from the conversion target, in lockstep with bodyType")
 }
 
+// TestExtractResponse_GenericBodyNilTypeRefBackfillsRef covers the generic-wrapper
+// branch (bodyType contains "[", not []/map) that intentionally skips origin
+// tracing to preserve the wrapper. When the body arg carries no structured TypeRef
+// (makeIdentArg leaves it nil), bodyRef would otherwise reach the carrier nil —
+// violating the Phase-3 contract that every non-empty resolved body carries a ref
+// (TestEveryResolvedBodyTypeReachesSchemaWithRef). refForResolved must backfill the
+// canonical ParseTypeRef(bodyType) at the carrier-assignment point. Byte-neutral:
+// schemaForType re-parses a nil ref to the same canonical tree.
+func TestExtractResponse_GenericBodyNilTypeRefBackfillsRef(t *testing.T) {
+	meta := newTestMeta()
+
+	// A generic body ident whose arg has NO TypeRef; GetArgumentInfo yields the
+	// generic string, so the wrapper branch skips resolveTypeOrigin and bodyRef
+	// stays nil through to the carrier.
+	bodyArg := makeIdentArg(meta, "resp", "APIResponse[int]") // TypeRef stays nil
+	require.Nil(t, bodyArg.TypeRef, "precondition: the body arg carries no structured ref")
+	statusArg := makeLiteralArg(meta, "200")
+	edge := makeEdge(meta, "handler", "main", "Write", "http",
+		[]*metadata.CallArgument{statusArg, bodyArg})
+	node := makeTrackerNode(&edge)
+
+	cfg := &APISpecConfig{Defaults: Defaults{ResponseContentType: "application/json"}}
+	matcher := &ResponsePatternMatcherImpl{
+		BasePatternMatcher: &BasePatternMatcher{
+			contextProvider: NewContextProvider(meta),
+			cfg:             cfg,
+			schemaMapper:    NewSchemaMapper(cfg),
+		},
+		pattern: ResponsePattern{StatusFromArg: true, StatusArgIndex: 0, TypeFromArg: true, TypeArgIndex: 1},
+	}
+
+	route := NewRouteInfo()
+	route.Metadata = meta
+	resp := firstResponse(matcher.ExtractResponse(node, route))
+
+	require.NotNil(t, resp)
+	require.NotEmpty(t, resp.BodyType, "the generic wrapper body type must be preserved")
+	require.NotNil(t, resp.BodyTypeRef,
+		"a non-empty resolved body must carry a ref even when arg.TypeRef was nil (Phase-3 contract)")
+	assert.Equal(t, metadata.ParseTypeRef(resp.BodyType).String(), resp.BodyTypeRef.String(),
+		"backfilled ref is the canonical ParseTypeRef of the body type")
+}
+
 // ---------------------------------------------------------------------------
 // 19. extractResponseFromNode — edge dedup and nil checks
 // ---------------------------------------------------------------------------
