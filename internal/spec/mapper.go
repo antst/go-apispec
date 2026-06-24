@@ -2570,8 +2570,11 @@ func schemaForUnresolved(goType string, cfg *APISpecConfig) (*Schema, map[string
 // otherwise-unresolved leaves (the caller applies its terminal fallback).
 //
 // SC-001 boundary (Phase 3, spec 008): this ParseTypeRef is the schema layer's
-// sole remaining re-parse, and it is NOT reached for a resolved body/param/return
-// type. Those positions now thread a structured ref (RequestInfo/ResponseInfo
+// sole remaining re-parse, and it is BYPASSED for a resolved body/param/return
+// type whose threaded ref is canonical (goType == ref.String()) — the common case;
+// a resolved position with a non-canonical spelling (e.g. goType's internal "-->"
+// separator vs the ref's normalized String()) still reaches the goType !=
+// ref.String() case below. Those positions thread a structured ref (RequestInfo/ResponseInfo
 // BodyTypeRef, or a param-local) materialized at the resolution boundary
 // (type_utils.go sharedResolveTypeOrigin, extractor.go resolveParamArgType — the
 // parse MOVED there per research D1, not duplicated). When that ref is present and
