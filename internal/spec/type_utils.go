@@ -32,6 +32,23 @@ func derefPointerRef(ref *metadata.TypeRef) *metadata.TypeRef {
 	return ref
 }
 
+// refForResolved returns the lockstep ResolvedTypeRef for a resolved-type string,
+// re-deriving it from the string only when it is absent. CallArgument.ResolvedType
+// (string) and ResolvedTypeRef (*TypeRef) are kept in lockstep by SetResolvedType
+// (ResolvedTypeRef = ParseTypeRef(ResolvedType)), so the materialized ref is reused
+// directly. But ResolvedType is a serialized/exported field: a deserialized or
+// hand-constructed CallArgument can carry a non-empty ResolvedType with a nil ref.
+// At the resolved-type read sites the contract is "carry a ref", so this backfills
+// ParseTypeRef(resolvedType) — the same parse schemaForType would otherwise perform
+// on the string — keeping the boundary parse-free in the common case and byte-
+// identical in the deserialized fallback.
+func refForResolved(ref *metadata.TypeRef, resolvedType string) *metadata.TypeRef {
+	if ref != nil {
+		return ref
+	}
+	return metadata.ParseTypeRef(resolvedType)
+}
+
 // sharedResolveTypeOrigin consolidates the common type origin resolution logic
 // used by RequestPatternMatcherImpl, ResponsePatternMatcherImpl, and ParamPatternMatcherImpl.
 //
@@ -57,7 +74,7 @@ func derefPointerRef(ref *metadata.TypeRef) *metadata.TypeRef {
 func sharedResolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string, contextProvider ContextProvider, checkFuncLit bool) (string, *metadata.TypeRef) {
 	// If the argument has resolved type information, use it
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
-		return resolvedType, arg.ResolvedTypeRef
+		return resolvedType, refForResolved(arg.ResolvedTypeRef, resolvedType)
 	}
 
 	// If it's a generic type with a concrete resolution, use it

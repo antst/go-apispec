@@ -55,3 +55,33 @@ func TestDerefPointerRef(t *testing.T) {
 		assert.Same(t, ref, derefPointerRef(ref))
 	})
 }
+
+// TestRefForResolved locks the resolved-boundary contract: refForResolved returns
+// the lockstep ref when one is present (the common path — SetResolvedType keeps
+// ResolvedType/ResolvedTypeRef in sync) and otherwise backfills ParseTypeRef of
+// the string (the deserialized/hand-constructed path where the exported
+// ResolvedType arrived without its ref). The backfill equals what schemaForType
+// re-parses anyway, so threading it is byte-identical.
+func TestRefForResolved(t *testing.T) {
+	t.Run("non-nil ref passes through untouched", func(t *testing.T) {
+		ref := metadata.ParseTypeRef("svc.Account")
+		// The string is deliberately a DIFFERENT type to prove the present ref wins
+		// and is not re-derived from the string argument.
+		got := refForResolved(ref, "other.Mismatch")
+		assert.Same(t, ref, got, "a present ref must be returned verbatim, not re-parsed")
+	})
+
+	t.Run("nil ref is backfilled from the string", func(t *testing.T) {
+		got := refForResolved(nil, "svc.Account")
+		if assert.NotNil(t, got, "a non-empty resolved string must yield a ref") {
+			assert.Equal(t, metadata.ParseTypeRef("svc.Account").String(), got.String(),
+				"backfilled ref must equal ParseTypeRef of the string")
+		}
+	})
+
+	t.Run("nil ref and empty string yields nil", func(t *testing.T) {
+		// ParseTypeRef("") is nil; callers only reach refForResolved with a
+		// non-empty string, but the boundary must not fabricate a ref from nothing.
+		assert.Nil(t, refForResolved(nil, ""))
+	})
+}

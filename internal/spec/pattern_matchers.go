@@ -591,7 +591,12 @@ func (r *RequestPatternMatcherImpl) ExtractRequest(node TrackerNodeInterface, ro
 		// Phase 4: bodyRef has been kept in lockstep with bodyType through every
 		// transform above (resolution, deref, literal/metadata-ref boundary, helper
 		// refinement), so the schema generator consumes the structure directly with
-		// no re-parse. TestBodyTypeRefInLockstep proves bodyRef.String() == bodyType.
+		// no re-parse. The corpus guard TestEveryResolvedBodyTypeReachesSchemaWithRef
+		// (internal/engine) asserts the invariant it actually enforces: every resolved
+		// (non-empty) request/response BodyType reaches schema generation with a
+		// non-nil BodyTypeRef. Exact String()==bodyType equality is not asserted —
+		// resolution/qualification can canonicalise the rendering — but byte-identical
+		// schema output is held by the SC-003 golden.
 		reqInfo.BodyTypeRef = bodyRef
 		schema, _ := schemaForType(route.UsedTypes, bodyType, bodyRef, route.Metadata, r.cfg, nil)
 		reqInfo.Schema = schema
@@ -1066,7 +1071,7 @@ func (b *BasePatternMatcher) findAssignmentFunction(arg *metadata.CallArgument) 
 func (r *RequestPatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgument, node TrackerNodeInterface, originalType string) (string, *metadata.TypeRef) {
 	// Request-specific: trace generic origin through the type-param tree before shared logic
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
-		return resolvedType, arg.ResolvedTypeRef
+		return resolvedType, refForResolved(arg.ResolvedTypeRef, resolvedType)
 	}
 
 	if genericType, ref := traceGenericOrigin(node, originalType); genericType != "" {

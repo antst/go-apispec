@@ -2188,8 +2188,10 @@ func TestResolveTypeOrigin_GenericOrigin(t *testing.T) {
 
 	// Call resolveTypeOrigin directly
 	result, _ := matcher.resolveTypeOrigin(bodyArg, node, "T")
-	// Should resolve T to ConcreteType via type param map
-	assert.NotEmpty(t, result)
+	// Should resolve the bare type parameter T to its concrete binding
+	// (TypeParamMap T->ConcreteType), not leave it as "T". Asserting exact
+	// equality so a regression that emits the bare parameter is caught.
+	assert.Equal(t, "ConcreteType", result)
 }
 
 // ===========================================================================

@@ -37,8 +37,11 @@ func TestEveryResolvedBodyTypeReachesSchemaWithRef(t *testing.T) {
 		cfg := DefaultEngineConfig()
 		cfg.InputDir = tc.inputDir
 		meta, err := NewEngine(cfg).GenerateMetadataOnly()
-		if err != nil || meta == nil {
-			continue
+		if err != nil {
+			t.Fatalf("%s: metadata generation failed: %v", tc.name, err)
+		}
+		if meta == nil {
+			t.Fatalf("%s: metadata generation returned nil metadata", tc.name)
 		}
 		limits := metadata.TrackerLimits{
 			MaxNodesPerTree:    cfg.MaxNodesPerTree,

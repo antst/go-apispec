@@ -748,11 +748,27 @@ func (r *ResponsePatternMatcherImpl) resolveParamArgType(node TrackerNodeInterfa
 			continue
 		}
 		if arg, exists := parentEdge.ParamArgMap[paramName]; exists {
-			// D6 (Phase 4): the bound arg carries its own structured type — source the
-			// ref directly, no re-parse, when it resolves to a concrete named type.
+			// D6 (Phase 4): prefer a concrete RESOLVED type first. Generic binding can
+			// pin the bound arg's concrete instantiation on ResolvedType/ResolvedTypeRef,
+			// while the DECLARED arg.TypeRef may still be the bare type parameter ("T").
+			// refForResolved supplies the lockstep ref (or re-parses a deserialized one).
+			if rt := arg.GetResolvedType(); rt != "" {
+				return rt, refForResolved(arg.ResolvedTypeRef, rt)
+			}
+			// Then the bound arg's declared structured type — source the ref directly,
+			// no re-parse, but ONLY when its leaf is a concrete kind (RefNamed/RefBasic).
+			// arg.TypeRef.String() is lossy for the opaque kinds: a RefParam leaf renders
+			// to the bare parameter name ("T"), RefFunc→"func", RefChan→"chan". Taking
+			// those would degrade the type vs the GetArgumentInfo fallback below, so they
+			// fall through. NamedLeaf unwraps ptr/slice/array/map to reach the leaf — so
+			// an anonymous-struct (RefStruct) or interface-leaf container ([]interface{})
+			// arg also falls through to GetArgumentInfo, i.e. the pre-D6, main-aligned path.
 			if arg.TypeRef != nil {
-				if s := arg.TypeRef.String(); s != "" && s != "interface{}" && s != "any" {
-					return s, arg.TypeRef
+				if leaf := arg.TypeRef.NamedLeaf(); leaf != nil &&
+					(leaf.Kind == metadata.RefNamed || leaf.Kind == metadata.RefBasic) {
+					if s := arg.TypeRef.String(); s != "" && s != "interface{}" && s != "any" {
+						return s, arg.TypeRef
+					}
 				}
 			}
 			// Otherwise fall back to GetArgumentInfo's (fully-qualified) string and
@@ -1856,6 +1872,17 @@ func (r *ResponsePatternMatcherImpl) ExtractResponse(node TrackerNodeInterface, 
 			}
 		}
 
+		// A type conversion overrode bodyType with the conversion TARGET above, but the
+		// bodyRef baseline came from the INNER (converted) arg, so they can diverge —
+		// e.g. List[int](xs) gives bodyType "List[T any]" while bodyRef is []int. Re-
+		// derive bodyRef from the target string so it stays in lockstep with bodyType
+		// (the Phase-4 byte-identical invariant); the literal/origin branches below do
+		// not re-resolve a generic target. A non-generic target is re-traced by
+		// resolveTypeOrigin next, which overwrites this in lockstep.
+		if conversionTargetType != "" && bodyType == conversionTargetType {
+			bodyRef = metadata.ParseTypeRef(bodyType)
+		}
+
 		// Check if this is a literal value - if so, determine appropriate type
 		if arg.GetKind() == metadata.KindLiteral {
 			// For literal values, determine the appropriate type based on the value
@@ -2128,7 +2155,7 @@ func (r *ResponsePatternMatcherImpl) resolveTypeOrigin(arg *metadata.CallArgumen
 	// Honour explicit resolved-type info on the argument first — set when an
 	// earlier analysis pass already pinned the concrete type.
 	if resolvedType := arg.GetResolvedType(); resolvedType != "" {
-		return resolvedType, arg.ResolvedTypeRef
+		return resolvedType, refForResolved(arg.ResolvedTypeRef, resolvedType)
 	}
 
 	// Substitute generic type parameters using the call site's TypeParamMap.
