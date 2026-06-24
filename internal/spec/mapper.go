@@ -1068,18 +1068,6 @@ func lastPathSegment(p string) string {
 	return p
 }
 
-// pkgMatchesLeaf reports whether the analyzed package pkgName (always a full
-// import path) is the package a selector leaf's qualifier names. When leafPkg is a
-// FULL import path (getTypeName qualified the leaf), match it EXACTLY — last-
-// segment matching would wrongly accept any other ".../<segment>" package. Only a
-// bare short qualifier (no "/") falls back to last-segment matching.
-func pkgMatchesLeaf(pkgName, leafPkg string) bool {
-	if strings.Contains(leafPkg, "/") {
-		return pkgName == leafPkg
-	}
-	return lastPathSegment(pkgName) == leafPkg
-}
-
 // typeByRefGated is typeByRef with the collision guard applied: it resolves a
 // named ref to its metadata type, but a path-like EXTERNAL qualifier (an import
 // path absent from the analyzed set) returns nil instead of borrowing a
