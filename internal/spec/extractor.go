@@ -1078,22 +1078,32 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 	return result
 }
 
-// splitRouteFnKey resolves the FunctionCFGs key for the handler being split, from
-// any method branch's parent-statement position (registered in cfgPosToFn during
-// CFG annotation). Returns "" when no model is available — the caller then degrades
-// to the pre-009 behavior (non-method conditionals excluded).
+// splitRouteFnKey resolves the FunctionCFGs key for the handler being split. It
+// counts the function each method branch resolves to (via cfgPosToFn, set during CFG
+// annotation) and returns the MOST COMMON — deterministically, with a lexicographic
+// tiebreak, so a dispatch whose arms span more than one function (e.g. a sub-dispatch
+// in a helper) does not make the choice depend on map-iteration order. Returns ""
+// when no branch resolves — the caller then degrades to the pre-009 behavior
+// (non-method conditionals excluded).
 func splitRouteFnKey(meta *metadata.Metadata, methodResponses map[string]map[string]*ResponseInfo) string {
+	counts := make(map[string]int)
 	for _, resps := range methodResponses {
 		for _, r := range resps {
 			if r.Branch == nil {
 				continue
 			}
 			if k := meta.FnKeyForPos(meta.StringPool.GetString(r.Branch.ParentStmtPos)); k != "" {
-				return k
+				counts[k]++
 			}
 		}
 	}
-	return ""
+	best, bestN := "", 0
+	for k, n := range counts {
+		if n > bestN || (n == bestN && k < best) {
+			best, bestN = k, n
+		}
+	}
+	return best
 }
 
 // dispatchRootBlocks returns the blocks whose common dominator is the dispatch tag.

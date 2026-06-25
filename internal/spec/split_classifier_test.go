@@ -502,3 +502,20 @@ func TestSplitRouteFnKey(t *testing.T) {
 	nilBranch := map[string]map[string]*ResponseInfo{"GET": {"200": scResp(200, "L", nil)}}
 	assert.Equal(t, "", splitRouteFnKey(meta, nilBranch))
 }
+
+// TestSplitRouteFnKey_MultiFunction: when a dispatch's arms resolve to more than one
+// function (e.g. a sub-dispatch in a helper), splitRouteFnKey returns the MOST COMMON
+// fnKey deterministically — never a value that depends on map-iteration order.
+func TestSplitRouteFnKey_MultiFunction(t *testing.T) {
+	meta := newTestMeta()
+	meta.InstallFunctionCFGForTest("fnA", [][]int32{{}}, map[string]metadata.BlockLoc{"a:1": {Block: 0}})
+	meta.InstallFunctionCFGForTest("fnB", [][]int32{{}}, map[string]metadata.BlockLoc{"b:1": {Block: 0}, "b:2": {Block: 0}})
+	mr := map[string]map[string]*ResponseInfo{
+		"GET":  {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("a:1")})},
+		"POST": {"201": scResp(201, "M", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("b:1")})},
+		"PUT":  {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("b:2")})},
+	}
+	for i := 0; i < 50; i++ { // fnB has 2 arms, fnA has 1 → fnB, stable across map orders
+		assert.Equal(t, "fnB", splitRouteFnKey(meta, mr))
+	}
+}
