@@ -114,10 +114,13 @@ func (m *Metadata) Dominates(fnKey string, a, b int32) bool {
 }
 
 // DispatchArms returns the block indices of every arm of the method-dispatch group
-// `group` within fnKey (every `switch r.Method` case INCLUDING the default, or every
+// `group` within fnKey (every method-`switch` case INCLUDING the default, or every
 // `if r.Method ==` chain arm), or nil. The common dominator of the returned blocks is
 // that dispatch's tag, so a consumer can scope the dispatch region exactly — per
 // dispatch, including arms whose response was lost, with no combined-case collapse.
+//
+// The returned slice aliases the stored model — treat it as READ-ONLY; do not sort or
+// append in place (the sole consumer, contributingDispatchArms, only copies elements out).
 func (m *Metadata) DispatchArms(fnKey string, group int) []int32 {
 	fc := m.fnCFG(fnKey)
 	if fc == nil {

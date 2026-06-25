@@ -111,6 +111,44 @@ func TestSplit_SwitchDefaultExcluded(t *testing.T) {
 	assert.Equal(t, []int{201}, got["POST"], "POST must not carry the 405 default")
 }
 
+// TestSplit_ResponsesCopiedPerRoute: each split route owns its OWN *ResponseInfo for a
+// shared response, and routes are emitted in deterministic method order — so a per-route
+// ApplyOverrides mutation cannot leak across methods, and the route slice order is stable.
+func TestSplit_ResponsesCopiedPerRoute(t *testing.T) {
+	meta := newTestMeta()
+	const fn = "fn"
+	meta.InstallFunctionCFGForTest(fn, switchCFG(), map[string]metadata.BlockLoc{
+		"get:1": {Block: 2}, "post:1": {Block: 3},
+	})
+	scArms(meta, fn, 2, 3)
+	ext := scExtractor(meta)
+	route := &RouteInfo{
+		Path: "/r", Function: "h", UsedTypes: map[string]*Schema{},
+		Response: map[string]*ResponseInfo{
+			"200": scResp(200, "List", scBranch(meta, 2, "get:1", "GET")),
+			"201": scResp(201, "Made", scBranch(meta, 3, "post:1", "POST")),
+			"500": scResp(500, "Err", nil), // unconditional → shared onto every method
+		},
+	}
+	routes := ext.splitByConditionalMethods(route)
+	require.Len(t, routes, 2)
+
+	// Deterministic method order (sorted): GET before POST.
+	assert.Equal(t, "GET", routes[0].Method)
+	assert.Equal(t, "POST", routes[1].Method)
+
+	getR, postR := routes[0], routes[1]
+	require.NotNil(t, getR.Response["500"])
+	require.NotNil(t, postR.Response["500"])
+	assert.NotSame(t, getR.Response["500"], postR.Response["500"],
+		"a shared response must be COPIED per route, not aliased")
+
+	// Mutating one route's copy must not touch the other's.
+	getR.Response["500"].BodyType = "MUTATED"
+	assert.Equal(t, "Err", postR.Response["500"].BodyType,
+		"a per-route mutation must not leak across methods")
+}
+
 // TestSplit_AfterMergeIndependentShared: a conditional after the switch merge (B7,
 // reachable from the arms) is reachable together with every method → shared.
 func TestSplit_AfterMergeIndependentShared(t *testing.T) {
@@ -470,45 +508,65 @@ func TestDispatchArms(t *testing.T) {
 	assert.Equal(t, []string{"POST"}, byBlock[3])
 }
 
-func TestPrimaryDispatch(t *testing.T) {
+func TestPrimaryDispatchFn(t *testing.T) {
 	meta := newTestMeta()
 	const fn = "fn"
 	meta.InstallFunctionCFGForTest(fn, switchCFG(), map[string]metadata.BlockLoc{"get:1": {Block: 2}})
 
 	resolved := map[string]map[string]*ResponseInfo{
-		"GET": {"200": scResp(200, "L", scBranch(meta, 2, "get:1", "GET"))}, // DispatchGroup 1
+		"GET": {"200": scResp(200, "L", scBranch(meta, 2, "get:1", "GET"))},
 	}
-	gotFn, gotGrp := primaryDispatch(meta, resolved)
-	assert.Equal(t, fn, gotFn)
-	assert.Equal(t, 1, gotGrp)
+	assert.Equal(t, fn, primaryDispatchFn(meta, resolved))
 
 	unresolved := map[string]map[string]*ResponseInfo{
 		"GET": {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("nowhere:9")})},
 	}
-	f, g := primaryDispatch(meta, unresolved)
-	assert.Equal(t, "", f)
-	assert.Equal(t, 0, g)
+	assert.Equal(t, "", primaryDispatchFn(meta, unresolved))
 
 	nilBranch := map[string]map[string]*ResponseInfo{"GET": {"200": scResp(200, "L", nil)}}
-	f, _ = primaryDispatch(meta, nilBranch)
-	assert.Equal(t, "", f)
+	assert.Equal(t, "", primaryDispatchFn(meta, nilBranch))
 }
 
-// TestPrimaryDispatch_MultiFunction: when the responses resolve to more than one
-// (function, group) — e.g. a sub-dispatch in a helper — primaryDispatch returns the
-// most common pair deterministically, never one that depends on map-iteration order.
-func TestPrimaryDispatch_MultiFunction(t *testing.T) {
+// TestPrimaryDispatchFn_MultiFunction: when responses resolve to more than one function
+// (a sub-dispatch in a helper), the MOST COMMON fn is returned deterministically, never
+// one that depends on map-iteration order.
+func TestPrimaryDispatchFn_MultiFunction(t *testing.T) {
 	meta := newTestMeta()
 	meta.InstallFunctionCFGForTest("fnA", [][]int32{{}}, map[string]metadata.BlockLoc{"a:1": {Block: 0}})
 	meta.InstallFunctionCFGForTest("fnB", [][]int32{{}}, map[string]metadata.BlockLoc{"b:1": {Block: 0}, "b:2": {Block: 0}})
 	mr := map[string]map[string]*ResponseInfo{
-		"GET":  {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("a:1"), DispatchGroup: 1})},
-		"POST": {"201": scResp(201, "M", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("b:1"), DispatchGroup: 2})},
-		"PUT":  {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("b:2"), DispatchGroup: 2})},
+		"GET":  {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("a:1")})},
+		"POST": {"201": scResp(201, "M", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("b:1")})},
+		"PUT":  {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("b:2")})},
 	}
-	for i := 0; i < 50; i++ { // (fnB,2) has 2 arms, (fnA,1) has 1 → (fnB,2), stable
-		f, g := primaryDispatch(meta, mr)
-		assert.Equal(t, "fnB", f)
-		assert.Equal(t, 2, g)
+	for i := 0; i < 50; i++ { // fnB has 2 responses, fnA has 1 → fnB, stable across map orders
+		assert.Equal(t, "fnB", primaryDispatchFn(meta, mr))
 	}
+}
+
+// TestContributingDispatchArms: the dispatch root is scoped to the UNION of arms over
+// every group that contributed a response — each distinct group counted once, with
+// group-0 (post-merge) and foreign-function branches skipped. This is what lets a
+// handler split across an `if r.Method` + a `switch r.Method` exclude the second
+// dispatch's default (both groups in the union), while a non-responding dispatch's arms
+// stay out.
+func TestContributingDispatchArms(t *testing.T) {
+	meta := newTestMeta()
+	const fn = "fn"
+	meta.InstallFunctionCFGForTest(fn, switchCFG(), map[string]metadata.BlockLoc{"x": {Block: 2}})
+	meta.FunctionCFGs[fn].DispatchArms = map[int][]int32{1: {2, 3}, 2: {5, 6}}
+
+	mr := map[string]map[string]*ResponseInfo{
+		// two responses in group 1 (same group → arms counted once) + one in group 2.
+		"GET":  {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("x"), DispatchGroup: 1})},
+		"HEAD": {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("x"), DispatchGroup: 1})},
+		"POST": {"201": scResp(201, "M", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("x"), DispatchGroup: 2})},
+		// group 0 (a post-dispatch merge response) and a foreign-function branch are skipped.
+		"PUT":    {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("x"), DispatchGroup: 0})},
+		"DELETE": {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("foreign:9"), DispatchGroup: 9})},
+	}
+	got := contributingDispatchArms(meta, fn, mr)
+	assert.ElementsMatch(t, []int32{2, 3, 5, 6}, got, "union of group 1 and group 2 arms, each group once")
+
+	assert.Empty(t, contributingDispatchArms(meta, "absent", mr), "unknown fn → no arms")
 }

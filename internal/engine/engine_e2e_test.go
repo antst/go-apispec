@@ -98,6 +98,13 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// the recorded group (all arms incl. default); the 405 stays the fallback and is
 		// not leaked onto the GET/POST operations the combined case splits into.
 		{name: "cfg_method_combined_default", inputDir: "../../testdata/cfg_method_combined_default", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: responses split across an `if r.Method ==` arm AND a `switch r.Method`
+		// with a default — distinct dispatch groups; the root spans BOTH contributing groups so
+		// the switch default 405 is excluded, not leaked onto GET (if-arm) and POST (switch-arm).
+		{name: "cfg_method_if_switch_default", inputDir: "../../testdata/cfg_method_if_switch_default", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: a `switch` over a COPY of r.Method (`m := r.Method; switch m`) — recognised
+		// by its method-named case values (not the tag), so the default 405 is excluded.
+		{name: "cfg_method_switch_copy", inputDir: "../../testdata/cfg_method_switch_copy", configFn: spec.DefaultHTTPConfig},
 		// spec 009 US3: branch-dependent response bodies are attributed to the status
 		// on which they are written — 200/FullUser vs 404/ErrorBody, not merged (FR-005).
 		{name: "cfg_branch_bodies", inputDir: "../../testdata/cfg_branch_bodies", configFn: spec.DefaultHTTPConfig},

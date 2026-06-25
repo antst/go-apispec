@@ -1001,14 +1001,18 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 	// (no model) degrades to excluding non-method conditionals, never leaking a
 	// fallback onto a method.
 	meta := e.tree.GetMetadata()
-	fnKey, primaryGroup := primaryDispatch(meta, methodResponses)
+	fnKey := primaryDispatchFn(meta, methodResponses)
 	armBlocks, armBlockToMethods := dispatchArms(methodResponses)
-	// dispatchRoot is the common dominator of the PRIMARY dispatch's arms — recorded per
-	// dispatch at annotation time (every `switch r.Method` case incl. the default, or
-	// every `if r.Method ==` chain arm). So it is the exact switch/if tag: it covers an
-	// arm whose response was lost to an early-return AND a combined `case "GET","POST"`
-	// (whose default is in the same group), and is never inflated by a SEPARATE dispatch.
-	dispatchRoot, haveRoot := commonDominator(meta, fnKey, meta.DispatchArms(fnKey, primaryGroup))
+	// dispatchRoot is the common dominator of the arms of EVERY dispatch in fnKey that
+	// CONTRIBUTED a method response (recorded per dispatch at annotation time — every
+	// `switch` case incl. the default, every `if r.Method ==` chain arm). One contributing
+	// dispatch → its exact tag (covering a combined `case "GET","POST"` whose default is in
+	// the same group, and an arm whose success was lost to an early-return). Responses split
+	// across an `if r.Method` AND a `switch r.Method` → the dominator spanning both, so the
+	// non-primary dispatch's default is still excluded; a dispatch that wrote no response
+	// (a per-method header switch ahead of the responding one) is left out, so an
+	// independent conditional between two dispatches is not over-excluded.
+	dispatchRoot, haveRoot := commonDominator(meta, fnKey, contributingDispatchArms(meta, fnKey, methodResponses))
 
 	shared := make(map[string]*ResponseInfo)
 	for statusCode, resp := range route.Response {
@@ -1046,14 +1050,29 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 		shared[statusCode] = resp // independent conditional → on every method
 	}
 
-	var result []*RouteInfo
-	for method, responses := range methodResponses {
+	// One route per method, emitted in METHOD order (map iteration is not deterministic;
+	// the caller appends to the route list without re-sorting). Each route owns a COPY of
+	// every ResponseInfo it carries, so the split routes share no *ResponseInfo: a per-route
+	// ApplyOverrides (e.g. line ~589) that mutates BodyType/BodyTypeRef in place on a shared
+	// (or combined-case) response can no longer leak that override onto another method's
+	// operation.
+	methods := make([]string, 0, len(methodResponses))
+	for method := range methodResponses {
+		methods = append(methods, method)
+	}
+	sort.Strings(methods)
+
+	result := make([]*RouteInfo, 0, len(methods))
+	for _, method := range methods {
+		responses := methodResponses[method]
 		merged := make(map[string]*ResponseInfo, len(shared)+len(responses))
 		for s, r := range shared {
-			merged[s] = r
+			rc := *r
+			merged[s] = &rc
 		}
 		for s, r := range responses { // method-specific wins on any status overlap
-			merged[s] = r
+			rc := *r
+			merged[s] = &rc
 		}
 		mr := &RouteInfo{
 			Path:                route.Path,
@@ -1079,37 +1098,59 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 	return result
 }
 
-// primaryDispatch returns the function key and dispatch-group id that the most method
-// responses belong to (deterministic, tiebroken by fnKey then group). The dispatch
-// root is then computed over exactly that one dispatch's arms (metadata.DispatchArms),
-// so a dispatch whose arms span more than one function, or one that coexists with a
-// SEPARATE dispatch, does not perturb the choice. Returns "" / 0 when no method branch
-// resolves to a function — the caller then excludes non-method conditionals (pre-009).
-func primaryDispatch(meta *metadata.Metadata, methodResponses map[string]map[string]*ResponseInfo) (string, int) {
-	type fnGroup struct {
-		fn  string
-		grp int
-	}
-	counts := make(map[fnGroup]int)
+// primaryDispatchFn returns the function key that the most method responses resolve to
+// (via cfgPosToFn), deterministically with a lexicographic tiebreak — so a dispatch whose
+// arms span more than one function (e.g. a sub-dispatch in a helper) does not make the
+// choice depend on map-iteration order. Returns "" when no method branch resolves to a
+// function — the caller then excludes non-method conditionals (pre-009 behavior).
+func primaryDispatchFn(meta *metadata.Metadata, methodResponses map[string]map[string]*ResponseInfo) string {
+	counts := make(map[string]int)
 	for _, resps := range methodResponses {
 		for _, r := range resps {
 			if r.Branch == nil {
 				continue
 			}
-			fn := meta.FnKeyForPos(meta.StringPool.GetString(r.Branch.ParentStmtPos))
-			if fn == "" {
+			if fn := meta.FnKeyForPos(meta.StringPool.GetString(r.Branch.ParentStmtPos)); fn != "" {
+				counts[fn]++
+			}
+		}
+	}
+	best, bestN := "", 0
+	for fn, n := range counts {
+		if n > bestN || (n == bestN && fn < best) {
+			best, bestN = fn, n
+		}
+	}
+	return best
+}
+
+// contributingDispatchArms returns the block indices of every arm of every method
+// dispatch in fnKey that CONTRIBUTED a method response — the union across dispatch groups.
+// The common dominator of this union is the dispatch root: for one contributing dispatch
+// it is that dispatch's tag; for responses split across an `if r.Method` and a
+// `switch r.Method` it spans both, so the second dispatch's `default` is still dominated
+// (and excluded) rather than leaked. A dispatch that wrote no response (its group never
+// appears in methodResponses) is left out, so an independent conditional sequenced between
+// two dispatches is not swept under an over-wide root. Group 0 (a response in a
+// post-dispatch merge block, not an arm) and foreign-function branches are skipped.
+func contributingDispatchArms(meta *metadata.Metadata, fnKey string, methodResponses map[string]map[string]*ResponseInfo) []int32 {
+	seen := make(map[int]bool)
+	var arms []int32
+	for _, resps := range methodResponses {
+		for _, r := range resps {
+			if r.Branch == nil || r.Branch.DispatchGroup == 0 {
 				continue
 			}
-			counts[fnGroup{fn, r.Branch.DispatchGroup}]++
+			if meta.FnKeyForPos(meta.StringPool.GetString(r.Branch.ParentStmtPos)) != fnKey {
+				continue
+			}
+			if g := r.Branch.DispatchGroup; !seen[g] {
+				seen[g] = true
+				arms = append(arms, meta.DispatchArms(fnKey, g)...)
+			}
 		}
 	}
-	best, bestN := fnGroup{}, 0
-	for k, n := range counts {
-		if n > bestN || (n == bestN && (k.fn < best.fn || (k.fn == best.fn && k.grp < best.grp))) {
-			best, bestN = k, n
-		}
-	}
-	return best.fn, best.grp
+	return arms
 }
 
 // dispatchArms returns the sorted method-arm branch blocks and each block → the

@@ -60,18 +60,21 @@ func BuildFunctionCFGs(funcDecls []*ast.FuncDecl, declInfo map[*ast.FuncDecl]*ty
 }
 
 // methodDispatchGroups maps the source position of each method-dispatch ARM
-// statement (a `switch r.Method` case clause INCLUDING the default, or each
+// statement (a method-`switch` case clause INCLUDING the default, or each
 // `if r.Method ==` chain IfStmt) to a group id — the dispatch statement's own
-// position — so every arm of ONE dispatch shares an id. A switch counts only when its
-// TAG type-resolves to net/http.Request.Method, which excludes a value-switch whose
-// cases merely name methods (`switch action { case "GET": }`). Needs type info; the
-// switch path is skipped without it (the if path is type-gated inside extractMethodGuard).
+// position — so every arm of ONE dispatch shares an id. A switch counts when any of its
+// case values names an HTTP method (switchHasMethodCase) — the SAME test the route
+// splitter uses to attribute a case to a method, so `switch r.Method`, `switch m :=
+// r.Method`, and a method-named value-switch are all grouped exactly as they are split,
+// and the group includes the `default` arm. String-literal cases need no type info;
+// `http.MethodXxx` constant cases resolve via it. (The if path stays type-gated inside
+// extractMethodGuard, matching how if-arm CaseValues are attributed.)
 func methodDispatchGroups(body *ast.BlockStmt, info *types.Info) map[token.Pos]int {
 	groups := make(map[token.Pos]int)
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch s := n.(type) {
 		case *ast.SwitchStmt:
-			if s.Tag != nil && s.Body != nil && isHTTPRequestMethod(s.Tag, info) {
+			if s.Body != nil && switchHasMethodCase(s, info) {
 				gid := int(s.Pos())
 				for _, cc := range s.Body.List {
 					if clause, ok := cc.(*ast.CaseClause); ok {
@@ -98,6 +101,27 @@ func methodDispatchGroups(body *ast.BlockStmt, info *types.Info) map[token.Pos]i
 		return true
 	})
 	return groups
+}
+
+// switchHasMethodCase reports whether any case clause of s carries a value that names
+// an HTTP method — using extractCaseValues + isHTTPMethodName, the exact pair the route
+// splitter applies (via BranchContext.CaseValues) to decide a case is a method arm. So a
+// switch is grouped as a method dispatch iff its cases are the ones the splitter fans
+// out per method — independent of the switch TAG, which the splitter never inspects.
+// This intentionally also matches a value-switch whose cases name methods: the splitter
+// already fans those out (a pre-existing limitation), so grouping them keeps the
+// dispatch model consistent with the split rather than letting their `default` leak.
+func switchHasMethodCase(s *ast.SwitchStmt, info *types.Info) bool {
+	for _, cc := range s.Body.List {
+		if clause, ok := cc.(*ast.CaseClause); ok {
+			for _, v := range extractCaseValues(clause, info) {
+				if isHTTPMethodName(strings.ToUpper(v)) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // buildEdgePositionIndex creates a map from source position string to

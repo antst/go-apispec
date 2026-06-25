@@ -579,25 +579,41 @@ func distinctVals(m map[token.Pos]int) map[int]bool {
 
 func TestMethodDispatchGroups(t *testing.T) {
 	src := "package p\nimport \"net/http\"\n" +
-		// switch r.Method: a genuine method dispatch.
+		// string-literal `switch r.Method`: a genuine method dispatch (needs no type info).
 		"func sw(r *http.Request) {\n\tswitch r.Method {\n\tcase \"GET\":\n\tcase \"POST\":\n\tdefault:\n\t}\n}\n" +
-		// value switch whose cases merely NAME methods — must NOT group.
+		// http.MethodXxx constant cases — resolvable only with type info.
+		"func swConst(r *http.Request) {\n\tswitch r.Method {\n\tcase http.MethodGet:\n\tcase http.MethodPost:\n\t}\n}\n" +
+		// switch over a COPY of r.Method (tag is `m`, not the bare selector) — grouped by
+		// its method-named cases regardless of the tag.
+		"func swCopy(r *http.Request) {\n\tm := r.Method\n\tswitch m {\n\tcase \"GET\":\n\tcase \"POST\":\n\tdefault:\n\t}\n}\n" +
+		// value switch whose cases name methods — grouped exactly as the splitter fans it out.
 		"func vsw(action string) {\n\tswitch action {\n\tcase \"GET\":\n\tcase \"POST\":\n\t}\n}\n" +
+		// switch whose cases name NO method — not a method dispatch.
+		"func nonmethod(x string) {\n\tswitch x {\n\tcase \"foo\":\n\tcase \"bar\":\n\t}\n}\n" +
 		// if r.Method == … else-if chain.
 		"func chain(r *http.Request) {\n\tif r.Method == \"GET\" {\n\t} else if r.Method == \"POST\" {\n\t} else {\n\t}\n}\n" +
-		// tagless switch is not the tag path.
+		// tagless switch (boolean cases) is not a method dispatch.
 		"func tagless(r *http.Request) {\n\tswitch {\n\tcase r.Method == \"GET\":\n\t}\n}\n" +
 		// plain non-method if.
 		"func plain(x int) {\n\tif x > 0 {\n\t}\n}\n"
 	f, info := typeCheckSrc(t, src)
 
-	// switch r.Method: every case clause INCLUDING the default shares one group id.
+	// string-literal `switch r.Method`: every case clause INCLUDING the default shares one id.
 	sw := methodDispatchGroups(tsFuncBody(f, "sw"), info)
 	require.Len(t, sw, 3) // GET, POST, default
 	assert.Len(t, distinctVals(sw), 1, "all arms of one switch share a group")
+	// string-literal cases need no type info — the dispatch is still recognised (this is the
+	// no-type-info default-leak the case-value detection guards against).
+	assert.Len(t, methodDispatchGroups(tsFuncBody(f, "sw"), nil), 3)
 
-	// value switch naming methods: not a method dispatch → no groups.
-	assert.Empty(t, methodDispatchGroups(tsFuncBody(f, "vsw"), info))
+	// switch over a COPY of r.Method: grouped by its method-named cases — the regression
+	// guard for `m := r.Method; switch m { …; default }` (a non-bare-selector tag).
+	require.Len(t, methodDispatchGroups(tsFuncBody(f, "swCopy"), info), 3)
+
+	// value switch naming methods: grouped consistently with how the splitter fans it out.
+	vsw := methodDispatchGroups(tsFuncBody(f, "vsw"), info)
+	require.Len(t, vsw, 2)
+	assert.Len(t, distinctVals(vsw), 1)
 
 	// else-if chain: both IfStmts share one id; the bare else (not an IfStmt) is not
 	// recorded, and the done-short-circuit fires when Inspect re-visits the else-if.
@@ -605,10 +621,13 @@ func TestMethodDispatchGroups(t *testing.T) {
 	require.Len(t, ch, 2)
 	assert.Len(t, distinctVals(ch), 1)
 
-	// tagless switch and a plain non-method if record nothing.
+	// a method-less switch, a tagless boolean switch, and a plain non-method if record nothing.
+	assert.Empty(t, methodDispatchGroups(tsFuncBody(f, "nonmethod"), info))
 	assert.Empty(t, methodDispatchGroups(tsFuncBody(f, "tagless"), info))
 	assert.Empty(t, methodDispatchGroups(tsFuncBody(f, "plain"), info))
 
-	// Without type info the switch tag can't resolve → conservatively no groups.
-	assert.Empty(t, methodDispatchGroups(tsFuncBody(f, "sw"), nil))
+	// http.MethodXxx constant cases need type info: with it the switch is recognised,
+	// without it the constants don't resolve so the switch is conservatively skipped.
+	assert.Len(t, methodDispatchGroups(tsFuncBody(f, "swConst"), info), 2)
+	assert.Empty(t, methodDispatchGroups(tsFuncBody(f, "swConst"), nil))
 }
