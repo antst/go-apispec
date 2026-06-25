@@ -72,6 +72,14 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// spec 009 US2: an `if r.Method == …` dispatch splits into one operation per
 		// method, the same as a `switch r.Method` (FR-003).
 		{name: "cfg_method_if_dispatch", inputDir: "../../testdata/cfg_method_if_dispatch", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: a method dispatch combined with an INDEPENDENT pre-dispatch
+		// conditional — the independent 500 is carried onto every method operation
+		// (CFG: orthogonal to the dispatch), not dropped as the pre-CFG split did.
+		{name: "cfg_method_if_independent", inputDir: "../../testdata/cfg_method_if_independent", configFn: spec.DefaultHTTPConfig},
+		// #27 regression guard: a sub-handler reached via `switch r.Method` keeps its
+		// own direct 4xx (POST /users/ → [200,204,400]). classifyHelperWrites scans
+		// DIRECT children only; recursing here would drop the sub-handler's 400.
+		{name: "enum_validation", inputDir: "../../testdata/enum_validation", configFn: spec.DefaultHTTPConfig},
 		// spec 009 US3: branch-dependent response bodies are attributed to the status
 		// on which they are written — 200/FullUser vs 404/ErrorBody, not merged (FR-005).
 		{name: "cfg_branch_bodies", inputDir: "../../testdata/cfg_branch_bodies", configFn: spec.DefaultHTTPConfig},

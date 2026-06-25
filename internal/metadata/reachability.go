@@ -113,6 +113,24 @@ func (m *Metadata) Dominates(fnKey string, a, b int32) bool {
 	return blockDominates(fc.Dominators, a, b)
 }
 
+// IDom returns the immediate dominator of block b within fnKey (the branch point
+// that routes to b) and ok=true. Returns (-1, false) when the function has no
+// model, b is out of range, or b is the entry / unreachable (idom = -1). A
+// consumer uses it to group a `switch r.Method` / `if r.Method ==` dispatch's arms
+// by their shared branch point, so a fallback arm (switch default / bare else) can
+// be told apart from an independent conditional with a different branch point.
+func (m *Metadata) IDom(fnKey string, b int32) (int32, bool) {
+	fc := m.fnCFG(fnKey)
+	if fc == nil || int(b) < 0 || int(b) >= len(fc.Dominators) {
+		return -1, false
+	}
+	d := fc.Dominators[b]
+	if d < 0 {
+		return -1, false
+	}
+	return d, true
+}
+
 // blockReaches does a breadth-first search over the successor graph with a visited
 // set, so cyclic graphs (loops) terminate.
 func (fc *FunctionCFG) blockReaches(from, to int32) bool {

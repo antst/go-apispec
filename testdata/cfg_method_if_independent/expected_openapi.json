@@ -1,0 +1,124 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/items": {
+      "get": {
+        "operationId": "testdata.cfg_method_if_independent.items",
+        "parameters": [
+          {
+            "name": "bad",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/cfg_method_if_independent.ItemList"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/cfg_method_if_independent.ErrBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "go-apispec.testdata.cfg_method_if_independent.items",
+        "parameters": [
+          {
+            "name": "bad",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/cfg_method_if_independent.CreatedItem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/cfg_method_if_independent.ErrBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "cfg_method_if_independent.CreatedItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "cfg_method_if_independent.ErrBody": {
+        "type": "object",
+        "properties": {
+          "msg": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "msg"
+        ]
+      },
+      "cfg_method_if_independent.ItemList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      }
+    }
+  }
+}

@@ -216,7 +216,19 @@ func annotateBranches(graph *cfg.CFG, fset *token.FileSet, info *types.Info, met
 		}
 		var parentStmtPos int
 		if block.Stmt != nil {
-			parentStmtPos = meta.StringPool.Get(fset.Position(block.Stmt.Pos()).String())
+			stmtPos := fset.Position(block.Stmt.Pos()).String()
+			parentStmtPos = meta.StringPool.Get(stmtPos)
+			// Register the parent-statement position → fnKey so a consumer holding only
+			// a BranchContext (splitByConditionalMethods) can resolve it back to this
+			// function via FnKeyForPos, then query dominance between branch blocks to
+			// classify non-method conditionals. cfgPosToFn is transient (not serialized);
+			// double-key raw + repo-root-stripped to mirror recordPos (#27).
+			meta.cfgPosToFn[stmtPos] = fnKey
+			if repoRoot != "" {
+				if stripped := strings.TrimPrefix(stmtPos, repoRoot); stripped != stmtPos {
+					meta.cfgPosToFn[stripped] = fnKey
+				}
+			}
 		}
 		ctx := &BranchContext{
 			BlockIndex:    bi,

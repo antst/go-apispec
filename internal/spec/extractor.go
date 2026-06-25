@@ -19,6 +19,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -955,17 +956,22 @@ func (n *callGraphEdgeNode) GetRootAssignmentMap() map[string][]metadata.Assignm
 // context with HTTP method case values — a `switch r.Method { case "GET": … }`
 // OR an `if r.Method == http.MethodPost { … }` guard, both of which record the
 // method in CaseValues (spec 009, US2). If so, returns separate RouteInfo entries
-// per method. Returns nil if no conditional methods are detected. The branch kind
-// is not gated: only the HTTP-method validity of the case values matters, so a
-// non-method switch (e.g. `case "active"`) contributes nothing.
+// per method. Returns nil if no conditional methods are detected.
 //
-// Known limitation: the dispatch FALLBACK arm — a `switch r.Method` default or a
-// bare `else` of an `if r.Method ==` — is not emitted as its own operation, because
-// it represents "any other method" and has no single HTTP method to attach to. Its
-// responses are therefore not carried onto the per-method operations (a 405 there
-// is not a response of the handled methods). This is consistent for switch and if.
-// Chain explicit arms (`else if r.Method == http.MethodGet`) to get an operation
-// for each method you handle.
+// Every other response is attributed to the per-method operations using the
+// per-function CFG (spec 009): an unconditional response, or an *independent*
+// conditional (an `if cond { … }` orthogonal to the method dispatch), is reachable
+// whatever the method ran and so is carried onto EVERY operation; a conditional
+// *nested inside* a method arm (e.g. a 404 in the `case GET:` body) is carried onto
+// that one method; and the dispatch FALLBACK arm — a `switch r.Method` default or a
+// bare `else` of an `if r.Method ==`, whose branch point is shared with the method
+// arms — is excluded from the handled methods (a 405 there is not a response of GET
+// or POST). When the handler has no CFG model, non-method conditionals are
+// conservatively excluded (the pre-009 behavior).
+//
+// Known limitation: the dispatch fallback arm is not emitted as its OWN operation
+// (it has no single HTTP method to attach to). Chain explicit arms
+// (`else if r.Method == http.MethodGet`) to get an operation for each method.
 func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 	// Collect HTTP methods from response branch contexts
 	methodResponses := make(map[string]map[string]*ResponseInfo) // method → statusCode → response
@@ -990,15 +996,40 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 		return nil // Not enough methods to split
 	}
 
-	// UNCONDITIONAL responses (Branch == nil — a common 400/500 written regardless
-	// of method) are reachable on every method and belong on EVERY split operation.
-	// Method-conditional branches (incl. a `switch r.Method` default, which is the
-	// "other methods" negation, NOT a shared response) are deliberately excluded.
+	// Classify every response NOT already attributed to a method, using the
+	// per-function CFG (spec 009). See the doc comment for the cases. fnKey == ""
+	// (no model) degrades to excluding non-method conditionals, never leaking a
+	// fallback onto a method.
+	meta := e.tree.GetMetadata()
+	fnKey := splitRouteFnKey(meta, methodResponses)
+	armBlocks, armBlockToMethods := dispatchArms(methodResponses)
+	dispatchRoot, haveRoot := commonDominator(meta, fnKey, armBlocks)
+
 	shared := make(map[string]*ResponseInfo)
 	for statusCode, resp := range route.Response {
 		if resp.Branch == nil {
-			shared[statusCode] = resp
+			shared[statusCode] = resp // unconditional → on every method
+			continue
 		}
+		if branchNamesMethod(resp.Branch.CaseValues) {
+			continue // already attributed to its method(s) above
+		}
+		if fnKey == "" {
+			continue // no CFG model: conservatively exclude (pre-009 behavior)
+		}
+		rb := resp.Branch.BlockIndex
+		if methods, ok := dominatingMethods(meta, fnKey, rb, armBlocks, armBlockToMethods); ok {
+			for _, m := range methods { // a combined `case "GET", "HEAD"` arm owns several
+				if methodResponses[m] != nil {
+					methodResponses[m][statusCode] = resp // nested inside that arm
+				}
+			}
+			continue
+		}
+		if isDispatchFallback(meta, fnKey, resp.Branch, dispatchRoot, haveRoot, armBlocks) {
+			continue // a `switch` default / `if r.Method ==` bare else → "any other method"
+		}
+		shared[statusCode] = resp // independent conditional → on every method
 	}
 
 	var result []*RouteInfo
@@ -1032,6 +1063,144 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 		result = append(result, mr)
 	}
 	return result
+}
+
+// splitRouteFnKey resolves the FunctionCFGs key for the handler being split, from
+// any method branch's parent-statement position (registered in cfgPosToFn during
+// CFG annotation). Returns "" when no model is available — the caller then degrades
+// to the pre-009 behavior (non-method conditionals excluded).
+func splitRouteFnKey(meta *metadata.Metadata, methodResponses map[string]map[string]*ResponseInfo) string {
+	for _, resps := range methodResponses {
+		for _, r := range resps {
+			if r.Branch == nil {
+				continue
+			}
+			if k := meta.FnKeyForPos(meta.StringPool.GetString(r.Branch.ParentStmtPos)); k != "" {
+				return k
+			}
+		}
+	}
+	return ""
+}
+
+// dispatchArms returns the sorted method-arm branch blocks and each block → the
+// HTTP method(s) it serves. A combined `case "GET", "HEAD":` lowers to ONE block
+// that serves both methods, so the value is a slice (mapping it to a single method
+// would be last-writer-wins over map order — nondeterministic). Both the block list
+// and each method list are sorted so downstream attribution is deterministic.
+func dispatchArms(methodResponses map[string]map[string]*ResponseInfo) ([]int32, map[int32][]string) {
+	armBlockToMethods := make(map[int32][]string)
+	for method, resps := range methodResponses {
+		for _, r := range resps {
+			if r.Branch == nil {
+				continue
+			}
+			b := r.Branch.BlockIndex
+			if !slices.Contains(armBlockToMethods[b], method) {
+				armBlockToMethods[b] = append(armBlockToMethods[b], method)
+			}
+		}
+	}
+	blocks := make([]int32, 0, len(armBlockToMethods))
+	for b := range armBlockToMethods {
+		blocks = append(blocks, b)
+	}
+	sort.Slice(blocks, func(i, j int) bool { return blocks[i] < blocks[j] })
+	for _, ms := range armBlockToMethods {
+		sort.Strings(ms)
+	}
+	return blocks, armBlockToMethods
+}
+
+// commonDominator returns the lowest common dominator of the given blocks — the
+// "dispatch root" that every method arm descends from (the `switch r.Method` tag or
+// the first `if r.Method ==` condition). ok=false when there is no CFG model. go/cfg
+// lowers a switch into a chain of test blocks, so the arms' immediate dominators
+// differ; their common dominator is the stable root shared by every arm INCLUDING
+// the default. Walks immediate-dominator chains (Cooper-Harvey-Kennedy idom tree).
+func commonDominator(meta *metadata.Metadata, fnKey string, blocks []int32) (int32, bool) {
+	if fnKey == "" || len(blocks) == 0 {
+		return -1, false
+	}
+	cur := blocks[0]
+	for _, b := range blocks[1:] {
+		anc := make(map[int32]bool)
+		for x := cur; ; {
+			anc[x] = true
+			p, ok := meta.IDom(fnKey, x)
+			if !ok {
+				break // reached the entry (it dominates everything)
+			}
+			x = p
+		}
+		y := b
+		for !anc[y] {
+			p, ok := meta.IDom(fnKey, y)
+			if !ok {
+				break
+			}
+			y = p
+		}
+		cur = y
+	}
+	return cur, true
+}
+
+// isDispatchFallback reports whether a non-method conditional response (branch br)
+// must be EXCLUDED from the handled methods: either a `switch r.Method` `default:`
+// arm (recognised structurally by its empty case values, so a stray `fallthrough`
+// into it cannot leak its 405 onto a method), or a fallback that descends from the
+// dispatch root yet shares no control-flow path with any arm (the bare `else` of an
+// `if r.Method ==` chain). A conditional outside the dispatch (root does not
+// dominate it, e.g. a pre-dispatch `if bad { … return }`) or one reachable
+// together with the arms is NOT a fallback — it is independent and shared.
+func isDispatchFallback(meta *metadata.Metadata, fnKey string, br *metadata.BranchContext, dispatchRoot int32, haveRoot bool, armBlocks []int32) bool {
+	if !haveRoot || !meta.Dominates(fnKey, dispatchRoot, br.BlockIndex) {
+		return false
+	}
+	isSwitchDefault := br.BlockKind == "switch-case" && len(br.CaseValues) == 0
+	return isSwitchDefault || mutuallyExclusiveWithArms(meta, fnKey, br.BlockIndex, armBlocks)
+}
+
+// mutuallyExclusiveWithArms reports whether block rb shares NO control-flow path
+// with any method arm (neither reaches the other) — true for a dispatch fallback
+// arm (a sibling of the method arms), false for a conditional that falls through
+// to or from the arms (an independent before/after the dispatch).
+func mutuallyExclusiveWithArms(meta *metadata.Metadata, fnKey string, rb int32, armBlocks []int32) bool {
+	for _, a := range armBlocks {
+		if a == rb {
+			return false
+		}
+		if meta.Reaches(fnKey, metadata.BlockLoc{Block: a}, metadata.BlockLoc{Block: rb}) ||
+			meta.Reaches(fnKey, metadata.BlockLoc{Block: rb}, metadata.BlockLoc{Block: a}) {
+			return false
+		}
+	}
+	return true
+}
+
+// dominatingMethods returns the HTTP method(s) whose dispatch arm dominates block
+// rb (rb lies inside that arm's region, e.g. a conditional nested in `case GET:`),
+// or ok=false if no method arm dominates it. armBlocks is sorted, so when several
+// arms dominate rb (unusual nested/fallthrough shapes) the choice is deterministic.
+func dominatingMethods(meta *metadata.Metadata, fnKey string, rb int32, armBlocks []int32, armBlockToMethods map[int32][]string) ([]string, bool) {
+	for _, armBlock := range armBlocks {
+		if armBlock != rb && meta.Dominates(fnKey, armBlock, rb) {
+			return armBlockToMethods[armBlock], true
+		}
+	}
+	return nil, false
+}
+
+// branchNamesMethod reports whether any of a branch's case values name an HTTP
+// method (so its responses are already attributed per method).
+func branchNamesMethod(caseValues []string) bool {
+	for _, v := range caseValues {
+		if isValidHTTPMethodStr(strings.ToUpper(v)) {
+			return true
+		}
+	}
+	return false
 }
 
 func isValidHTTPMethodStr(s string) bool {

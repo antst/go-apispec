@@ -136,3 +136,23 @@ func TestReachability_OutOfRange(t *testing.T) {
 	fc := m.fnCFG("f")
 	assert.False(t, blockDominates(fc.Dominators, 0, 9))
 }
+
+func TestIDom(t *testing.T) {
+	// Diamond: 0 → {1,2} → 3; every non-entry block's immediate dominator is 0.
+	m := metaWith(newFnCFG([][]int32{{1, 2}, {3}, {3}, {}}))
+
+	d, ok := m.IDom("f", 1)
+	assert.True(t, ok)
+	assert.Equal(t, int32(0), d)
+
+	_, ok = m.IDom("f", 0)
+	assert.False(t, ok, "the entry has no immediate dominator")
+
+	_, ok = m.IDom("f", 99)
+	assert.False(t, ok, "out of range")
+	_, ok = m.IDom("f", -1)
+	assert.False(t, ok, "negative index")
+
+	_, ok = m.IDom("absent", 1)
+	assert.False(t, ok, "no model → not ok")
+}
