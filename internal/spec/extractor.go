@@ -1003,7 +1003,11 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 	meta := e.tree.GetMetadata()
 	fnKey := splitRouteFnKey(meta, methodResponses)
 	armBlocks, armBlockToMethods := dispatchArms(methodResponses)
-	dispatchRoot, haveRoot := commonDominator(meta, fnKey, armBlocks)
+	// dispatchRoot is the common dominator of the FULL dispatch (every method arm from
+	// the CFG, including arms whose response was lost to an early-return), so a
+	// conditional orphaned in a dropped arm is still seen as inside the dispatch and
+	// excluded, not leaked onto the surviving methods.
+	dispatchRoot, haveRoot := commonDominator(meta, fnKey, dispatchRootBlocks(meta, fnKey, armBlocks))
 
 	shared := make(map[string]*ResponseInfo)
 	for statusCode, resp := range route.Response {
@@ -1090,6 +1094,30 @@ func splitRouteFnKey(meta *metadata.Metadata, methodResponses map[string]map[str
 		}
 	}
 	return ""
+}
+
+// dispatchRootBlocks returns the blocks whose common dominator is the dispatch tag.
+// It starts from the responding arms and adds any recorded method arm that is a
+// SIBLING of them — mutually exclusive with them, i.e. of the same switch/if-chain.
+// That covers an arm which dropped out of the responses (its success lost to an
+// early-return) WITHOUT pulling in arms of a SEPARATE dispatch that runs in SEQUENCE
+// (a second `switch r.Method`, or a value-switch with method-named cases): those are
+// reachable-together with the responding arms, not exclusive, so they are left out.
+//
+// Limitation: two method dispatches in MUTUALLY EXCLUSIVE branches
+// (`if c { switch r.Method } else { switch r.Method }`) are exclusive, so the other
+// branch's arms ARE pulled in and the root can inflate toward the function entry; an
+// independent conditional in one branch is then over-excluded. This matches the
+// pre-CFG behavior (such a conditional was dropped anyway) and is a rare shape;
+// pinning it precisely needs per-dispatch grouping (a reaching-defs follow-up).
+func dispatchRootBlocks(meta *metadata.Metadata, fnKey string, armBlocks []int32) []int32 {
+	roots := append([]int32(nil), armBlocks...)
+	for _, ma := range meta.MethodArms(fnKey) {
+		if !slices.Contains(roots, ma) && mutuallyExclusiveWithArms(meta, fnKey, ma, armBlocks) {
+			roots = append(roots, ma)
+		}
+	}
+	return roots
 }
 
 // dispatchArms returns the sorted method-arm branch blocks and each block → the

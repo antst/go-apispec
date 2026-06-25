@@ -137,6 +137,13 @@ func TestReachability_OutOfRange(t *testing.T) {
 	assert.False(t, blockDominates(fc.Dominators, 0, 9))
 }
 
+func TestMethodArms(t *testing.T) {
+	m := metaWith(newFnCFG([][]int32{{1, 2}, {}, {}}))
+	m.FunctionCFGs["f"].MethodArms = []int32{1, 2}
+	assert.Equal(t, []int32{1, 2}, m.MethodArms("f"))
+	assert.Nil(t, m.MethodArms("absent"), "no model → nil")
+}
+
 func TestIDom(t *testing.T) {
 	// Diamond: 0 → {1,2} → 3; every non-entry block's immediate dominator is 0.
 	m := metaWith(newFnCFG([][]int32{{1, 2}, {3}, {3}, {}}))

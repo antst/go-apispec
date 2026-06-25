@@ -89,6 +89,10 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// recognised structurally as the dispatch fallback and excluded, NOT leaked onto
 		// GET/POST despite the fallthrough edge making it reachable from the POST arm.
 		{name: "cfg_method_switch_fallthrough", inputDir: "../../testdata/cfg_method_switch_fallthrough", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: TWO `switch r.Method` dispatches with an independent 401 between
+		// them — the dispatch root is scoped to one dispatch's arms, so the 401 is shared
+		// onto GET+POST, not over-excluded by a root spanning both dispatches.
+		{name: "cfg_method_two_dispatch", inputDir: "../../testdata/cfg_method_two_dispatch", configFn: spec.DefaultHTTPConfig},
 		// spec 009 US3: branch-dependent response bodies are attributed to the status
 		// on which they are written — 200/FullUser vs 404/ErrorBody, not merged (FR-005).
 		{name: "cfg_branch_bodies", inputDir: "../../testdata/cfg_branch_bodies", configFn: spec.DefaultHTTPConfig},

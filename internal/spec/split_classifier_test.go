@@ -342,7 +342,73 @@ func TestSplit_ForeignBranchExcluded(t *testing.T) {
 	assert.Equal(t, []int{201}, got["POST"], "foreign 599 must not leak onto POST")
 }
 
+// droppedArmCFG: a switch with GET (B2, whose success at B7 is branchless so GET
+// drops out of methodResponses), POST (B3), DELETE (B4); the GET arm holds a nested
+// 404 (B5, returns). With MethodArms covering ALL three arms, the dispatch root is
+// the tag B0, so the orphaned 404 is excluded — not leaked onto POST/DELETE.
+func droppedArmCFG() [][]int32 {
+	return [][]int32{
+		{2, 6}, // B0 tag (GET test)
+		{},     // B1 SwitchDone
+		{5, 7}, // B2 GET body: nested if → 404 or 200
+		{1},    // B3 POST body
+		{1},    // B4 DELETE body
+		{},     // B5 nested 404 (returns)
+		{3, 8}, // B6 SwitchNextCase (POST test)
+		{1},    // B7 GET 200 (branchless merge)
+		{4},    // B8 SwitchNextCase (→ DELETE)
+	}
+}
+
+// TestSplit_DroppedArmConditionalExcluded: when a method arm drops out (its success
+// lost to an early-return), a conditional orphaned in that arm must NOT leak onto the
+// surviving methods — the full-dispatch root (from MethodArms) still covers it.
+func TestSplit_DroppedArmConditionalExcluded(t *testing.T) {
+	meta := newTestMeta()
+	const fn = "fn"
+	meta.InstallFunctionCFGForTest(fn, droppedArmCFG(), map[string]metadata.BlockLoc{
+		"post:1": {Block: 3}, "del:1": {Block: 4}, "nf:1": {Block: 5},
+	})
+	meta.FunctionCFGs[fn].MethodArms = []int32{2, 3, 4} // full dispatch incl. dropped GET arm
+	ext := scExtractor(meta)
+	route := &RouteInfo{
+		Path: "/r", Function: "h", UsedTypes: map[string]*Schema{},
+		Response: map[string]*ResponseInfo{
+			"201": scResp(201, "Made", scBranch(meta, 3, "post:1", "POST")),
+			"204": scResp(204, "", scBranch(meta, 4, "del:1", "DELETE")),
+			"404": scResp(404, "NF", &metadata.BranchContext{BlockKind: "if-then", BlockIndex: 5, ParentStmtPos: meta.StringPool.Get("nf:1")}),
+		},
+	}
+	got := scCollect(ext.splitByConditionalMethods(route))
+	assert.Equal(t, []int{201}, got["POST"], "404 from the dropped GET arm must not leak onto POST")
+	assert.Equal(t, []int{204}, got["DELETE"], "nor onto DELETE")
+}
+
 // --- direct helper unit tests ---
+
+// TestDispatchRootBlocks_SiblingScoping: a dropped sibling arm (mutually exclusive
+// with the responding arms — same dispatch) is added to the root set, but an arm of
+// a SEPARATE dispatch (reachable-together, in sequence) is NOT — so the root is not
+// inflated to over-exclude independent conditionals between two dispatches.
+func TestDispatchRootBlocks_SiblingScoping(t *testing.T) {
+	meta := newTestMeta()
+	const fn = "fn"
+	succs := [][]int32{
+		{8},    // B0 entry → B8 (an arm of a separate, earlier dispatch)
+		{},     // B1 merge
+		{1},    // B2 dispatch-2 GET (dropped sibling)
+		{1},    // B3 dispatch-2 POST (responding)
+		{1},    // B4 dispatch-2 DELETE (responding)
+		{2, 6}, // B5 dispatch-2 tag
+		{3, 7}, // B6
+		{4},    // B7
+		{5},    // B8 separate-dispatch arm → flows into dispatch-2
+	}
+	meta.InstallFunctionCFGForTest(fn, succs, map[string]metadata.BlockLoc{"x": {Block: 3}})
+	meta.FunctionCFGs[fn].MethodArms = []int32{8, 2, 3, 4}
+	got := dispatchRootBlocks(meta, fn, []int32{3, 4})
+	assert.ElementsMatch(t, []int32{3, 4, 2}, got, "include the dropped sibling B2, exclude the separate-dispatch arm B8")
+}
 
 func TestCommonDominator(t *testing.T) {
 	meta := newTestMeta()

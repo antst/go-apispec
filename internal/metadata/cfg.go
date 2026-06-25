@@ -247,6 +247,16 @@ func annotateBranches(graph *cfg.CFG, fset *token.FileSet, info *types.Info, met
 		if branchKind == "if-then" && block.Stmt != nil {
 			ctx.CaseValues = extractMethodGuard(block.Stmt, info)
 		}
+		// Record method-dispatch arm blocks (a `switch r.Method` case or `if r.Method ==`
+		// then-block) so a consumer can recover the FULL dispatch even when an arm
+		// contributed no response (e.g. its success was stripped by an early-return).
+		// The common dominator of all arms is the dispatch tag (spec 009, US2/FR-003).
+		for _, v := range ctx.CaseValues {
+			if isHTTPMethodName(strings.ToUpper(v)) {
+				fc.MethodArms = append(fc.MethodArms, bi)
+				break
+			}
+		}
 		for _, node := range block.Nodes {
 			ast.Inspect(node, func(nn ast.Node) bool {
 				if nn == nil {

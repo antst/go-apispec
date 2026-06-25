@@ -551,6 +551,11 @@ type FunctionCFG struct {
 	Succs      [][]int32           `yaml:"succs,omitempty"`      // Succs[i] = successor block indices of block i
 	Dominators []int32             `yaml:"dominators,omitempty"` // immediate dominator idom[i]; entry idom = -1
 	PosToBlock map[string]BlockLoc `yaml:"pos_to_block,omitempty"`
+	// MethodArms holds the block indices of method-dispatch arms (a `switch r.Method`
+	// case or `if r.Method ==` then-block), including arms that contributed no response.
+	// Their common dominator is the dispatch tag — letting a consumer recover the full
+	// dispatch region even when an arm's response was lost to an early-return (US2).
+	MethodArms []int32 `yaml:"method_arms,omitempty"`
 }
 
 // BlockInfo is one CFG basic block in the compact model.
