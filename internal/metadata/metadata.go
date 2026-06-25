@@ -429,12 +429,25 @@ func GenerateMetadataWithLogger(pkgs map[string]map[string]*ast.File, fileToInfo
 	// Finalize string pool
 	metadata.StringPool.Finalize()
 
-	// Build CFG for all functions and annotate edges/assignments with branch context
+	// Build CFG for all functions and annotate edges/assignments with branch context,
+	// plus the retained reachability model (spec 009). declInfo gives each function's
+	// *types.Info (for type-switch case-type capture), resolved via its file.
 	allFuncDecls := make([]*ast.FuncDecl, 0, len(funcMap))
 	for _, fn := range funcMap {
 		allFuncDecls = append(allFuncDecls, fn)
 	}
-	BuildFunctionCFGs(allFuncDecls, fset, metadata)
+	declInfo := make(map[*ast.FuncDecl]*types.Info)
+	for _, files := range pkgs {
+		for _, file := range files {
+			info := fileToInfo[file]
+			for _, d := range file.Decls {
+				if fn, ok := d.(*ast.FuncDecl); ok {
+					declInfo[fn] = info
+				}
+			}
+		}
+	}
+	BuildFunctionCFGs(allFuncDecls, declInfo, fset, metadata)
 
 	if logger != nil {
 		logger.Println("process assignment Count:", processAssignmentCount)

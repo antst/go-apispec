@@ -297,32 +297,48 @@ func TestSplitByConditionalMethods_InvalidHTTPMethod_Skipped(t *testing.T) {
 	assert.Nil(t, result)
 }
 
-func TestSplitByConditionalMethods_NonSwitchCase_Skipped(t *testing.T) {
+// An `if r.Method == …` dispatch (recorded as if-then blocks carrying method
+// CaseValues, spec 009 US2) splits into one operation per method, the same as a
+// switch.
+func TestSplitByConditionalMethods_IfDispatch(t *testing.T) {
 	meta := newTestMeta()
-	tree := NewMockTrackerTree(meta, metadata.TrackerLimits{
-		MaxNodesPerTree: 100, MaxChildrenPerNode: 10, MaxArgsPerFunction: 5, MaxNestedArgsDepth: 3,
-	})
-	cfg := &APISpecConfig{
-		Defaults: Defaults{ResponseContentType: "application/json"},
+	ext, _ := newTestExtractor(meta)
+
+	route := &RouteInfo{
+		Path:    "/items",
+		Handler: "items",
+		Response: map[string]*ResponseInfo{
+			"200": {StatusCode: 200, Branch: &metadata.BranchContext{BlockKind: "if-then", CaseValues: []string{"GET"}}},
+			"201": {StatusCode: 201, Branch: &metadata.BranchContext{BlockKind: "if-then", CaseValues: []string{"POST"}}},
+		},
 	}
-	ext := NewExtractor(tree, cfg)
+
+	result := ext.splitByConditionalMethods(route)
+	require.Len(t, result, 2)
+	methods := map[string]bool{}
+	for _, r := range result {
+		methods[r.Method] = true
+	}
+	assert.True(t, methods["GET"])
+	assert.True(t, methods["POST"])
+}
+
+// A non-method `if` (no method case values) must NOT split, even though if-then
+// branches are now eligible.
+func TestSplitByConditionalMethods_NonMethodIf_NotSplit(t *testing.T) {
+	meta := newTestMeta()
+	ext, _ := newTestExtractor(meta)
 
 	route := &RouteInfo{
 		Path:    "/resource",
 		Handler: "handler",
 		Response: map[string]*ResponseInfo{
-			"200": {
-				StatusCode: 200,
-				Branch: &metadata.BranchContext{
-					BlockKind:  "if-then",
-					CaseValues: []string{"GET"},
-				},
-			},
+			"200": {StatusCode: 200, Branch: &metadata.BranchContext{BlockKind: "if-then"}},
+			"500": {StatusCode: 500, Branch: &metadata.BranchContext{BlockKind: "if-then", CaseValues: []string{"notamethod"}}},
 		},
 	}
 
-	result := ext.splitByConditionalMethods(route)
-	assert.Nil(t, result)
+	assert.Nil(t, ext.splitByConditionalMethods(route))
 }
 
 // ===========================================================================

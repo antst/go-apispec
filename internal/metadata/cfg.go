@@ -17,25 +17,33 @@ package metadata
 import (
 	"go/ast"
 	"go/token"
+	"go/types"
+	"strings"
 
 	"golang.org/x/tools/go/cfg"
 )
 
 // BuildFunctionCFGs builds control-flow graphs for the given function
-// declarations and annotates existing CallGraphEdge and Assignment entries
-// in the metadata with BranchContext information.
+// declarations, annotates existing CallGraphEdge and Assignment entries with
+// BranchContext, and retains a compact per-function reachability model in
+// meta.FunctionCFGs (spec 009, FR-001). declInfo provides each function's
+// *types.Info for type-switch case-type capture (nil-tolerant).
 //
-// This is additive — edges/assignments without branch context (unconditional
-// code) keep Branch == nil. Only statements inside if/else/switch branches
-// get annotated.
-func BuildFunctionCFGs(funcDecls []*ast.FuncDecl, fset *token.FileSet, meta *Metadata) {
+// The raw *cfg.CFG is local and dropped after build; only the compact model and
+// the BranchContext annotations survive.
+func BuildFunctionCFGs(funcDecls []*ast.FuncDecl, declInfo map[*ast.FuncDecl]*types.Info, fset *token.FileSet, meta *Metadata) {
 	if meta == nil || len(funcDecls) == 0 {
 		return
 	}
 
-	// Build position→edge and position→assignment indexes for fast lookup
 	edgesByPos := buildEdgePositionIndex(meta, fset)
 	assignsByPos := buildAssignmentPositionIndex(meta, fset)
+	if meta.FunctionCFGs == nil {
+		meta.FunctionCFGs = make(map[string]*FunctionCFG, len(funcDecls))
+	}
+	if meta.cfgPosToFn == nil {
+		meta.cfgPosToFn = make(map[string]string)
+	}
 
 	for _, decl := range funcDecls {
 		if decl.Body == nil {
@@ -43,8 +51,77 @@ func BuildFunctionCFGs(funcDecls []*ast.FuncDecl, fset *token.FileSet, meta *Met
 		}
 		// Build CFG for this function. Conservative mayReturn: always true.
 		graph := cfg.New(decl.Body, func(*ast.CallExpr) bool { return true })
-		annotateBranches(graph, fset, meta, edgesByPos, assignsByPos)
+		fnKey := fset.Position(decl.Body.Pos()).String() // unique per function body
+		tsOperands := typeSwitchOperands(decl.Body)
+		tsDefaults := typeSwitchDefaultArms(decl.Body)
+		dispatchGroups := methodDispatchGroups(decl.Body, declInfo[decl])
+		annotateBranches(graph, fset, declInfo[decl], meta, edgesByPos, assignsByPos, fnKey, tsOperands, tsDefaults, dispatchGroups)
 	}
+}
+
+// methodDispatchGroups maps the source position of each method-dispatch ARM
+// statement (a method-`switch` case clause INCLUDING the default, or each
+// `if r.Method ==` chain IfStmt) to a group id — the dispatch statement's own
+// position — so every arm of ONE dispatch shares an id. A switch counts when any of its
+// case values names an HTTP method (switchHasMethodCase) — the SAME test the route
+// splitter uses to attribute a case to a method, so `switch r.Method`, `switch m :=
+// r.Method`, and a method-named value-switch are all grouped exactly as they are split,
+// and the group includes the `default` arm. String-literal cases need no type info;
+// `http.MethodXxx` constant cases resolve via it. (The if path stays type-gated inside
+// extractMethodGuard, matching how if-arm CaseValues are attributed.)
+func methodDispatchGroups(body *ast.BlockStmt, info *types.Info) map[token.Pos]int {
+	groups := make(map[token.Pos]int)
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.SwitchStmt:
+			if s.Body != nil && switchHasMethodCase(s, info) {
+				gid := int(s.Pos())
+				for _, cc := range s.Body.List {
+					if clause, ok := cc.(*ast.CaseClause); ok {
+						groups[clause.Pos()] = gid
+					}
+				}
+			}
+		case *ast.IfStmt:
+			if _, done := groups[s.Pos()]; done {
+				return true // already linked as the else-if of a method chain
+			}
+			if len(extractMethodGuard(s, info)) > 0 {
+				gid := int(s.Pos())
+				for cur := s; cur != nil; { // walk the else-if chain into one group
+					groups[cur.Pos()] = gid
+					if elseIf, ok := cur.Else.(*ast.IfStmt); ok {
+						cur = elseIf
+					} else {
+						cur = nil
+					}
+				}
+			}
+		}
+		return true
+	})
+	return groups
+}
+
+// switchHasMethodCase reports whether any case clause of s carries a value that names
+// an HTTP method — using extractCaseValues + isHTTPMethodName, the exact pair the route
+// splitter applies (via BranchContext.CaseValues) to decide a case is a method arm. So a
+// switch is grouped as a method dispatch iff its cases are the ones the splitter fans
+// out per method — independent of the switch TAG, which the splitter never inspects.
+// This intentionally also matches a value-switch whose cases name methods: the splitter
+// already fans those out (a pre-existing limitation), so grouping them keeps the
+// dispatch model consistent with the split rather than letting their `default` leak.
+func switchHasMethodCase(s *ast.SwitchStmt, info *types.Info) bool {
+	for _, cc := range s.Body.List {
+		if clause, ok := cc.(*ast.CaseClause); ok {
+			for _, v := range extractCaseValues(clause, info) {
+				if isHTTPMethodName(strings.ToUpper(v)) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // buildEdgePositionIndex creates a map from source position string to
@@ -116,49 +193,148 @@ func buildAssignmentPositionIndex(meta *Metadata, _ *token.FileSet) map[string][
 	return index
 }
 
-// annotateBranches walks the CFG blocks and tags edges/assignments with
-// BranchContext based on the block's Kind and parent statement.
-func annotateBranches(graph *cfg.CFG, fset *token.FileSet, meta *Metadata,
-	edgesByPos map[string]*CallGraphEdge, assignsByPos map[string][]*Assignment) {
+// annotateBranches walks the CFG blocks: it (1) builds the compact FunctionCFG
+// for fnKey — successor adjacency + a position→block map over ALL live blocks
+// (research R3: the response call usually sits in the post-if merge block, which
+// the BranchContext gate below skips) + dominators — and (2) tags edges/assignments
+// with BranchContext (including type-switch case types).
+func annotateBranches(graph *cfg.CFG, fset *token.FileSet, info *types.Info, meta *Metadata, //nolint:gocyclo // single CFG walk doing reachability capture + branch annotation
+	edgesByPos map[string]*CallGraphEdge, assignsByPos map[string][]*Assignment, fnKey string,
+	tsOperands map[token.Pos]string, tsDefaults []tsDefaultArm, dispatchGroups map[token.Pos]int) {
+	nb := len(graph.Blocks)
+	fc := &FunctionCFG{
+		Blocks:       make([]BlockInfo, nb),
+		Succs:        make([][]int32, nb),
+		PosToBlock:   make(map[string]BlockLoc),
+		DispatchArms: make(map[int][]int32),
+	}
+	for i := range fc.Blocks {
+		fc.Blocks[i] = BlockInfo{Index: int32(i)} //nolint:gosec // block counts are small
+	}
+
+	// recordPos stores a position → block location in both the raw and
+	// repo-root-stripped forms (consumers carry the stripped form — #27).
+	//
+	// First-write-wins over blocks iterated in index order. A position go/cfg emits
+	// in two live blocks (e.g. a `select` comm-clause receive ident that appears in
+	// both the dispatch block and the SelectCaseBody) is therefore claimed by the
+	// lower-indexed block. This is a rare imprecision (no panic; the status consumer
+	// would treat a select-conditional value as unconditional) — left as-is rather
+	// than tracked because no realistic handler shape triggers it.
+	recordPos := func(p string, loc BlockLoc) {
+		if _, exists := fc.PosToBlock[p]; !exists {
+			fc.PosToBlock[p] = loc
+		}
+		meta.cfgPosToFn[p] = fnKey
+		if repoRoot != "" {
+			if stripped := strings.TrimPrefix(p, repoRoot); stripped != p {
+				if _, exists := fc.PosToBlock[stripped]; !exists {
+					fc.PosToBlock[stripped] = loc
+				}
+				meta.cfgPosToFn[stripped] = fnKey
+			}
+		}
+	}
+
 	for _, block := range graph.Blocks {
-		if !block.Live {
+		if !block.Live || int(block.Index) >= nb {
 			continue
 		}
-
-		// Determine branch kind from block's Kind
+		bi := block.Index
 		branchKind := mapBlockKind(block.Kind)
-		if branchKind == "" {
-			continue // Unconditional block — no annotation needed
+
+		succs := make([]int32, 0, len(block.Succs))
+		for _, s := range block.Succs {
+			if s != nil {
+				succs = append(succs, s.Index)
+			}
+		}
+		fc.Blocks[bi] = BlockInfo{Index: bi, Kind: branchKind, NodeCount: int32(len(block.Nodes))} //nolint:gosec // small counts
+		fc.Succs[bi] = succs
+
+		// (1) Reachability capture: ALL live blocks, every node → (block, node index).
+		// The same walk annotates type-switch default-arm writes (go/cfg folds the
+		// default body into the post-switch block, which the branch pass below skips).
+		//
+		// Do NOT descend into nested function literals: go/cfg builds no CFG for a
+		// closure body, so mapping a closure's inner positions to THIS function's
+		// block would place them in the wrong control flow and let a closure's
+		// statuses bleed into the enclosing handler's reachability. Closures get no
+		// model and their consumers degrade cleanly (BlockFor → not found).
+		for nodeIdx, node := range block.Nodes {
+			loc := BlockLoc{Block: bi, Node: int32(nodeIdx)} //nolint:gosec // small counts
+			ast.Inspect(node, func(nn ast.Node) bool {
+				if nn == nil {
+					return false
+				}
+				if _, isFuncLit := nn.(*ast.FuncLit); isFuncLit {
+					return false // a closure has its own scope; don't fold it into this block
+				}
+				posStr := fset.Position(nn.Pos()).String()
+				recordPos(posStr, loc)
+				annotateDefaultArm(nn.Pos(), posStr, tsDefaults, edgesByPos, assignsByPos)
+				return true
+			})
 		}
 
-		// Get parent statement position for context
+		// (2) BranchContext annotation — only for if/else/switch/select body blocks.
+		if branchKind == "" {
+			continue
+		}
 		var parentStmtPos int
 		if block.Stmt != nil {
-			parentStmtPos = meta.StringPool.Get(fset.Position(block.Stmt.Pos()).String())
+			stmtPos := fset.Position(block.Stmt.Pos()).String()
+			parentStmtPos = meta.StringPool.Get(stmtPos)
+			// Register the parent-statement position → fnKey so a consumer holding only
+			// a BranchContext (splitByConditionalMethods) can resolve it back to this
+			// function via FnKeyForPos, then query dominance between branch blocks to
+			// classify non-method conditionals. cfgPosToFn is transient (not serialized);
+			// double-key raw + repo-root-stripped to mirror recordPos (#27).
+			meta.cfgPosToFn[stmtPos] = fnKey
+			if repoRoot != "" {
+				if stripped := strings.TrimPrefix(stmtPos, repoRoot); stripped != stmtPos {
+					meta.cfgPosToFn[stripped] = fnKey
+				}
+			}
 		}
-
 		ctx := &BranchContext{
-			BlockIndex:    block.Index,
+			BlockIndex:    bi,
 			BlockKind:     branchKind,
 			ParentStmtPos: parentStmtPos,
 		}
-
-		// For switch-case blocks, extract case clause literal values
 		if branchKind == "switch-case" && block.Stmt != nil {
-			ctx.CaseValues = extractCaseValues(block.Stmt)
+			ctx.CaseValues = extractCaseValues(block.Stmt, info)
+			ctx.CaseTypeRefs = extractCaseTypeRefs(block.Stmt, info)
+			ctx.SwitchOperand = tsOperands[block.Stmt.Pos()]
 		}
-
-		// Walk all AST nodes in this block and tag matching edges/assignments.
-		// block.Nodes are statement-level; the position of an AssignStmt like
-		// `_, _ = w.Write(...)` is the underscore, while the call edge is
-		// indexed at the inner CallExpr's position. Descend into every node
-		// so each inner CallExpr/AssignStmt gets a chance to match.
+		// An `if r.Method == <M>` guard makes its then-arm method-conditional, the
+		// same way a `switch r.Method` case is (spec 009, US2/FR-003). Recording the
+		// method in CaseValues lets splitByConditionalMethods fan the handler out per
+		// method whether it branches via switch or if.
+		if branchKind == "if-then" && block.Stmt != nil {
+			ctx.CaseValues = extractMethodGuard(block.Stmt, info)
+		}
+		// Record this arm under its method-dispatch group (a method `switch` or a chained
+		// `if r.Method ==`), INCLUDING the switch `default`, so a consumer can recover the
+		// exact dispatch — its tag (the common dominator of the group's arms) and every arm,
+		// even one whose response was lost to an early-return. methodDispatchGroups detects a
+		// dispatch switch by its case values (switchHasMethodCase) — the same test the route
+		// splitter uses — so grouping stays consistent with the split (spec 009, US2).
+		if block.Stmt != nil {
+			if g, ok := dispatchGroups[block.Stmt.Pos()]; ok {
+				ctx.DispatchGroup = g
+				fc.DispatchArms[g] = append(fc.DispatchArms[g], bi)
+			}
+		}
 		for _, node := range block.Nodes {
-			ast.Inspect(node, func(n ast.Node) bool {
-				if n == nil {
+			ast.Inspect(node, func(nn ast.Node) bool {
+				if nn == nil {
 					return false
 				}
-				pos := fset.Position(n.Pos()).String()
+				if _, isFuncLit := nn.(*ast.FuncLit); isFuncLit {
+					return false // a closure's edges belong to its own scope, not this branch
+				}
+				pos := fset.Position(nn.Pos()).String()
 				if edge, ok := edgesByPos[pos]; ok {
 					edge.Branch = ctx
 				}
@@ -169,27 +345,285 @@ func annotateBranches(graph *cfg.CFG, fset *token.FileSet, meta *Metadata,
 			})
 		}
 	}
+
+	fc.Dominators = computeDominators(fc.Succs)
+	meta.FunctionCFGs[fnKey] = fc
 }
 
-// extractCaseValues extracts string literal values from a case clause statement.
-// For example, `case "GET", "HEAD":` returns ["GET", "HEAD"].
-func extractCaseValues(stmt ast.Stmt) []string {
+// extractCaseValues extracts the case values of a case clause. String literals are
+// returned verbatim (`case "GET", "active":` → ["GET", "active"]); an `http.MethodXxx`
+// selector constant is resolved to its method name (`case http.MethodGet:` → "GET"),
+// type-gated to net/http via httpMethodName. So a `switch r.Method` dispatch splits
+// the same whether its cases are string literals or net/http constants — matching the
+// `if r.Method == http.MethodGet` guard (spec 009, US2/FR-003). Needs type info to
+// resolve constants; without it only string literals are returned.
+func extractCaseValues(stmt ast.Stmt, info *types.Info) []string {
 	cc, ok := stmt.(*ast.CaseClause)
 	if !ok || cc == nil {
 		return nil
 	}
 	var values []string
 	for _, expr := range cc.List {
-		if lit, ok := expr.(*ast.BasicLit); ok {
-			// Strip quotes from string literals
-			val := lit.Value
+		switch v := expr.(type) {
+		case *ast.BasicLit:
+			// Strip quotes from string literals.
+			val := v.Value
 			if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
 				val = val[1 : len(val)-1]
 			}
 			values = append(values, val)
+		case *ast.SelectorExpr:
+			if m := httpMethodName(v, info); m != "" {
+				values = append(values, m)
+			}
 		}
 	}
 	return values
+}
+
+// extractMethodGuard returns the HTTP method named by an `if <req>.Method == <M>`
+// (or `<M> == <req>.Method`) condition — "POST" for both `== "POST"` and
+// `== http.MethodPost` — so a method-conditional `if` dispatch fans out per method
+// the same way a `switch r.Method` does (spec 009, US2/FR-003).
+//
+// It is gated on TYPE INFO: the `.Method` operand must resolve to
+// net/http.Request.Method, and a `MethodXxx` constant operand must resolve from the
+// net/http package. This prevents unrelated business logic (`s.Method == "GET"`,
+// `foo.MethodPost == r.Method`) from being misread as route method dispatch.
+// Returns nil for any other condition (and when type info is unavailable).
+func extractMethodGuard(stmt ast.Stmt, info *types.Info) []string {
+	ifStmt, ok := stmt.(*ast.IfStmt)
+	if !ok || ifStmt.Cond == nil {
+		return nil
+	}
+	bin, ok := ifStmt.Cond.(*ast.BinaryExpr)
+	if !ok || bin.Op != token.EQL {
+		return nil
+	}
+	if isHTTPRequestMethod(bin.X, info) {
+		if m := httpMethodName(bin.Y, info); m != "" {
+			return []string{m}
+		}
+	}
+	if isHTTPRequestMethod(bin.Y, info) {
+		if m := httpMethodName(bin.X, info); m != "" {
+			return []string{m}
+		}
+	}
+	return nil
+}
+
+// isHTTPRequestMethod reports whether e is a `<req>.Method` selector whose receiver
+// type-resolves to net/http.Request (value or pointer). Requires type info; without
+// it (or for any non-Request `.Method`) returns false — conservative, so a business
+// type's `.Method` field is never mistaken for the HTTP method.
+func isHTTPRequestMethod(e ast.Expr, info *types.Info) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok || sel.Sel == nil || sel.Sel.Name != "Method" || info == nil {
+		return false
+	}
+	return isNetHTTPNamed(info.TypeOf(sel.X), "Request")
+}
+
+// isNetHTTPNamed reports whether t (after one optional pointer deref) is the named
+// type `name` declared in package net/http. Type aliases are resolved: under Go's
+// default gotypesalias=1 an alias like `type Req = http.Request` is a *types.Alias,
+// not a *types.Named, so Unalias is needed before/after the deref to recognise an
+// aliased (or pointer-to-aliased) request type.
+func isNetHTTPNamed(t types.Type, name string) bool {
+	if t == nil {
+		return false
+	}
+	t = types.Unalias(t)
+	if p, ok := t.(*types.Pointer); ok {
+		t = types.Unalias(p.Elem())
+	}
+	named, ok := t.(*types.Named)
+	if !ok {
+		return false
+	}
+	obj := named.Obj()
+	return obj != nil && obj.Pkg() != nil && obj.Pkg().Path() == "net/http" && obj.Name() == name
+}
+
+// httpMethodName resolves an HTTP-method expression to its canonical method string:
+// a string literal ("post"), or an `http.MethodXxx` selector that type info confirms
+// resolves from net/http (MethodPost → POST). Returns "" otherwise.
+func httpMethodName(e ast.Expr, info *types.Info) string {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		if v.Kind == token.STRING {
+			if s := strings.ToUpper(strings.Trim(v.Value, `"`)); isHTTPMethodName(s) {
+				return s
+			}
+		}
+	case *ast.SelectorExpr:
+		if v.Sel == nil || info == nil {
+			return ""
+		}
+		// Only a constant declared in net/http (http.MethodXxx) counts.
+		obj := info.ObjectOf(v.Sel)
+		if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != "net/http" {
+			return ""
+		}
+		if strings.HasPrefix(v.Sel.Name, "Method") && len(v.Sel.Name) > len("Method") {
+			if m := strings.ToUpper(strings.TrimPrefix(v.Sel.Name, "Method")); isHTTPMethodName(m) {
+				return m
+			}
+		}
+	}
+	return ""
+}
+
+// isHTTPMethodName reports whether s (already upper-cased) is an HTTP method the
+// analyzer splits operations on. It is deliberately kept in sync with the spec-side
+// consumer (isValidHTTPMethodStr in internal/spec): capturing a method here that the
+// consumer would later drop would silently no-op, so both sides list the same seven
+// methods (CONNECT/TRACE are intentionally excluded — they are not REST operations).
+func isHTTPMethodName(s string) bool {
+	switch s {
+	case "GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD":
+		return true
+	}
+	return false
+}
+
+// extractCaseTypeRefs extracts the case TYPES from a type-switch case clause
+// (`switch x.(type) { case *T, S: ... }`) as TypeRefs, using go/types to confirm
+// each case expression is a type (not a value, which would be a value-switch).
+// Returns nil for value-switches, for `case nil:`/`default:` (the unconditional
+// arm), and when type info is unavailable (spec 009, FR-011/R5).
+func extractCaseTypeRefs(stmt ast.Stmt, info *types.Info) []*TypeRef {
+	cc, ok := stmt.(*ast.CaseClause)
+	if !ok || cc == nil || info == nil {
+		return nil
+	}
+	var refs []*TypeRef
+	for _, expr := range cc.List {
+		tv, known := info.Types[expr]
+		if !known || !tv.IsType() {
+			continue // a value expression (value-switch) or untyped nil — not a type case
+		}
+		if ref := TypeRefFromExpr(expr, info); ref != nil {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+// typeSwitchOperands maps each type-switch CaseClause (by its Pos) to the name of
+// the variable being switched on — `switch x := v.(type)` and `switch v.(type)`
+// both yield "v". This lets the per-case BranchContext record which parameter the
+// switch discriminates, so a consumer can bind it to the call-site argument via
+// ParamArgMap (spec 009, FR-011). Only simple ident operands are recorded; a
+// selector/index operand yields "" (the consumer then degrades).
+func typeSwitchOperands(body *ast.BlockStmt) map[token.Pos]string {
+	out := make(map[token.Pos]string)
+	ast.Inspect(body, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSwitchStmt)
+		if !ok || ts.Body == nil {
+			return true
+		}
+		operand := typeSwitchOperandName(ts)
+		if operand == "" {
+			return true
+		}
+		for _, stmt := range ts.Body.List {
+			if cc, ok := stmt.(*ast.CaseClause); ok {
+				out[cc.Pos()] = operand
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// tsDefaultArm is the source-position span of a type-switch `default:` clause body
+// plus the switched operand, used to annotate default-arm writes that go/cfg folds
+// into the post-switch block (see annotateDefaultArm).
+type tsDefaultArm struct {
+	lo, hi  token.Pos
+	operand string
+}
+
+// typeSwitchDefaultArms returns the body spans of every type-switch `default:`
+// clause in body, each paired with its switched operand. Value/expression switch
+// defaults are NOT included (only *ast.TypeSwitchStmt).
+func typeSwitchDefaultArms(body *ast.BlockStmt) []tsDefaultArm {
+	var out []tsDefaultArm
+	ast.Inspect(body, func(n ast.Node) bool {
+		ts, ok := n.(*ast.TypeSwitchStmt)
+		if !ok || ts.Body == nil {
+			return true
+		}
+		operand := typeSwitchOperandName(ts)
+		if operand == "" {
+			return true // a non-ident operand cannot be bound to a call-site argument
+		}
+		for _, stmt := range ts.Body.List {
+			if cc, ok := stmt.(*ast.CaseClause); ok && cc.List == nil { // nil List ⇒ default clause
+				out = append(out, tsDefaultArm{lo: cc.Pos(), hi: cc.End(), operand: operand})
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// annotateDefaultArm tags an edge/assignment inside a type-switch `default:` clause
+// with a switch-case BranchContext carrying the operand and NO case types (the
+// default marker), so a consumer can distinguish the default arm from code outside
+// the switch (spec 009, FR-011). It only sets a Branch that is still nil, never
+// overriding a real case annotation. When type-switch defaults nest, the TIGHTEST
+// enclosing span wins, so an inner default binds to the inner operand rather than
+// the lexically-enclosing outer one.
+func annotateDefaultArm(pos token.Pos, posStr string, defaults []tsDefaultArm,
+	edgesByPos map[string]*CallGraphEdge, assignsByPos map[string][]*Assignment) {
+	best := -1
+	var bestWidth token.Pos
+	for i := range defaults {
+		if pos < defaults[i].lo || pos >= defaults[i].hi {
+			continue
+		}
+		if w := defaults[i].hi - defaults[i].lo; best == -1 || w < bestWidth {
+			best, bestWidth = i, w
+		}
+	}
+	if best == -1 {
+		return
+	}
+	ctx := &BranchContext{BlockKind: "switch-case", SwitchOperand: defaults[best].operand}
+	if edge, ok := edgesByPos[posStr]; ok && edge.Branch == nil {
+		edge.Branch = ctx
+	}
+	for _, assign := range assignsByPos[posStr] {
+		if assign.Branch == nil {
+			assign.Branch = ctx
+		}
+	}
+}
+
+// typeSwitchOperandName returns the operand identifier of a type switch — the X in
+// `X.(type)`, whether wrapped in an assignment (`x := X.(type)`) or a bare guard
+// (`X.(type)`). Returns "" when X is not a simple ident.
+func typeSwitchOperandName(ts *ast.TypeSwitchStmt) string {
+	var assertX ast.Expr
+	switch a := ts.Assign.(type) {
+	case *ast.AssignStmt:
+		if len(a.Rhs) == 1 {
+			if ta, ok := a.Rhs[0].(*ast.TypeAssertExpr); ok {
+				assertX = ta.X
+			}
+		}
+	case *ast.ExprStmt:
+		if ta, ok := a.X.(*ast.TypeAssertExpr); ok {
+			assertX = ta.X
+		}
+	}
+	if id, ok := assertX.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
 }
 
 // mapBlockKind converts a cfg.BlockKind to a human-readable branch kind string.

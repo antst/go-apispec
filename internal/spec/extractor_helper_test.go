@@ -1072,7 +1072,11 @@ func TestInferStatusParamFromCalls_NoStatusArg(t *testing.T) {
 // WriteHeader(500) inside an `if err != nil { ... }` branch. Returns the
 // route node and the conditional edge for assertions.
 func fallbackTestRig(meta *metadata.Metadata) (*TrackerNode, *metadata.CallGraphEdge) {
+	// The write edges live in WriteJSON's body, so their Caller is WriteJSON
+	// (classifyHelperWrites scopes collection to the host callee via sameFunc).
+	inHelper := metadata.Call{Meta: meta, Name: meta.StringPool.Get("WriteJSON"), Pkg: meta.StringPool.Get("helpers")}
 	condWHEdge := &metadata.CallGraphEdge{
+		Caller: inHelper,
 		Callee: metadata.Call{
 			Meta:     meta,
 			Name:     meta.StringPool.Get("WriteHeader"),
@@ -1083,6 +1087,7 @@ func fallbackTestRig(meta *metadata.Metadata) (*TrackerNode, *metadata.CallGraph
 		Branch: &metadata.BranchContext{BlockKind: "if-then"},
 	}
 	succWHEdge := &metadata.CallGraphEdge{
+		Caller: inHelper,
 		Callee: metadata.Call{
 			Meta:     meta,
 			Name:     meta.StringPool.Get("WriteHeader"),
@@ -1124,7 +1129,9 @@ func TestHelperFallbackEdges_NoUnconditional_KeepsAll(t *testing.T) {
 	meta := newTestMeta()
 	ext, _ := newTestExtractor(meta)
 
+	inHelper := metadata.Call{Meta: meta, Name: meta.StringPool.Get("WriteEither"), Pkg: meta.StringPool.Get("helpers")}
 	condWH1 := &metadata.CallGraphEdge{
+		Caller: inHelper,
 		Callee: metadata.Call{
 			Meta: meta, Name: meta.StringPool.Get("WriteHeader"),
 			Pkg: meta.StringPool.Get("net/http"), RecvType: meta.StringPool.Get("ResponseWriter"),
@@ -1133,6 +1140,7 @@ func TestHelperFallbackEdges_NoUnconditional_KeepsAll(t *testing.T) {
 		Branch: &metadata.BranchContext{BlockKind: "if-then"},
 	}
 	condWH2 := &metadata.CallGraphEdge{
+		Caller: inHelper,
 		Callee: metadata.Call{
 			Meta: meta, Name: meta.StringPool.Get("WriteHeader"),
 			Pkg: meta.StringPool.Get("net/http"), RecvType: meta.StringPool.Get("ResponseWriter"),

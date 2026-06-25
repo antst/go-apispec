@@ -1,0 +1,104 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/things": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/cfg_method_helper_response.handler",
+        "parameters": [
+          {
+            "name": "X-Trace",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_cfg_method_helper_response.List"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "github.com/antst/go-apispec/testdata/cfg_method_helper_response.handler",
+        "parameters": [
+          {
+            "name": "X-Trace",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_cfg_method_helper_response.Created"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "github.com_antst_go-apispec_testdata_cfg_method_helper_response.Created": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_cfg_method_helper_response.List": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_cfg_method_helper_response.Trace": {
+        "type": "object",
+        "properties": {
+          "t": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "t"
+        ]
+      }
+    }
+  }
+}

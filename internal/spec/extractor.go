@@ -19,6 +19,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -263,6 +264,20 @@ type Extractor struct {
 	requestMatchers  []RequestPatternMatcher
 	responseMatchers []ResponsePatternMatcher
 	paramMatchers    []ParamPatternMatcher
+
+	warnings *WarningSink // non-fatal analysis warnings → stderr (spec 009, FR-008/FR-012)
+}
+
+// warn records a non-fatal analysis warning (lazily creating a stderr sink). Used by
+// the helper-binding degrade path (FR-012).
+func (e *Extractor) warn(pos, msg string) {
+	if e == nil {
+		return
+	}
+	if e.warnings == nil {
+		e.warnings = NewWarningSink()
+	}
+	e.warnings.Warn(pos, msg)
 }
 
 // isLikelyMediaType checks if a string looks like a valid MIME type (type/subtype).
@@ -938,15 +953,31 @@ func (n *callGraphEdgeNode) GetArgContext() string                              
 func (n *callGraphEdgeNode) GetRootAssignmentMap() map[string][]metadata.Assignment { return nil }
 
 // splitByConditionalMethods checks if a route's responses have CFG branch
-// context with HTTP method case values (e.g., switch r.Method case "GET").
-// If so, returns separate RouteInfo entries per method. Returns nil if no
-// conditional methods are detected.
+// context with HTTP method case values — a `switch r.Method { case "GET": … }`
+// OR an `if r.Method == http.MethodPost { … }` guard, both of which record the
+// method in CaseValues (spec 009, US2). If so, returns separate RouteInfo entries
+// per method. Returns nil if no conditional methods are detected.
+//
+// Every other response is attributed to the per-method operations using the
+// per-function CFG (spec 009): an unconditional response, or an *independent*
+// conditional (an `if cond { … }` orthogonal to the method dispatch), is reachable
+// whatever the method ran and so is carried onto EVERY operation; a conditional
+// *nested inside* a method arm (e.g. a 404 in the `case GET:` body) is carried onto
+// that one method; and the dispatch FALLBACK arm — a `switch r.Method` default or a
+// bare `else` of an `if r.Method ==`, whose branch point is shared with the method
+// arms — is excluded from the handled methods (a 405 there is not a response of GET
+// or POST). When the handler has no CFG model, non-method conditionals are
+// conservatively excluded (the pre-009 behavior).
+//
+// Known limitation: the dispatch fallback arm is not emitted as its OWN operation
+// (it has no single HTTP method to attach to). Chain explicit arms
+// (`else if r.Method == http.MethodGet`) to get an operation for each method.
 func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 	// Collect HTTP methods from response branch contexts
 	methodResponses := make(map[string]map[string]*ResponseInfo) // method → statusCode → response
 
 	for statusCode, resp := range route.Response {
-		if resp.Branch == nil || resp.Branch.BlockKind != "switch-case" || len(resp.Branch.CaseValues) == 0 {
+		if resp.Branch == nil || len(resp.Branch.CaseValues) == 0 {
 			continue
 		}
 		for _, val := range resp.Branch.CaseValues {
@@ -965,8 +996,89 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 		return nil // Not enough methods to split
 	}
 
-	var result []*RouteInfo
-	for method, responses := range methodResponses {
+	// Classify every response NOT already attributed to a method, using the
+	// per-function CFG (spec 009). See the doc comment for the cases. fnKey == ""
+	// (no model) degrades to excluding non-method conditionals, never leaking a
+	// fallback onto a method.
+	meta := e.tree.GetMetadata()
+	fnKey := primaryDispatchFn(meta, methodResponses)
+	armBlocks, armBlockToMethods := dispatchArms(methodResponses)
+	// dispatchRoot is the common dominator of the arms of EVERY dispatch in fnKey that
+	// CONTRIBUTED a method response (recorded per dispatch at annotation time — every
+	// `switch` case incl. the default, every `if r.Method ==` chain arm). One contributing
+	// dispatch → its exact tag (covering a combined `case "GET","POST"` whose default is in
+	// the same group, and an arm whose success was lost to an early-return). Responses split
+	// across an `if r.Method` AND a `switch r.Method` → the dominator spanning both, so the
+	// second dispatch's default is still excluded. A dispatch that wrote no response (a
+	// per-method header switch ahead of the responding one) is left out, so the independent
+	// conditional in the cfg_method_two_dispatch shape stays shared.
+	//
+	// Limitation (pre-existing, == the pre-CFG behavior; needs reaching-defs to fix): when
+	// TWO dispatches both respond, their union's common dominator can be the function entry,
+	// which dominates everything — so an independent conditional sequenced between them that
+	// is mutually exclusive with all arms (e.g. it early-returns) is over-excluded.
+	dispatchRoot, haveRoot := commonDominator(meta, fnKey, contributingDispatchArms(meta, fnKey, methodResponses))
+
+	shared := make(map[string]*ResponseInfo)
+	for statusCode, resp := range route.Response {
+		if resp.Branch == nil {
+			shared[statusCode] = resp // unconditional → on every method
+			continue
+		}
+		if branchNamesMethod(resp.Branch.CaseValues) {
+			continue // already attributed to its method(s) above
+		}
+		if fnKey == "" {
+			continue // no CFG model: conservatively exclude (pre-009 behavior)
+		}
+		// The branch's BlockIndex is meaningful only in its OWN function's CFG. A
+		// response inferred from a HELPER carries the helper's block index; querying it
+		// against the handler's CFG is unsound — it could alias an unrelated handler
+		// block and leak onto a method it does not belong to. Exclude such foreign-branch
+		// responses conservatively (pre-CFG behavior); per-method attribution of an
+		// interprocedural conditional needs call-site context (a separate concern).
+		if meta.FnKeyForPos(meta.StringPool.GetString(resp.Branch.ParentStmtPos)) != fnKey {
+			continue
+		}
+		rb := resp.Branch.BlockIndex
+		if methods, ok := dominatingMethods(meta, fnKey, rb, armBlocks, armBlockToMethods); ok {
+			for _, m := range methods { // a combined `case "GET", "HEAD"` arm owns several
+				if methodResponses[m] != nil {
+					methodResponses[m][statusCode] = resp // nested inside that arm
+				}
+			}
+			continue
+		}
+		if isDispatchFallback(meta, fnKey, resp.Branch, dispatchRoot, haveRoot, armBlocks) {
+			continue // a `switch` default / `if r.Method ==` bare else → "any other method"
+		}
+		shared[statusCode] = resp // independent conditional → on every method
+	}
+
+	// One route per method, emitted in METHOD order (map iteration is not deterministic;
+	// the caller appends to the route list without re-sorting). Each route owns a COPY of
+	// every ResponseInfo it carries, so the split routes share no *ResponseInfo: a per-route
+	// ApplyOverrides (e.g. line ~589) that mutates BodyType/BodyTypeRef in place on a shared
+	// (or combined-case) response can no longer leak that override onto another method's
+	// operation.
+	methods := make([]string, 0, len(methodResponses))
+	for method := range methodResponses {
+		methods = append(methods, method)
+	}
+	sort.Strings(methods)
+
+	result := make([]*RouteInfo, 0, len(methods))
+	for _, method := range methods {
+		responses := methodResponses[method]
+		merged := make(map[string]*ResponseInfo, len(shared)+len(responses))
+		for s, r := range shared {
+			rc := *r
+			merged[s] = &rc
+		}
+		for s, r := range responses { // method-specific wins on any status overlap
+			rc := *r
+			merged[s] = &rc
+		}
 		mr := &RouteInfo{
 			Path:                route.Path,
 			MountPath:           route.MountPath,
@@ -979,7 +1091,7 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 			Description:         route.Description,
 			Tags:                route.Tags,
 			Request:             route.Request,
-			Response:            responses,
+			Response:            merged,
 			Params:              route.Params,
 			UsedTypes:           route.UsedTypes,
 			Metadata:            route.Metadata,
@@ -989,6 +1101,190 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 		result = append(result, mr)
 	}
 	return result
+}
+
+// primaryDispatchFn returns the function key that the most method responses resolve to
+// (via cfgPosToFn), deterministically with a lexicographic tiebreak — so a dispatch whose
+// arms span more than one function (e.g. a sub-dispatch in a helper) does not make the
+// choice depend on map-iteration order. Returns "" when no method branch resolves to a
+// function — the caller then excludes non-method conditionals (pre-009 behavior).
+func primaryDispatchFn(meta *metadata.Metadata, methodResponses map[string]map[string]*ResponseInfo) string {
+	counts := make(map[string]int)
+	for _, resps := range methodResponses {
+		for _, r := range resps {
+			if r.Branch == nil {
+				continue
+			}
+			if fn := meta.FnKeyForPos(meta.StringPool.GetString(r.Branch.ParentStmtPos)); fn != "" {
+				counts[fn]++
+			}
+		}
+	}
+	best, bestN := "", 0
+	for fn, n := range counts {
+		if n > bestN || (n == bestN && fn < best) {
+			best, bestN = fn, n
+		}
+	}
+	return best
+}
+
+// contributingDispatchArms returns the block indices of every arm of every method
+// dispatch in fnKey that CONTRIBUTED a method response — the union across dispatch groups.
+// The common dominator of this union is the dispatch root: for one contributing dispatch
+// it is that dispatch's tag; for responses split across an `if r.Method` and a
+// `switch r.Method` it spans both, so the second dispatch's `default` is still dominated
+// (and excluded) rather than leaked. A dispatch that wrote NO response (its group never
+// appears in methodResponses — e.g. a per-method header switch ahead of the responding one)
+// is left out, so it does not widen the root (the cfg_method_two_dispatch independent stays
+// shared). When two dispatches BOTH respond, the union root can be the function entry — an
+// independent between them that is mutually exclusive with all arms is then over-excluded, a
+// pre-existing limitation (see splitByConditionalMethods). Group 0 (a response in a
+// post-dispatch merge block, not an arm) and foreign-function branches are skipped.
+func contributingDispatchArms(meta *metadata.Metadata, fnKey string, methodResponses map[string]map[string]*ResponseInfo) []int32 {
+	seen := make(map[int]bool)
+	var arms []int32
+	for _, resps := range methodResponses {
+		for _, r := range resps {
+			if r.Branch == nil || r.Branch.DispatchGroup == 0 {
+				continue
+			}
+			if meta.FnKeyForPos(meta.StringPool.GetString(r.Branch.ParentStmtPos)) != fnKey {
+				continue
+			}
+			if g := r.Branch.DispatchGroup; !seen[g] {
+				seen[g] = true
+				arms = append(arms, meta.DispatchArms(fnKey, g)...)
+			}
+		}
+	}
+	return arms
+}
+
+// dispatchArms returns the sorted method-arm branch blocks and each block → the
+// HTTP method(s) it serves. A combined `case "GET", "HEAD":` lowers to ONE block
+// that serves both methods, so the value is a slice (mapping it to a single method
+// would be last-writer-wins over map order — nondeterministic). Both the block list
+// and each method list are sorted so downstream attribution is deterministic.
+func dispatchArms(methodResponses map[string]map[string]*ResponseInfo) ([]int32, map[int32][]string) {
+	armBlockToMethods := make(map[int32][]string)
+	for method, resps := range methodResponses {
+		for _, r := range resps {
+			if r.Branch == nil {
+				continue
+			}
+			b := r.Branch.BlockIndex
+			if !slices.Contains(armBlockToMethods[b], method) {
+				armBlockToMethods[b] = append(armBlockToMethods[b], method)
+			}
+		}
+	}
+	blocks := make([]int32, 0, len(armBlockToMethods))
+	for b := range armBlockToMethods {
+		blocks = append(blocks, b)
+	}
+	sort.Slice(blocks, func(i, j int) bool { return blocks[i] < blocks[j] })
+	for _, ms := range armBlockToMethods {
+		sort.Strings(ms)
+	}
+	return blocks, armBlockToMethods
+}
+
+// commonDominator returns the lowest common dominator of the given blocks — the
+// "dispatch root" that every method arm descends from (the `switch r.Method` tag or
+// the first `if r.Method ==` condition). ok=false when there is no CFG model. go/cfg
+// lowers a switch into a chain of test blocks, so the arms' immediate dominators
+// differ; their common dominator is the stable root shared by every arm INCLUDING
+// the default. Walks immediate-dominator chains (Cooper-Harvey-Kennedy idom tree).
+func commonDominator(meta *metadata.Metadata, fnKey string, blocks []int32) (int32, bool) {
+	if fnKey == "" || len(blocks) == 0 {
+		return -1, false
+	}
+	cur := blocks[0]
+	for _, b := range blocks[1:] {
+		anc := make(map[int32]bool)
+		for x := cur; ; {
+			anc[x] = true
+			p, ok := meta.IDom(fnKey, x)
+			if !ok {
+				break // reached the entry (it dominates everything)
+			}
+			x = p
+		}
+		y := b
+		for !anc[y] {
+			p, ok := meta.IDom(fnKey, y)
+			if !ok {
+				break
+			}
+			y = p
+		}
+		cur = y
+	}
+	return cur, true
+}
+
+// isDispatchFallback reports whether a non-method conditional response (branch br)
+// must be EXCLUDED from the handled methods: either a `switch` `default:` arm
+// (recognised structurally by its empty case values, so a stray `fallthrough` into
+// it cannot leak its 405 onto a method), or a fallback that descends from the
+// dispatch root yet shares no control-flow path with any arm (the bare `else` of an
+// `if r.Method ==` chain). A conditional outside the dispatch (root does not
+// dominate it, e.g. a pre-dispatch `if bad { … return }`) or one reachable together
+// with the arms is NOT a fallback — it is independent and shared.
+//
+// Limitation: the structural `default:` rule also matches the default arm of an
+// UNRELATED switch dominated by the dispatch root (e.g. an orthogonal
+// `switch mode { default: … }` after the dispatch); such a response is excluded
+// rather than shared. This is conservative, not a regression — the pre-CFG split
+// dropped every non-unconditional response here regardless.
+func isDispatchFallback(meta *metadata.Metadata, fnKey string, br *metadata.BranchContext, dispatchRoot int32, haveRoot bool, armBlocks []int32) bool {
+	if !haveRoot || !meta.Dominates(fnKey, dispatchRoot, br.BlockIndex) {
+		return false
+	}
+	isSwitchDefault := br.BlockKind == "switch-case" && len(br.CaseValues) == 0
+	return isSwitchDefault || mutuallyExclusiveWithArms(meta, fnKey, br.BlockIndex, armBlocks)
+}
+
+// mutuallyExclusiveWithArms reports whether block rb shares NO control-flow path
+// with any method arm (neither reaches the other) — true for a dispatch fallback
+// arm (a sibling of the method arms), false for a conditional that falls through
+// to or from the arms (an independent before/after the dispatch).
+func mutuallyExclusiveWithArms(meta *metadata.Metadata, fnKey string, rb int32, armBlocks []int32) bool {
+	for _, a := range armBlocks {
+		if a == rb {
+			return false
+		}
+		if meta.Reaches(fnKey, metadata.BlockLoc{Block: a}, metadata.BlockLoc{Block: rb}) ||
+			meta.Reaches(fnKey, metadata.BlockLoc{Block: rb}, metadata.BlockLoc{Block: a}) {
+			return false
+		}
+	}
+	return true
+}
+
+// dominatingMethods returns the HTTP method(s) whose dispatch arm dominates block
+// rb (rb lies inside that arm's region, e.g. a conditional nested in `case GET:`),
+// or ok=false if no method arm dominates it. armBlocks is sorted, so when several
+// arms dominate rb (unusual nested/fallthrough shapes) the choice is deterministic.
+func dominatingMethods(meta *metadata.Metadata, fnKey string, rb int32, armBlocks []int32, armBlockToMethods map[int32][]string) ([]string, bool) {
+	for _, armBlock := range armBlocks {
+		if armBlock != rb && meta.Dominates(fnKey, armBlock, rb) {
+			return armBlockToMethods[armBlock], true
+		}
+	}
+	return nil, false
+}
+
+// branchNamesMethod reports whether any of a branch's case values name an HTTP
+// method (so its responses are already attributed per method).
+func branchNamesMethod(caseValues []string) bool {
+	for _, v := range caseValues {
+		if isValidHTTPMethodStr(strings.ToUpper(v)) {
+			return true
+		}
+	}
+	return false
 }
 
 func isValidHTTPMethodStr(s string) bool {
@@ -1312,71 +1608,403 @@ func (e *Extractor) helperFallbackEdges(routeNode TrackerNodeInterface) map[stri
 
 	var visit func(node TrackerNodeInterface, isRoot bool)
 	visit = func(node TrackerNodeInterface, isRoot bool) {
-		children := node.GetChildren()
-		// A node represents a USER-DEFINED helper invocation when:
-		//   1. it is not the route node itself (whose children are the
-		//      handler's body — branches there are legitimate control flow,
-		//      not internal fallback logic), AND
-		//   2. its edge carries a ParamArgMap (the call passed bound arguments
-		//      through to the callee's parameters), AND
-		//   3. the call itself is not a response-pattern primitive (Status,
-		//      JSON, WriteHeader, …). For chained calls like
-		//      `c.Status(400).JSON(map)`, the Status node may have the JSON
-		//      node as a child; treating Status as a helper would
-		//      mis-classify legitimate handler branches as fallbacks.
-		isHelperInvocation := false
-		if !isRoot {
-			if edge := node.GetEdge(); edge != nil && len(edge.ParamArgMap) > 0 {
-				nodeIsResponsePrimitive := false
-				for _, m := range e.responseMatchers {
-					if m.MatchNode(node) {
-						nodeIsResponsePrimitive = true
-						break
-					}
-				}
-				if !nodeIsResponsePrimitive {
-					isHelperInvocation = true
+		if e.isHelperInvocation(node, isRoot) {
+			hw := e.classifyHelperWrites(node)
+			// #27: a defensive branch only contaminates the caller when the SAME
+			// helper also has an unconditional (primary) write to compare against.
+			if hw.hasUnconditional() {
+				for _, child := range hw.conditional {
+					fallback[child.GetEdge().Callee.ID()] = true
 				}
 			}
 		}
-
-		if isHelperInvocation {
-			var unconditional bool
-			var conditionalIDs []string
-			for _, child := range children {
-				childEdge := child.GetEdge()
-				if childEdge == nil {
-					continue
-				}
-				matched := false
-				for _, m := range e.responseMatchers {
-					if m.MatchNode(child) {
-						matched = true
-						break
-					}
-				}
-				if !matched {
-					continue
-				}
-				if childEdge.Branch == nil {
-					unconditional = true
-				} else {
-					conditionalIDs = append(conditionalIDs, childEdge.Callee.ID())
-				}
-			}
-			if unconditional {
-				for _, id := range conditionalIDs {
-					fallback[id] = true
-				}
-			}
-		}
-
-		for _, child := range children {
+		for _, child := range node.GetChildren() {
 			visit(child, false)
 		}
 	}
 	visit(routeNode, true)
 	return fallback
+}
+
+// helperWrites partitions a helper invocation's response-writing child edges by
+// whether each is reachable on the helper's unconditional (primary) path or only
+// under an internal branch. It is the reusable core shared by the #27 fallback
+// filter (helperFallbackEdges) and the US1 helper-internal type-switch binding /
+// degrade (FR-011/FR-012).
+type helperWrites struct {
+	unconditional []TrackerNodeInterface // Branch == nil — the helper's primary path
+	conditional   []TrackerNodeInterface // Branch != nil — guarded by an internal branch
+}
+
+func (h helperWrites) hasUnconditional() bool { return len(h.unconditional) > 0 }
+
+// isHelperInvocation reports whether node represents a USER-DEFINED helper call
+// (as opposed to the route node or a response primitive). A node is a helper
+// invocation when:
+//  1. it is not the route node itself (whose children are the handler's body —
+//     branches there are legitimate control flow, not internal fallback logic),
+//  2. its edge carries a ParamArgMap (the call passed bound arguments through to
+//     the callee's parameters), and
+//  3. the call itself is not a response-pattern primitive (Status, JSON,
+//     WriteHeader, …) — for chained calls like `c.Status(400).JSON(map)` the
+//     Status node may parent the JSON node, and treating Status as a helper would
+//     mis-classify legitimate handler branches.
+func (e *Extractor) isHelperInvocation(node TrackerNodeInterface, isRoot bool) bool {
+	if isRoot {
+		return false
+	}
+	edge := node.GetEdge()
+	return edge != nil && len(edge.ParamArgMap) > 0 && !e.matchesAnyResponse(node)
+}
+
+// classifyHelperWrites returns the response-writing DIRECT children of a helper-
+// invocation node, partitioned by whether each is reachable unconditionally or only
+// under an internal if-branch. Non-response children are ignored.
+//
+// It scans direct children only — deliberately NOT the whole subtree (CodeRabbit
+// suggested recursing to catch nested writes; that was evaluated and rejected — see
+// below). The #27 defensive-fallback shape it serves is
+// `WriteHeader(status); if err { http.Error }`, where both the unconditional primary
+// write and the if-then fallback are DIRECT children. A SUB-handler reached through a
+// wrapper, by contrast, writes its success body via a nested
+// `json.NewEncoder(w).Encode(v)` (a grandchild under NewEncoder) and its real error
+// via a direct `if err { http.Error(4xx) }`. Recursing would treat that nested
+// success write as the helper's "unconditional primary" and then wrongly filter the
+// sub-handler's genuine 4xx as a defensive fallback (regression observed on the
+// enum_validation fixture: POST drops its 400). Direct-children scanning is correct
+// for both shapes.
+func (e *Extractor) classifyHelperWrites(node TrackerNodeInterface) helperWrites {
+	var hw helperWrites
+	for _, child := range node.GetChildren() {
+		if child.GetEdge() == nil || !e.matchesAnyResponse(child) {
+			continue
+		}
+		br := child.GetEdge().Branch
+		switch {
+		case br == nil:
+			hw.unconditional = append(hw.unconditional, child)
+		case br.BlockKind == "if-then" || br.BlockKind == "if-else":
+			// Only an if-guarded write is a #27-style defensive fallback. A
+			// switch-case/select-case write is a type-switch (or method) arm owned by
+			// the type-switch-binding pass, so it must NOT be filtered here as a
+			// fallback — doing so would drop a precisely-bound arm.
+			hw.conditional = append(hw.conditional, child)
+		}
+	}
+	return hw
+}
+
+// matchesAnyResponse reports whether node matches any registered response pattern.
+func (e *Extractor) matchesAnyResponse(node TrackerNodeInterface) bool {
+	for _, m := range e.responseMatchers {
+		if m.MatchNode(node) {
+			return true
+		}
+	}
+	return false
+}
+
+// helperTypeSwitchEdges resolves helper-internal type-switches against the
+// call-site argument (FR-011/FR-012, US1 #5/#6) and returns the set of case-write
+// edge IDs to FILTER OUT. For each helper invocation whose internal branches are
+// type-switch arms, it binds the switched parameter to the call-site argument (via
+// the case's SwitchOperand + the edge's ParamArgMap) and resolves its concrete
+// type:
+//   - precise concrete binding → keep only the matched arm (or the default arm
+//     when the concrete type matches no case); filter the rest, no warning;
+//   - imprecise binding (interface/error/any, or the operand cannot be resolved) →
+//     keep only the default/unconditional path, filter all typed arms, and warn —
+//     never fanning out every arm.
+//
+// Returned set is keyed by edge ID (the same ID used for visitedEdges), so it
+// composes with helperFallbackEdges.
+//
+// Arm-write edge IDs are keyed by the helper's INTERNAL call position, which is
+// identical across multiple call sites of the same helper in one route. A handler
+// that invokes the same type-switching helper twice with different concrete
+// arguments must therefore INTERSECT, not union, the per-site decisions: an arm
+// kept by ANY site is reachable and must survive. We collect both the filtered and
+// the kept sets and return filtered MINUS kept.
+func (e *Extractor) helperTypeSwitchEdges(routeNode TrackerNodeInterface) map[string]bool {
+	ae := armEdges{filtered: map[string]bool{}, kept: map[string]bool{}}
+	if routeNode == nil {
+		return ae.filtered
+	}
+	var visit func(node TrackerNodeInterface, isRoot bool)
+	visit = func(node TrackerNodeInterface, isRoot bool) {
+		if e.isHelperInvocation(node, isRoot) {
+			e.bindHelperTypeSwitch(node, ae)
+		}
+		for _, child := range node.GetChildren() {
+			visit(child, false)
+		}
+	}
+	visit(routeNode, true)
+	for id := range ae.kept {
+		delete(ae.filtered, id)
+	}
+	return ae.filtered
+}
+
+// armEdges accumulates, across every type-switch binding in one route, the arm-write
+// edge IDs to drop (filtered) and the ones an actual binding keeps (kept). The final
+// drop set is filtered − kept, so a write reachable from any call site survives.
+type armEdges struct {
+	filtered map[string]bool
+	kept     map[string]bool
+}
+
+// switchArm holds the response-writing edges of one type-switch's arms, gathered
+// from a helper's subtree: typed arms (with case types) and the default arm.
+type switchArm struct {
+	typed []TrackerNodeInterface // arms with non-empty CaseTypeRefs
+	dflt  []TrackerNodeInterface // the default arm (no case types)
+}
+
+// bindHelperTypeSwitch performs the per-invocation binding for helperTypeSwitchEdges,
+// adding the filtered-out arm-write edge IDs to filtered. A single helper may host
+// more than one type-switch (on different parameters), so arms are grouped by the
+// switched operand and each group whose operand is one of this node's callee
+// parameters is bound independently.
+func (e *Extractor) bindHelperTypeSwitch(node TrackerNodeInterface, ae armEdges) {
+	edge := node.GetEdge()
+	if edge == nil || len(edge.ParamArgMap) == 0 {
+		return
+	}
+	arms, escaped := e.collectSwitchArms(node)
+	if escaped {
+		// The helper has a conditional (if/else) response write that is not a clean
+		// type-switch arm — typically a `case` body with nested control flow, whose
+		// writes go/cfg annotates with the inner branch's context rather than the
+		// arm's, but also any other if-guarded write in the helper. In either case
+		// the arms are not fully captured, so we keep ALL arms (the pre-binding
+		// over-approximation) rather than risk dropping or leaking a status
+		// (FR-012: never mis-bind; over-approximate when uncertain).
+		return
+	}
+	for _, operand := range slices.Sorted(maps.Keys(arms)) {
+		arm := arms[operand]
+		if len(arm.typed) == 0 {
+			continue
+		}
+		arg, isHost := edge.ParamArgMap[operand]
+		if !isHost {
+			// The operand is not a parameter of this node's callee — this node only
+			// parents the arm writes in the tracker tree (e.g. an inner
+			// json.NewEncoder call), so it is not the switch's binding site.
+			continue
+		}
+		argRef, precise := e.boundArgRef(&arg, node)
+		e.applyTypeSwitchBinding(arm, argRef, precise, edge, ae)
+	}
+}
+
+// collectSwitchArms gathers, from node's subtree, every response-writing edge whose
+// BranchContext is a type-switch arm DECLARED IN THE HOST'S OWN FUNCTION, grouped by
+// the switched operand. It recurses through the whole subtree because an arm's
+// writes (WriteHeader, Encode, …) may be nested under intermediate calls (e.g.
+// json.NewEncoder(w).Encode) rather than direct children of the helper invocation;
+// the `sameFunc` scope check confines collection to the host callee's body so a
+// NESTED helper's type-switch (whose operand may shadow an outer parameter name) is
+// left to its own binding pass instead of being mis-bound against this call site.
+// escaped is true when the host function has any response write under an
+// if-then/if-else branch. The common cause is a type-switch arm with nested
+// control flow (its writes are attributed to the inner branch, not the arm), but
+// any if-guarded response write in the helper trips it. The caller then declines
+// to filter (over-approximates safely) because the arms are not fully captured.
+func (e *Extractor) collectSwitchArms(node TrackerNodeInterface) (arms map[string]*switchArm, escaped bool) {
+	arms = make(map[string]*switchArm)
+	host := node.GetEdge()
+	if host == nil {
+		return arms, false
+	}
+	var walk func(n TrackerNodeInterface)
+	walk = func(n TrackerNodeInterface) {
+		for _, child := range n.GetChildren() {
+			ce := child.GetEdge()
+			if ce != nil && ce.Branch != nil && sameFunc(ce.Caller, host.Callee) && e.matchesAnyResponse(child) {
+				// A "clean" type-switch arm write is a switch-case block carrying the
+				// switched operand. ANY other conditional response write in the helper
+				// — an if/else, a select case, a nested or unrelated value-switch
+				// (switch-case with no operand) — means an arm contains control flow
+				// go/cfg attributes elsewhere, so the arms are not cleanly captured.
+				if ce.Branch.BlockKind == "switch-case" && ce.Branch.SwitchOperand != "" {
+					arm := arms[ce.Branch.SwitchOperand]
+					if arm == nil {
+						arm = &switchArm{}
+						arms[ce.Branch.SwitchOperand] = arm
+					}
+					if len(ce.Branch.CaseTypeRefs) > 0 {
+						arm.typed = append(arm.typed, child)
+					} else {
+						arm.dflt = append(arm.dflt, child)
+					}
+				} else {
+					escaped = true
+				}
+			}
+			walk(child)
+		}
+	}
+	walk(node)
+	return arms, escaped
+}
+
+// sameFunc reports whether two Call references identify the same function (by name,
+// package, and receiver type — all string-pool indices in one Metadata).
+func sameFunc(a, b metadata.Call) bool {
+	return a.Name == b.Name && a.Pkg == b.Pkg && a.RecvType == b.RecvType
+}
+
+// applyTypeSwitchBinding decides which arm writes to filter for one type-switch,
+// given the bound call-site argument leaf:
+//   - precise concrete match → keep the matched arms, filter the other typed arms
+//     AND the default (the concrete type selects a specific arm; default does not run);
+//   - precise but no match (a concrete type that hits the default) → keep the default,
+//     filter the typed arms, no warning;
+//   - imprecise binding → keep the default, filter the typed arms, and warn (FR-012).
+func (e *Extractor) applyTypeSwitchBinding(arm *switchArm, argRef *metadata.TypeRef, precise bool, edge *metadata.CallGraphEdge, ae armEdges) {
+	var selected []TrackerNodeInterface
+	if precise && argRef != nil {
+		for _, c := range arm.typed {
+			if refMatchesAnyCase(c.GetEdge().Branch.CaseTypeRefs, argRef) {
+				selected = append(selected, c)
+			}
+		}
+	}
+
+	if len(selected) > 0 {
+		// Precise match: KEEP the matched arms; filter the other typed arms AND the
+		// default (the concrete type selects a specific arm; default does not run).
+		keep := make(map[string]bool, len(selected))
+		for _, c := range selected {
+			id := c.GetEdge().Callee.ID()
+			keep[id] = true
+			ae.kept[id] = true
+		}
+		mark := func(nodes []TrackerNodeInterface) {
+			for _, c := range nodes {
+				if id := c.GetEdge().Callee.ID(); !keep[id] {
+					ae.filtered[id] = true
+				}
+			}
+		}
+		mark(arm.typed)
+		mark(arm.dflt)
+		return
+	}
+
+	// No typed arm selected. When the binding is IMPRECISE and there is no default
+	// arm to fall back to, the runtime value will still hit one of the typed arms —
+	// we cannot tell which — so KEEP them all (over-approximate) and warn, rather
+	// than drop every response. (A precise concrete type that matches no case and
+	// has no default genuinely produces nothing, which is Go-correct.)
+	if !precise && len(arm.dflt) == 0 {
+		for _, c := range arm.typed {
+			ae.kept[c.GetEdge().Callee.ID()] = true
+		}
+		e.warn(e.contextProvider.GetString(edge.Position),
+			"helper type-switch: call-site argument type not statically known; emitting all arms")
+		return
+	}
+
+	// Otherwise KEEP the default arm, filter every typed arm.
+	for _, c := range arm.dflt {
+		ae.kept[c.GetEdge().Callee.ID()] = true
+	}
+	for _, c := range arm.typed {
+		ae.filtered[c.GetEdge().Callee.ID()] = true
+	}
+	if !precise {
+		e.warn(e.contextProvider.GetString(edge.Position),
+			"helper type-switch: call-site argument type not statically known; emitting unconditional result only")
+	}
+}
+
+// boundArgRef resolves a call-site argument to its STATIC type ref. precise is
+// false when that type is an interface/error/any that does not pin a concrete type
+// at the call site (FR-012 degrade), in which case the ref is returned as nil.
+//
+// The argument's structured TypeRef is the static type of the argument expression —
+// exactly what a Go type-switch discriminates, and conservative per FR-012: an
+// `any`/`error`-typed argument stays a RefInterface (imprecise) even if a concrete
+// value flowed into it, so we never over-resolve across an interface boundary. The
+// string-based origin is the fallback only when the structured ref is absent (a
+// deserialized/hand-built argument).
+func (e *Extractor) boundArgRef(arg *metadata.CallArgument, node TrackerNodeInterface) (ref *metadata.TypeRef, precise bool) {
+	ref = arg.TypeRef
+	if ref == nil {
+		_, ref = sharedResolveTypeOrigin(arg, node, e.contextProvider.GetArgumentInfo(arg), e.contextProvider, false)
+	}
+	if isImpreciseLeaf(ref.NamedLeaf()) {
+		return nil, false
+	}
+	return ref, true
+}
+
+// isImpreciseLeaf reports whether a resolved named leaf fails to pin a concrete
+// type — a nil/interface leaf, or the built-in dynamic names error/any/interface{}
+// (FR-012).
+//
+// Known limitation: a NAMED interface (e.g. a domain `Animal`, or io.Reader) whose
+// concrete value is unknown is carried as RefNamed, not RefInterface, so it is not
+// recognised as imprecise here. If such a value is the type-switch operand AND the
+// switch has a same-named interface case, the binding will pick that interface arm
+// instead of degrading. Recognising named interfaces needs interface-aware type
+// metadata at TypeRef-construction time (a non-trivial cross-cutting change); the
+// pattern — a value of named-interface static type matched against its own
+// interface case — is uncommon, so it is left as a documented gap.
+func isImpreciseLeaf(leaf *metadata.TypeRef) bool {
+	if leaf == nil || leaf.Kind == metadata.RefInterface {
+		return true
+	}
+	switch leaf.Name {
+	case "", "error", "any", "interface{}":
+		return true
+	}
+	return false
+}
+
+// typeRefShapeEqual reports whether two type refs denote the SAME Go type,
+// structurally: same Kind, and for named types same package+name, recursing
+// through pointer/slice/array/map elements, map keys, array length, and generic
+// instantiation arguments. This is the exact-type identity a Go type-switch tests
+// — it distinguishes T from *T, []T, and Box[A] from Box[B] — so the binding never
+// over- or under-matches across the value/pointer/slice/generic distinctions
+// (FR-012). It is immune to package-qualifier string-format differences (it
+// compares the structured fields, not String()).
+func typeRefShapeEqual(a, b *metadata.TypeRef) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Kind != b.Kind || a.Name != b.Name || a.Pkg != b.Pkg || a.Len != b.Len {
+		return false
+	}
+	if !typeRefShapeEqual(a.Elem, b.Elem) || !typeRefShapeEqual(a.Key, b.Key) {
+		return false
+	}
+	if len(a.Args) != len(b.Args) {
+		return false
+	}
+	for i := range a.Args {
+		if !typeRefShapeEqual(a.Args[i], b.Args[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// refMatchesAnyCase reports whether the argument's static type is exactly one of a
+// case clause's types (a `case A, B:` clause carries several). The match is the
+// structural type identity a Go type-switch performs, so a `*T`/`[]T`/`Box[User]`
+// argument binds only the case of that same shape — never a sibling arm.
+func refMatchesAnyCase(caseRefs []*metadata.TypeRef, argRef *metadata.TypeRef) bool {
+	for _, cr := range caseRefs {
+		if typeRefShapeEqual(cr, argRef) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractRouteChildren extracts request, response, and params from children nodes
@@ -1387,6 +2015,12 @@ func (e *Extractor) extractRouteChildren(routeNode TrackerNodeInterface, route *
 	// must not contribute to the caller's response schema — see issue #27 and
 	// helperFallbackEdges for the exact rule.
 	fallbackEdges := e.helperFallbackEdges(routeNode)
+	// Also filter the type-switch arms of a response helper that the call-site
+	// argument does not bind to (spec 009, FR-011/FR-012). Both sets gate the same
+	// visitedEdges check, so merge them.
+	for id := range e.helperTypeSwitchEdges(routeNode) {
+		fallbackEdges[id] = true
+	}
 
 	callbacks := []ExtractionCallback{
 		// Route-in-route detection
@@ -2054,55 +2688,124 @@ func (r *ResponsePatternMatcherImpl) expandStatusesFromIdent(arg *metadata.CallA
 	if !ok || len(assigns) < 2 {
 		return nil
 	}
-	// Reachability filter (issue #50): keep only the assignments whose value can
-	// reach this response call site, in two steps:
-	//
-	//  1. Drop assignments positioned textually after the call — they cannot
-	//     supply the value at the call.
-	//  2. Among the survivors, an *unconditional* assignment (Branch == nil)
-	//     overwrites every earlier assignment on every path, so it shadows them:
-	//     keep only the assignments from the last unconditional one onward.
-	//     Sibling if/else branch assignments (Branch != nil) don't shadow each
-	//     other, so the intended fan-out — both branches reassigning before one
-	//     trailing RespondWithError — is preserved.
-	//
-	// The shadow boundary is the *index* of the last unconditional survivor, not
-	// its source position: assignments are recorded in source order, so the
-	// index is a reliable boundary even when a position is missing/unparseable
-	// (a position-based boundary could be pinned to an earlier assignment and
-	// leak a shadowed status). Positions are only used — conservatively — for
-	// the textual after-call filter.
+	// Reachability filter (spec 009, FR-002/FR-006): keep the assignments whose
+	// value can reach this response call along some control-flow path AND that are
+	// not overwritten on every path to the call by a later, call-dominating
+	// assignment. Computed structurally from the CFG reachability model — replacing
+	// the former source-position + last-unconditional-index heuristic. Mutually
+	// exclusive sibling branches never reach each other, so they do not shadow one
+	// another (the if/else fan-out is preserved); an unconditional overwrite that
+	// dominates the call kills earlier assignments.
 	callPos := meta.StringPool.GetString(edge.Position)
+	fnKey := meta.FnKeyForPos(callPos)
+	callLoc, callOK := meta.BlockFor(fnKey, callPos)
+	cands := r.collectStatusCands(meta, fnKey, assigns)
 
-	statuses := make([]int, 0, len(assigns))
-	lastUncond := -1
+	// FR-008: when the CFG cannot place this call (an unmodelled construct), degrade
+	// to the unconditionally-reachable statuses + warn, rather than guessing.
+	if !callOK || fnKey == "" {
+		return r.degradeToUnconditional(callPos, cands)
+	}
+	return contributingStatuses(meta, fnKey, callLoc, cands)
+}
+
+// statusCand is a status code paired with its control-flow location, used by the
+// reachability filter in expandStatusesFromIdent.
+type statusCand struct {
+	status int
+	loc    metadata.BlockLoc
+	hasLoc bool // the assignment was placed in a CFG block
+	uncond bool // the assignment is unconditional (Branch == nil)
+}
+
+// collectStatusCands turns each call-valued assignment into a status candidate
+// located in fnKey's CFG. Non-call assignments, and calls with no status-code
+// argument, are skipped.
+func (r *ResponsePatternMatcherImpl) collectStatusCands(meta *metadata.Metadata, fnKey string, assigns []metadata.Assignment) []statusCand {
+	cands := make([]statusCand, 0, len(assigns))
 	for i := range assigns {
 		if assigns[i].Value.GetKind() != metadata.KindCall {
 			continue
 		}
-		if positionAfter(meta.StringPool.GetString(assigns[i].Position), callPos) {
+		status, okStatus := statusFromCallArgs(r, &assigns[i].Value)
+		if !okStatus {
 			continue
 		}
-		status, ok := statusFromCallArgs(r, &assigns[i].Value)
-		if !ok {
-			continue
-		}
-		statuses = append(statuses, status)
-		if assigns[i].Branch == nil {
-			lastUncond = len(statuses) - 1
-		}
+		loc, hasLoc := meta.BlockFor(fnKey, meta.StringPool.GetString(assigns[i].Position))
+		cands = append(cands, statusCand{status: status, loc: loc, hasLoc: hasLoc, uncond: assigns[i].Branch == nil})
 	}
+	return cands
+}
 
-	start := 0
-	if lastUncond >= 0 {
-		start = lastUncond
+// degradeToUnconditional returns the unconditionally-reachable statuses, warning
+// when that drops any conditional candidate (FR-008). Used when the CFG cannot
+// place the response call.
+func (r *ResponsePatternMatcherImpl) degradeToUnconditional(callPos string, cands []statusCand) []int {
+	uncond := make([]int, 0, len(cands))
+	for i := range cands {
+		if cands[i].uncond {
+			uncond = append(uncond, cands[i].status)
+		}
 	}
-	seen := make(map[int]struct{}, len(statuses))
-	out := make([]int, 0, len(statuses))
-	for _, status := range statuses[start:] {
-		if _, dup := seen[status]; !dup {
-			seen[status] = struct{}{}
-			out = append(out, status)
+	if len(uncond) < len(cands) {
+		r.warn(callPos, "conditional status fan-out: control flow not modelled; using unconditional statuses")
+	}
+	return dedupInts(uncond)
+}
+
+// contributingStatuses applies the reachability + kill predicate (FR-002/FR-006):
+// a candidate contributes iff it reaches the call and is not overwritten on every
+// path by a later assignment whose block dominates the call.
+//
+// The kill test is a single-dominator approximation of "overwritten on every
+// path": it does not recognise that a set of mutually-exclusive sibling
+// reassignments can jointly cover every path (e.g. an unconditional default that
+// BOTH arms of an if/else overwrite), so such a dead default still contributes a
+// phantom status. This is a long-standing accuracy limitation shared with the
+// pre-CFG heuristic — output is unchanged for it, so it is not introduced here; a
+// full reaching-definitions pass would be the principled fix.
+func contributingStatuses(meta *metadata.Metadata, fnKey string, callLoc metadata.BlockLoc, cands []statusCand) []int {
+	out := make([]int, 0, len(cands))
+	for i := range cands {
+		if !cands[i].hasLoc || !meta.Reaches(fnKey, cands[i].loc, callLoc) {
+			continue // cannot reach the call
+		}
+		if !killedByDominator(meta, fnKey, callLoc, cands, i) {
+			out = append(out, cands[i].status)
+		}
+	}
+	return dedupInts(out)
+}
+
+// killedByDominator reports whether cands[i] is overwritten on every path to the
+// call: some cands[j] between cands[i] and the call whose block dominates the call
+// block. cands[j] must lie ON a path from cands[i] to the call — it must both be
+// reachable from cands[i] AND itself reach the call. The j-reaches-call clause is
+// essential: a later reassignment that sits AFTER the call in the SAME straight-line
+// block satisfies Reaches(i,j) and the reflexive block self-domination, but executes
+// after the response write and must NOT shadow the value the call actually read.
+func killedByDominator(meta *metadata.Metadata, fnKey string, callLoc metadata.BlockLoc, cands []statusCand, i int) bool {
+	for j := range cands {
+		if i == j || !cands[j].hasLoc || cands[i].loc == cands[j].loc {
+			continue
+		}
+		if meta.Reaches(fnKey, cands[i].loc, cands[j].loc) &&
+			meta.Reaches(fnKey, cands[j].loc, callLoc) &&
+			meta.Dominates(fnKey, cands[j].loc.Block, callLoc.Block) {
+			return true
+		}
+	}
+	return false
+}
+
+// dedupInts returns the input with duplicate values removed, preserving first-seen order.
+func dedupInts(in []int) []int {
+	seen := make(map[int]struct{}, len(in))
+	out := make([]int, 0, len(in))
+	for _, v := range in {
+		if _, dup := seen[v]; !dup {
+			seen[v] = struct{}{}
+			out = append(out, v)
 		}
 	}
 	return out
@@ -2120,37 +2823,6 @@ func statusFromCallArgs(r *ResponsePatternMatcherImpl, call *metadata.CallArgume
 		}
 	}
 	return 0, false
-}
-
-// positionAfter reports whether source position a occurs strictly after b.
-// Positions are "file:line:col"; comparison is by (line, col), using the last
-// two colon-separated fields. Missing/unparseable positions return false so the
-// caller does not over-filter on incomplete data.
-func positionAfter(a, b string) bool {
-	la, ca, oka := positionLineCol(a)
-	lb, cb, okb := positionLineCol(b)
-	if !oka || !okb {
-		return false
-	}
-	if la != lb {
-		return la > lb
-	}
-	return ca > cb
-}
-
-// positionLineCol parses the trailing line and column from a "file:line:col"
-// position string.
-func positionLineCol(pos string) (line, col int, ok bool) {
-	parts := strings.Split(pos, ":")
-	if len(parts) < 2 {
-		return 0, 0, false
-	}
-	col, errC := strconv.Atoi(parts[len(parts)-1])
-	line, errL := strconv.Atoi(parts[len(parts)-2])
-	if errC != nil || errL != nil {
-		return 0, 0, false
-	}
-	return line, col, true
 }
 
 // resolveTypeOrigin traces the origin of a type through assignments and type parameters

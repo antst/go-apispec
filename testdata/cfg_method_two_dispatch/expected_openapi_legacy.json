@@ -1,0 +1,121 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/x": {
+      "get": {
+        "operationId": "github.com/antst/go-apispec/testdata/cfg_method_two_dispatch.handler",
+        "parameters": [
+          {
+            "name": "X-Auth",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_cfg_method_two_dispatch.GetR"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_cfg_method_two_dispatch.AuthErr"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "github.com/antst/go-apispec/testdata/cfg_method_two_dispatch.handler",
+        "parameters": [
+          {
+            "name": "X-Auth",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_cfg_method_two_dispatch.PostR"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/github.com_antst_go-apispec_testdata_cfg_method_two_dispatch.AuthErr"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "github.com_antst_go-apispec_testdata_cfg_method_two_dispatch.AuthErr": {
+        "type": "object",
+        "properties": {
+          "m": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "m"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_cfg_method_two_dispatch.GetR": {
+        "type": "object",
+        "properties": {
+          "a": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "a"
+        ]
+      },
+      "github.com_antst_go-apispec_testdata_cfg_method_two_dispatch.PostR": {
+        "type": "object",
+        "properties": {
+          "b": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "b"
+        ]
+      }
+    }
+  }
+}

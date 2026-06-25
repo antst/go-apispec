@@ -1,0 +1,36 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Generated API",
+    "version": "1.0.0",
+    "contact": {
+      "name": "Anton Starikov",
+      "url": "https://github.com/antst/go-apispec",
+      "email": "antst@gmail.com"
+    }
+  },
+  "paths": {
+    "/loop": {
+      "get": {
+        "summary": "loop sets code = 200 before the loop and code = 202 inside the loop body.",
+        "description": "loop sets code = 200 before the loop and code = 202 inside the loop body. The\nloop-body assignment does not dominate the WriteHeader (the loop may run zero\ntimes), so it does not shadow the default — the response lists BOTH 200 and 202.",
+        "operationId": "github.com/antst/go-apispec/testdata/cfg_loop_status.loop",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {}
+            }
+          },
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {}
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {}
+}

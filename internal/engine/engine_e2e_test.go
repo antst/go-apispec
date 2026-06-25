@@ -62,6 +62,52 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		{name: "writejson_helper", inputDir: "../../testdata/writejson_helper", configFn: spec.DefaultHTTPConfig},
 		{name: "error_switch_minimal", inputDir: "../../testdata/error_switch_minimal", configFn: spec.DefaultChiConfig},
 		{name: "error_switch_file_service", inputDir: "../../testdata/error_switch_file_service", configFn: spec.DefaultChiConfig},
+		// spec 009: a response helper that type-switches on its argument. The
+		// concrete-type route fans out only the matched arm; the imprecise route
+		// degrades to the default arm + warns (FR-011/FR-012).
+		{name: "cfg_helper_typeswitch", inputDir: "../../testdata/cfg_helper_typeswitch", configFn: spec.DefaultHTTPConfig},
+		// spec 009: a status assigned inside a loop body still reaches the response
+		// write (FR-010 — the loop back-edge terminates and the value contributes).
+		{name: "cfg_loop_status", inputDir: "../../testdata/cfg_loop_status", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: an `if r.Method == …` dispatch splits into one operation per
+		// method, the same as a `switch r.Method` (FR-003).
+		{name: "cfg_method_if_dispatch", inputDir: "../../testdata/cfg_method_if_dispatch", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2 (FR-003): the switch-form mirror of cfg_method_if_dispatch, with
+		// net/http CONSTANT cases (`case http.MethodGet:`). Must split identically —
+		// extractCaseValues resolves the constants the same way extractMethodGuard does.
+		{name: "cfg_method_switch_dispatch", inputDir: "../../testdata/cfg_method_switch_dispatch", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: a method dispatch combined with an INDEPENDENT pre-dispatch
+		// conditional — the independent 500 is carried onto every method operation
+		// (CFG: orthogonal to the dispatch), not dropped as the pre-CFG split did.
+		{name: "cfg_method_if_independent", inputDir: "../../testdata/cfg_method_if_independent", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: cross-function guard — a method arm that splits AND calls a
+		// helper writing a conditional response. The helper response's branch is in the
+		// HELPER's CFG, so the classifier must not reason about it against the handler's
+		// CFG (that would leak it onto the other method); it is conservatively excluded.
+		{name: "cfg_method_helper_response", inputDir: "../../testdata/cfg_method_helper_response", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: a `fallthrough` into a `switch r.Method` default — the 405 is
+		// recognised structurally as the dispatch fallback and excluded, NOT leaked onto
+		// GET/POST despite the fallthrough edge making it reachable from the POST arm.
+		{name: "cfg_method_switch_fallthrough", inputDir: "../../testdata/cfg_method_switch_fallthrough", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: TWO `switch r.Method` dispatches with an independent 401 between
+		// them — the dispatch root is scoped to one dispatch's arms, so the 401 is shared
+		// onto GET+POST, not over-excluded by a root spanning both dispatches.
+		{name: "cfg_method_two_dispatch", inputDir: "../../testdata/cfg_method_two_dispatch", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: a COMBINED case (`case GET, POST:`) + a `default` — the combined
+		// arm lowers to one block dominated by itself, so the dispatch root must come from
+		// the recorded group (all arms incl. default); the 405 stays the fallback and is
+		// not leaked onto the GET/POST operations the combined case splits into.
+		{name: "cfg_method_combined_default", inputDir: "../../testdata/cfg_method_combined_default", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: responses split across an `if r.Method ==` arm AND a `switch r.Method`
+		// with a default — distinct dispatch groups; the root spans BOTH contributing groups so
+		// the switch default 405 is excluded, not leaked onto GET (if-arm) and POST (switch-arm).
+		{name: "cfg_method_if_switch_default", inputDir: "../../testdata/cfg_method_if_switch_default", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: a `switch` over a COPY of r.Method (`m := r.Method; switch m`) — recognised
+		// by its method-named case values (not the tag), so the default 405 is excluded.
+		{name: "cfg_method_switch_copy", inputDir: "../../testdata/cfg_method_switch_copy", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US3: branch-dependent response bodies are attributed to the status
+		// on which they are written — 200/FullUser vs 404/ErrorBody, not merged (FR-005).
+		{name: "cfg_branch_bodies", inputDir: "../../testdata/cfg_branch_bodies", configFn: spec.DefaultHTTPConfig},
 		{name: "bodyless_status", inputDir: "../../testdata/bodyless_status", configFn: spec.DefaultHTTPConfig},
 		{name: "wrapped_response", inputDir: "../../testdata/wrapped_response", configFn: spec.DefaultHTTPConfig},
 		{name: "echo_handler_factory", inputDir: "../../testdata/echo_handler_factory", configFn: spec.DefaultEchoConfig},
