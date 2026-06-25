@@ -1017,6 +1017,15 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 		if fnKey == "" {
 			continue // no CFG model: conservatively exclude (pre-009 behavior)
 		}
+		// The branch's BlockIndex is meaningful only in its OWN function's CFG. A
+		// response inferred from a HELPER carries the helper's block index; querying it
+		// against the handler's CFG is unsound — it could alias an unrelated handler
+		// block and leak onto a method it does not belong to. Exclude such foreign-branch
+		// responses conservatively (pre-CFG behavior); per-method attribution of an
+		// interprocedural conditional needs call-site context (a separate concern).
+		if meta.FnKeyForPos(meta.StringPool.GetString(resp.Branch.ParentStmtPos)) != fnKey {
+			continue
+		}
 		rb := resp.Branch.BlockIndex
 		if methods, ok := dominatingMethods(meta, fnKey, rb, armBlocks, armBlockToMethods); ok {
 			for _, m := range methods { // a combined `case "GET", "HEAD"` arm owns several

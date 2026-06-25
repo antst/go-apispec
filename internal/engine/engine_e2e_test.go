@@ -80,14 +80,15 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// conditional — the independent 500 is carried onto every method operation
 		// (CFG: orthogonal to the dispatch), not dropped as the pre-CFG split did.
 		{name: "cfg_method_if_independent", inputDir: "../../testdata/cfg_method_if_independent", configFn: spec.DefaultHTTPConfig},
-		// #27/#5 regression guard: a sub-handler reached via `switch r.Method` keeps
-		// its own direct 4xx (POST /users/ → [200,204,400]). classifyHelperWrites scans
-		// DIRECT children only; recursing here would drop the sub-handler's 400.
-		// NOTE: the operations are NOT split per method here — the switch dispatches to
-		// sub-handler METHODS whose responses are interprocedural, so the method context
-		// does not reach them (a known limitation, separate from this guard and from the
-		// inline-dispatch FR-003 case covered by cfg_method_switch_dispatch).
-		{name: "enum_validation", inputDir: "../../testdata/enum_validation", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: cross-function guard — a method arm that splits AND calls a
+		// helper writing a conditional response. The helper response's branch is in the
+		// HELPER's CFG, so the classifier must not reason about it against the handler's
+		// CFG (that would leak it onto the other method); it is conservatively excluded.
+		{name: "cfg_method_helper_response", inputDir: "../../testdata/cfg_method_helper_response", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: a `fallthrough` into a `switch r.Method` default — the 405 is
+		// recognised structurally as the dispatch fallback and excluded, NOT leaked onto
+		// GET/POST despite the fallthrough edge making it reachable from the POST arm.
+		{name: "cfg_method_switch_fallthrough", inputDir: "../../testdata/cfg_method_switch_fallthrough", configFn: spec.DefaultHTTPConfig},
 		// spec 009 US3: branch-dependent response bodies are attributed to the status
 		// on which they are written — 200/FullUser vs 404/ErrorBody, not merged (FR-005).
 		{name: "cfg_branch_bodies", inputDir: "../../testdata/cfg_branch_bodies", configFn: spec.DefaultHTTPConfig},

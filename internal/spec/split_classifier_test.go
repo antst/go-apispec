@@ -314,6 +314,34 @@ func TestSplit_FallthroughDefaultExcluded(t *testing.T) {
 	assert.Equal(t, []int{201}, got["POST"], "405 must not leak onto POST via fallthrough")
 }
 
+// TestSplit_ForeignBranchExcluded: a non-method response whose branch belongs to a
+// DIFFERENT function (an interprocedural helper) must be excluded, never reasoned
+// about against the handler's CFG — else its helper-local block index aliases a
+// handler block and leaks the response onto a method it does not belong to.
+func TestSplit_ForeignBranchExcluded(t *testing.T) {
+	meta := newTestMeta()
+	const fn = "fn"
+	meta.InstallFunctionCFGForTest(fn, switchCFG(), map[string]metadata.BlockLoc{
+		"get:1": {Block: 2}, "post:1": {Block: 3},
+	})
+	// A separate helper function whose branch position resolves to "helper", not fn.
+	meta.InstallFunctionCFGForTest("helper", [][]int32{{1}, {}}, map[string]metadata.BlockLoc{
+		"helper:1": {Block: 1},
+	})
+	ext := scExtractor(meta)
+	route := &RouteInfo{
+		Path: "/r", Function: "h", UsedTypes: map[string]*Schema{},
+		Response: map[string]*ResponseInfo{
+			"200": scResp(200, "List", scBranch(meta, 2, "get:1", "GET")),
+			"201": scResp(201, "Made", scBranch(meta, 3, "post:1", "POST")),
+			"599": scResp(599, "Trace", &metadata.BranchContext{BlockKind: "if-then", BlockIndex: 1, ParentStmtPos: meta.StringPool.Get("helper:1")}),
+		},
+	}
+	got := scCollect(ext.splitByConditionalMethods(route))
+	assert.Equal(t, []int{200}, got["GET"], "foreign 599 must not appear on GET")
+	assert.Equal(t, []int{201}, got["POST"], "foreign 599 must not leak onto POST")
+}
+
 // --- direct helper unit tests ---
 
 func TestCommonDominator(t *testing.T) {
