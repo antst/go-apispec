@@ -54,8 +54,50 @@ func BuildFunctionCFGs(funcDecls []*ast.FuncDecl, declInfo map[*ast.FuncDecl]*ty
 		fnKey := fset.Position(decl.Body.Pos()).String() // unique per function body
 		tsOperands := typeSwitchOperands(decl.Body)
 		tsDefaults := typeSwitchDefaultArms(decl.Body)
-		annotateBranches(graph, fset, declInfo[decl], meta, edgesByPos, assignsByPos, fnKey, tsOperands, tsDefaults)
+		dispatchGroups := methodDispatchGroups(decl.Body, declInfo[decl])
+		annotateBranches(graph, fset, declInfo[decl], meta, edgesByPos, assignsByPos, fnKey, tsOperands, tsDefaults, dispatchGroups)
 	}
+}
+
+// methodDispatchGroups maps the source position of each method-dispatch ARM
+// statement (a `switch r.Method` case clause INCLUDING the default, or each
+// `if r.Method ==` chain IfStmt) to a group id — the dispatch statement's own
+// position — so every arm of ONE dispatch shares an id. A switch counts only when its
+// TAG type-resolves to net/http.Request.Method, which excludes a value-switch whose
+// cases merely name methods (`switch action { case "GET": }`). Needs type info; the
+// switch path is skipped without it (the if path is type-gated inside extractMethodGuard).
+func methodDispatchGroups(body *ast.BlockStmt, info *types.Info) map[token.Pos]int {
+	groups := make(map[token.Pos]int)
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.SwitchStmt:
+			if s.Tag != nil && s.Body != nil && isHTTPRequestMethod(s.Tag, info) {
+				gid := int(s.Pos())
+				for _, cc := range s.Body.List {
+					if clause, ok := cc.(*ast.CaseClause); ok {
+						groups[clause.Pos()] = gid
+					}
+				}
+			}
+		case *ast.IfStmt:
+			if _, done := groups[s.Pos()]; done {
+				return true // already linked as the else-if of a method chain
+			}
+			if len(extractMethodGuard(s, info)) > 0 {
+				gid := int(s.Pos())
+				for cur := s; cur != nil; { // walk the else-if chain into one group
+					groups[cur.Pos()] = gid
+					if elseIf, ok := cur.Else.(*ast.IfStmt); ok {
+						cur = elseIf
+					} else {
+						cur = nil
+					}
+				}
+			}
+		}
+		return true
+	})
+	return groups
 }
 
 // buildEdgePositionIndex creates a map from source position string to
@@ -134,12 +176,13 @@ func buildAssignmentPositionIndex(meta *Metadata, _ *token.FileSet) map[string][
 // with BranchContext (including type-switch case types).
 func annotateBranches(graph *cfg.CFG, fset *token.FileSet, info *types.Info, meta *Metadata, //nolint:gocyclo // single CFG walk doing reachability capture + branch annotation
 	edgesByPos map[string]*CallGraphEdge, assignsByPos map[string][]*Assignment, fnKey string,
-	tsOperands map[token.Pos]string, tsDefaults []tsDefaultArm) {
+	tsOperands map[token.Pos]string, tsDefaults []tsDefaultArm, dispatchGroups map[token.Pos]int) {
 	nb := len(graph.Blocks)
 	fc := &FunctionCFG{
-		Blocks:     make([]BlockInfo, nb),
-		Succs:      make([][]int32, nb),
-		PosToBlock: make(map[string]BlockLoc),
+		Blocks:       make([]BlockInfo, nb),
+		Succs:        make([][]int32, nb),
+		PosToBlock:   make(map[string]BlockLoc),
+		DispatchArms: make(map[int][]int32),
 	}
 	for i := range fc.Blocks {
 		fc.Blocks[i] = BlockInfo{Index: int32(i)} //nolint:gosec // block counts are small
@@ -247,14 +290,16 @@ func annotateBranches(graph *cfg.CFG, fset *token.FileSet, info *types.Info, met
 		if branchKind == "if-then" && block.Stmt != nil {
 			ctx.CaseValues = extractMethodGuard(block.Stmt, info)
 		}
-		// Record method-dispatch arm blocks (a `switch r.Method` case or `if r.Method ==`
-		// then-block) so a consumer can recover the FULL dispatch even when an arm
-		// contributed no response (e.g. its success was stripped by an early-return).
-		// The common dominator of all arms is the dispatch tag (spec 009, US2/FR-003).
-		for _, v := range ctx.CaseValues {
-			if isHTTPMethodName(strings.ToUpper(v)) {
-				fc.MethodArms = append(fc.MethodArms, bi)
-				break
+		// Record this arm under its method-dispatch group (a `switch r.Method` or a
+		// chained `if r.Method ==`), INCLUDING the default / bare-else, so a consumer can
+		// recover the exact dispatch — its tag (the common dominator of the group's arms)
+		// and every arm, even one whose response was lost to an early-return. Detected
+		// from the dispatch TAG (methodDispatchGroups), not the case values, so a
+		// value-switch with method-named cases is correctly NOT recorded (spec 009, US2).
+		if block.Stmt != nil {
+			if g, ok := dispatchGroups[block.Stmt.Pos()]; ok {
+				ctx.DispatchGroup = g
+				fc.DispatchArms[g] = append(fc.DispatchArms[g], bi)
 			}
 		}
 		for _, node := range block.Nodes {

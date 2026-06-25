@@ -291,6 +291,99 @@ func simple() {
 	}
 }
 
+// TestBuildFunctionCFGs_DispatchArms drives the full build with real type info over a
+// `switch r.Method` handler, asserting the per-function CFG records every arm of the
+// method dispatch (incl. the default) under one group — the data primaryDispatch /
+// commonDominator consume to scope a method split.
+func TestBuildFunctionCFGs_DispatchArms(t *testing.T) {
+	src := `package main
+import "net/http"
+func handler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		w.WriteHeader(200)
+	case "POST":
+		w.WriteHeader(201)
+	default:
+		w.WriteHeader(405)
+	}
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "test.go", src, 0)
+	require.NoError(t, err)
+	info := &types.Info{
+		Types: make(map[ast.Expr]types.TypeAndValue),
+		Defs:  make(map[*ast.Ident]types.Object),
+		Uses:  make(map[*ast.Ident]types.Object),
+	}
+	conf := types.Config{Importer: importer.Default(), Error: func(error) {}}
+	_, _ = conf.Check("test", fset, []*ast.File{file}, info)
+
+	var funcDecl *ast.FuncDecl
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == "handler" {
+			funcDecl = fn
+			break
+		}
+	}
+	require.NotNil(t, funcDecl)
+
+	meta := &Metadata{StringPool: NewStringPool(), CallGraph: []CallGraphEdge{}}
+	BuildFunctionCFGs([]*ast.FuncDecl{funcDecl}, map[*ast.FuncDecl]*types.Info{funcDecl: info}, fset, meta)
+
+	require.Len(t, meta.FunctionCFGs, 1)
+	var fc *FunctionCFG
+	for _, c := range meta.FunctionCFGs {
+		fc = c
+	}
+	require.NotNil(t, fc)
+	require.Len(t, fc.DispatchArms, 1, "one method-dispatch group")
+
+	// lcd = lowest common dominator of two blocks, walking the idom tree.
+	lcd := func(a, b int32) int32 {
+		anc := map[int32]bool{a: true}
+		for x := a; fc.Dominators[x] >= 0; {
+			x = fc.Dominators[x]
+			anc[x] = true
+		}
+		y := b
+		for !anc[y] && fc.Dominators[y] >= 0 {
+			y = fc.Dominators[y]
+		}
+		return y
+	}
+
+	for _, arms := range fc.DispatchArms {
+		require.Len(t, arms, 3, "GET, POST, and the default arm all recorded")
+		// The arms are mutually-exclusive siblings of ONE switch: no arm reaches another.
+		// This is what tells the real default arm apart from the post-switch merge block
+		// (which every arm WOULD reach) — a regression that recorded the merge in place of
+		// the default would keep len==3 but be caught here.
+		for _, a := range arms {
+			for _, b := range arms {
+				if a != b {
+					assert.False(t, fc.blockReaches(a, b),
+						"arm %d must not reach sibling arm %d (else it is not a switch arm)", a, b)
+				}
+			}
+		}
+		// Their common dominator is the switch TAG — a block that dominates every arm
+		// (incl. the default) and is itself no arm. This is exactly the value
+		// commonDominator turns the group into to scope the dispatch; the combined-case
+		// fix depends on the default being in the group so this LCA is the tag, not an arm.
+		tag := arms[0]
+		for _, a := range arms[1:] {
+			tag = lcd(tag, a)
+		}
+		for _, arm := range arms {
+			assert.True(t, blockDominates(fc.Dominators, tag, arm),
+				"dispatch tag %d dominates arm %d", tag, arm)
+		}
+		assert.NotContains(t, arms, tag, "the dispatch tag is a common dominator, not one of the arms")
+	}
+}
+
 func TestMapBlockKind(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -473,4 +566,49 @@ func TestExtractMethodGuard(t *testing.T) {
 	assert.Nil(t, extractMethodGuard(tsFindIf(fNo), nil))
 	// A non-if statement yields nothing.
 	assert.Nil(t, extractMethodGuard(&ast.ExprStmt{}, nil))
+}
+
+// distinctVals collapses a group map to its set of group ids.
+func distinctVals(m map[token.Pos]int) map[int]bool {
+	s := make(map[int]bool, len(m))
+	for _, v := range m {
+		s[v] = true
+	}
+	return s
+}
+
+func TestMethodDispatchGroups(t *testing.T) {
+	src := "package p\nimport \"net/http\"\n" +
+		// switch r.Method: a genuine method dispatch.
+		"func sw(r *http.Request) {\n\tswitch r.Method {\n\tcase \"GET\":\n\tcase \"POST\":\n\tdefault:\n\t}\n}\n" +
+		// value switch whose cases merely NAME methods — must NOT group.
+		"func vsw(action string) {\n\tswitch action {\n\tcase \"GET\":\n\tcase \"POST\":\n\t}\n}\n" +
+		// if r.Method == … else-if chain.
+		"func chain(r *http.Request) {\n\tif r.Method == \"GET\" {\n\t} else if r.Method == \"POST\" {\n\t} else {\n\t}\n}\n" +
+		// tagless switch is not the tag path.
+		"func tagless(r *http.Request) {\n\tswitch {\n\tcase r.Method == \"GET\":\n\t}\n}\n" +
+		// plain non-method if.
+		"func plain(x int) {\n\tif x > 0 {\n\t}\n}\n"
+	f, info := typeCheckSrc(t, src)
+
+	// switch r.Method: every case clause INCLUDING the default shares one group id.
+	sw := methodDispatchGroups(tsFuncBody(f, "sw"), info)
+	require.Len(t, sw, 3) // GET, POST, default
+	assert.Len(t, distinctVals(sw), 1, "all arms of one switch share a group")
+
+	// value switch naming methods: not a method dispatch → no groups.
+	assert.Empty(t, methodDispatchGroups(tsFuncBody(f, "vsw"), info))
+
+	// else-if chain: both IfStmts share one id; the bare else (not an IfStmt) is not
+	// recorded, and the done-short-circuit fires when Inspect re-visits the else-if.
+	ch := methodDispatchGroups(tsFuncBody(f, "chain"), info)
+	require.Len(t, ch, 2)
+	assert.Len(t, distinctVals(ch), 1)
+
+	// tagless switch and a plain non-method if record nothing.
+	assert.Empty(t, methodDispatchGroups(tsFuncBody(f, "tagless"), info))
+	assert.Empty(t, methodDispatchGroups(tsFuncBody(f, "plain"), info))
+
+	// Without type info the switch tag can't resolve → conservatively no groups.
+	assert.Empty(t, methodDispatchGroups(tsFuncBody(f, "sw"), nil))
 }

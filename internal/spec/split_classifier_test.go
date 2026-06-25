@@ -31,15 +31,22 @@ func scExtractor(meta *metadata.Metadata) *Extractor {
 	return NewExtractor(tree, &APISpecConfig{Defaults: Defaults{ResponseContentType: "application/json"}})
 }
 
-// scBranch builds a BranchContext at the given block whose ParentStmtPos (pos)
-// resolves to a function's CFG (so splitRouteFnKey can find it).
+// scBranch builds a method-arm BranchContext at the given block, in dispatch group 1,
+// whose ParentStmtPos (pos) resolves to a function's CFG (so primaryDispatch finds it).
 func scBranch(meta *metadata.Metadata, block int32, pos string, methods ...string) *metadata.BranchContext {
 	return &metadata.BranchContext{
 		BlockKind:     "switch-case",
 		BlockIndex:    block,
 		CaseValues:    methods,
 		ParentStmtPos: meta.StringPool.Get(pos),
+		DispatchGroup: 1,
 	}
+}
+
+// scArms records dispatch group 1's arm blocks (every method arm INCLUDING the
+// default/dropped) on fn's CFG, so the dispatch root is their common dominator (the tag).
+func scArms(meta *metadata.Metadata, fn string, blocks ...int32) {
+	meta.FunctionCFGs[fn].DispatchArms = map[int][]int32{1: blocks}
 }
 
 // scResp is a tiny ResponseInfo constructor for these tests.
@@ -89,6 +96,7 @@ func TestSplit_SwitchDefaultExcluded(t *testing.T) {
 	meta.InstallFunctionCFGForTest(fn, switchCFG(), map[string]metadata.BlockLoc{
 		"get:1": {Block: 2}, "post:1": {Block: 3}, "def:1": {Block: 5},
 	})
+	scArms(meta, fn, 2, 3, 5) // GET, POST, and the default arm — root is the switch tag
 	ext := scExtractor(meta)
 	route := &RouteInfo{
 		Path: "/r", Function: "h", UsedTypes: map[string]*Schema{},
@@ -300,6 +308,7 @@ func TestSplit_FallthroughDefaultExcluded(t *testing.T) {
 	meta.InstallFunctionCFGForTest(fn, fallthroughCFG(), map[string]metadata.BlockLoc{
 		"get:1": {Block: 2}, "post:1": {Block: 3}, "def:1": {Block: 5},
 	})
+	scArms(meta, fn, 2, 3, 5) // GET, POST, and the default arm — root is the switch tag
 	ext := scExtractor(meta)
 	route := &RouteInfo{
 		Path: "/r", Function: "h", UsedTypes: map[string]*Schema{},
@@ -344,8 +353,9 @@ func TestSplit_ForeignBranchExcluded(t *testing.T) {
 
 // droppedArmCFG: a switch with GET (B2, whose success at B7 is branchless so GET
 // drops out of methodResponses), POST (B3), DELETE (B4); the GET arm holds a nested
-// 404 (B5, returns). With MethodArms covering ALL three arms, the dispatch root is
-// the tag B0, so the orphaned 404 is excluded — not leaked onto POST/DELETE.
+// 404 (B5, returns). With the recorded dispatch group covering ALL three arms, the
+// dispatch root is the tag B0, so the orphaned 404 is excluded — not leaked onto
+// POST/DELETE.
 func droppedArmCFG() [][]int32 {
 	return [][]int32{
 		{2, 6}, // B0 tag (GET test)
@@ -362,14 +372,14 @@ func droppedArmCFG() [][]int32 {
 
 // TestSplit_DroppedArmConditionalExcluded: when a method arm drops out (its success
 // lost to an early-return), a conditional orphaned in that arm must NOT leak onto the
-// surviving methods — the full-dispatch root (from MethodArms) still covers it.
+// surviving methods — the dispatch root (from the recorded group's arms) still covers it.
 func TestSplit_DroppedArmConditionalExcluded(t *testing.T) {
 	meta := newTestMeta()
 	const fn = "fn"
 	meta.InstallFunctionCFGForTest(fn, droppedArmCFG(), map[string]metadata.BlockLoc{
 		"post:1": {Block: 3}, "del:1": {Block: 4}, "nf:1": {Block: 5},
 	})
-	meta.FunctionCFGs[fn].MethodArms = []int32{2, 3, 4} // full dispatch incl. dropped GET arm
+	scArms(meta, fn, 2, 3, 4) // the group's arms incl. the dropped GET arm (block 2)
 	ext := scExtractor(meta)
 	route := &RouteInfo{
 		Path: "/r", Function: "h", UsedTypes: map[string]*Schema{},
@@ -385,30 +395,6 @@ func TestSplit_DroppedArmConditionalExcluded(t *testing.T) {
 }
 
 // --- direct helper unit tests ---
-
-// TestDispatchRootBlocks_SiblingScoping: a dropped sibling arm (mutually exclusive
-// with the responding arms — same dispatch) is added to the root set, but an arm of
-// a SEPARATE dispatch (reachable-together, in sequence) is NOT — so the root is not
-// inflated to over-exclude independent conditionals between two dispatches.
-func TestDispatchRootBlocks_SiblingScoping(t *testing.T) {
-	meta := newTestMeta()
-	const fn = "fn"
-	succs := [][]int32{
-		{8},    // B0 entry → B8 (an arm of a separate, earlier dispatch)
-		{},     // B1 merge
-		{1},    // B2 dispatch-2 GET (dropped sibling)
-		{1},    // B3 dispatch-2 POST (responding)
-		{1},    // B4 dispatch-2 DELETE (responding)
-		{2, 6}, // B5 dispatch-2 tag
-		{3, 7}, // B6
-		{4},    // B7
-		{5},    // B8 separate-dispatch arm → flows into dispatch-2
-	}
-	meta.InstallFunctionCFGForTest(fn, succs, map[string]metadata.BlockLoc{"x": {Block: 3}})
-	meta.FunctionCFGs[fn].MethodArms = []int32{8, 2, 3, 4}
-	got := dispatchRootBlocks(meta, fn, []int32{3, 4})
-	assert.ElementsMatch(t, []int32{3, 4, 2}, got, "include the dropped sibling B2, exclude the separate-dispatch arm B8")
-}
 
 func TestCommonDominator(t *testing.T) {
 	meta := newTestMeta()
@@ -484,38 +470,45 @@ func TestDispatchArms(t *testing.T) {
 	assert.Equal(t, []string{"POST"}, byBlock[3])
 }
 
-func TestSplitRouteFnKey(t *testing.T) {
+func TestPrimaryDispatch(t *testing.T) {
 	meta := newTestMeta()
 	const fn = "fn"
 	meta.InstallFunctionCFGForTest(fn, switchCFG(), map[string]metadata.BlockLoc{"get:1": {Block: 2}})
 
 	resolved := map[string]map[string]*ResponseInfo{
-		"GET": {"200": scResp(200, "L", scBranch(meta, 2, "get:1", "GET"))},
+		"GET": {"200": scResp(200, "L", scBranch(meta, 2, "get:1", "GET"))}, // DispatchGroup 1
 	}
-	assert.Equal(t, fn, splitRouteFnKey(meta, resolved))
+	gotFn, gotGrp := primaryDispatch(meta, resolved)
+	assert.Equal(t, fn, gotFn)
+	assert.Equal(t, 1, gotGrp)
 
 	unresolved := map[string]map[string]*ResponseInfo{
-		"GET": {"200": scResp(200, "L", &metadata.BranchContext{BlockIndex: 2, ParentStmtPos: meta.StringPool.Get("nowhere:9")})},
+		"GET": {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("nowhere:9")})},
 	}
-	assert.Equal(t, "", splitRouteFnKey(meta, unresolved))
+	f, g := primaryDispatch(meta, unresolved)
+	assert.Equal(t, "", f)
+	assert.Equal(t, 0, g)
 
 	nilBranch := map[string]map[string]*ResponseInfo{"GET": {"200": scResp(200, "L", nil)}}
-	assert.Equal(t, "", splitRouteFnKey(meta, nilBranch))
+	f, _ = primaryDispatch(meta, nilBranch)
+	assert.Equal(t, "", f)
 }
 
-// TestSplitRouteFnKey_MultiFunction: when a dispatch's arms resolve to more than one
-// function (e.g. a sub-dispatch in a helper), splitRouteFnKey returns the MOST COMMON
-// fnKey deterministically — never a value that depends on map-iteration order.
-func TestSplitRouteFnKey_MultiFunction(t *testing.T) {
+// TestPrimaryDispatch_MultiFunction: when the responses resolve to more than one
+// (function, group) — e.g. a sub-dispatch in a helper — primaryDispatch returns the
+// most common pair deterministically, never one that depends on map-iteration order.
+func TestPrimaryDispatch_MultiFunction(t *testing.T) {
 	meta := newTestMeta()
 	meta.InstallFunctionCFGForTest("fnA", [][]int32{{}}, map[string]metadata.BlockLoc{"a:1": {Block: 0}})
 	meta.InstallFunctionCFGForTest("fnB", [][]int32{{}}, map[string]metadata.BlockLoc{"b:1": {Block: 0}, "b:2": {Block: 0}})
 	mr := map[string]map[string]*ResponseInfo{
-		"GET":  {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("a:1")})},
-		"POST": {"201": scResp(201, "M", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("b:1")})},
-		"PUT":  {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("b:2")})},
+		"GET":  {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("a:1"), DispatchGroup: 1})},
+		"POST": {"201": scResp(201, "M", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("b:1"), DispatchGroup: 2})},
+		"PUT":  {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("b:2"), DispatchGroup: 2})},
 	}
-	for i := 0; i < 50; i++ { // fnB has 2 arms, fnA has 1 → fnB, stable across map orders
-		assert.Equal(t, "fnB", splitRouteFnKey(meta, mr))
+	for i := 0; i < 50; i++ { // (fnB,2) has 2 arms, (fnA,1) has 1 → (fnB,2), stable
+		f, g := primaryDispatch(meta, mr)
+		assert.Equal(t, "fnB", f)
+		assert.Equal(t, 2, g)
 	}
 }

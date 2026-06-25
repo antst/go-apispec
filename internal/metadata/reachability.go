@@ -113,17 +113,17 @@ func (m *Metadata) Dominates(fnKey string, a, b int32) bool {
 	return blockDominates(fc.Dominators, a, b)
 }
 
-// MethodArms returns the block indices of fnKey's method-dispatch arms (a
-// `switch r.Method` case or `if r.Method ==` then-block), INCLUDING arms that
-// contributed no response — so a consumer can compute the full dispatch region
-// (its common dominator is the switch/if-chain tag) even when an arm's response was
-// lost (e.g. to an early-return). Returns nil when the function has no model.
-func (m *Metadata) MethodArms(fnKey string) []int32 {
+// DispatchArms returns the block indices of every arm of the method-dispatch group
+// `group` within fnKey (every `switch r.Method` case INCLUDING the default, or every
+// `if r.Method ==` chain arm), or nil. The common dominator of the returned blocks is
+// that dispatch's tag, so a consumer can scope the dispatch region exactly — per
+// dispatch, including arms whose response was lost, with no combined-case collapse.
+func (m *Metadata) DispatchArms(fnKey string, group int) []int32 {
 	fc := m.fnCFG(fnKey)
 	if fc == nil {
 		return nil
 	}
-	return fc.MethodArms
+	return fc.DispatchArms[group]
 }
 
 // IDom returns the immediate dominator of block b within fnKey (the branch point

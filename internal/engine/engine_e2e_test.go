@@ -93,6 +93,11 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// them — the dispatch root is scoped to one dispatch's arms, so the 401 is shared
 		// onto GET+POST, not over-excluded by a root spanning both dispatches.
 		{name: "cfg_method_two_dispatch", inputDir: "../../testdata/cfg_method_two_dispatch", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2: a COMBINED case (`case GET, POST:`) + a `default` — the combined
+		// arm lowers to one block dominated by itself, so the dispatch root must come from
+		// the recorded group (all arms incl. default); the 405 stays the fallback and is
+		// not leaked onto the GET/POST operations the combined case splits into.
+		{name: "cfg_method_combined_default", inputDir: "../../testdata/cfg_method_combined_default", configFn: spec.DefaultHTTPConfig},
 		// spec 009 US3: branch-dependent response bodies are attributed to the status
 		// on which they are written — 200/FullUser vs 404/ErrorBody, not merged (FR-005).
 		{name: "cfg_branch_bodies", inputDir: "../../testdata/cfg_branch_bodies", configFn: spec.DefaultHTTPConfig},

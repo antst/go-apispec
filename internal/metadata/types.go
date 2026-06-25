@@ -541,6 +541,14 @@ type BranchContext struct {
 	// call-site argument via CallGraphEdge.ParamArgMap (spec 009, FR-011). Empty when
 	// the operand is not a simple ident, or for non-type-switch blocks.
 	SwitchOperand string `yaml:"switch_operand,omitempty"`
+	// DispatchGroup identifies the method dispatch (one `switch r.Method`, or one
+	// `if r.Method ==` chain) this arm belongs to — every case of a switch (INCLUDING its
+	// `default`), or every `if`/`else if` of a chain, shares it; 0 for a branch that is
+	// not a method-dispatch arm. (A chain's bare `else` is not recorded as an arm — it is
+	// recognised as a fallback structurally at split time.) It lets a consumer recover the
+	// EXACT dispatch without reconstructing it from dominance heuristics. The id is the
+	// dispatch statement's source position.
+	DispatchGroup int `yaml:"dispatch_group,omitempty"`
 }
 
 // FunctionCFG is the compact, retained per-function control-flow model built by
@@ -551,11 +559,14 @@ type FunctionCFG struct {
 	Succs      [][]int32           `yaml:"succs,omitempty"`      // Succs[i] = successor block indices of block i
 	Dominators []int32             `yaml:"dominators,omitempty"` // immediate dominator idom[i]; entry idom = -1
 	PosToBlock map[string]BlockLoc `yaml:"pos_to_block,omitempty"`
-	// MethodArms holds the block indices of method-dispatch arms (a `switch r.Method`
-	// case or `if r.Method ==` then-block), including arms that contributed no response.
-	// Their common dominator is the dispatch tag — letting a consumer recover the full
-	// dispatch region even when an arm's response was lost to an early-return (US2).
-	MethodArms []int32 `yaml:"method_arms,omitempty"`
+	// DispatchArms maps each method-dispatch group id (see BranchContext.DispatchGroup)
+	// to the block indices of ALL its arms — every `switch r.Method` case INCLUDING the
+	// `default`, or every `if`/`else if` of an `if r.Method ==` chain (a chain's bare
+	// `else` is not an arm — it is a fallback recognised structurally). The common
+	// dominator of one group's arms is that dispatch's tag, so a consumer can scope the
+	// dispatch region exactly (per dispatch, incl. arms whose response was lost) with no
+	// cross-dispatch inflation and no combined-case collapse (US2).
+	DispatchArms map[int][]int32 `yaml:"dispatch_arms,omitempty"`
 }
 
 // BlockInfo is one CFG basic block in the compact model.

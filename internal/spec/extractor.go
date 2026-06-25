@@ -1001,13 +1001,14 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 	// (no model) degrades to excluding non-method conditionals, never leaking a
 	// fallback onto a method.
 	meta := e.tree.GetMetadata()
-	fnKey := splitRouteFnKey(meta, methodResponses)
+	fnKey, primaryGroup := primaryDispatch(meta, methodResponses)
 	armBlocks, armBlockToMethods := dispatchArms(methodResponses)
-	// dispatchRoot is the common dominator of the FULL dispatch (every method arm from
-	// the CFG, including arms whose response was lost to an early-return), so a
-	// conditional orphaned in a dropped arm is still seen as inside the dispatch and
-	// excluded, not leaked onto the surviving methods.
-	dispatchRoot, haveRoot := commonDominator(meta, fnKey, dispatchRootBlocks(meta, fnKey, armBlocks))
+	// dispatchRoot is the common dominator of the PRIMARY dispatch's arms — recorded per
+	// dispatch at annotation time (every `switch r.Method` case incl. the default, or
+	// every `if r.Method ==` chain arm). So it is the exact switch/if tag: it covers an
+	// arm whose response was lost to an early-return AND a combined `case "GET","POST"`
+	// (whose default is in the same group), and is never inflated by a SEPARATE dispatch.
+	dispatchRoot, haveRoot := commonDominator(meta, fnKey, meta.DispatchArms(fnKey, primaryGroup))
 
 	shared := make(map[string]*ResponseInfo)
 	for statusCode, resp := range route.Response {
@@ -1078,56 +1079,37 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 	return result
 }
 
-// splitRouteFnKey resolves the FunctionCFGs key for the handler being split. It
-// counts the function each method branch resolves to (via cfgPosToFn, set during CFG
-// annotation) and returns the MOST COMMON — deterministically, with a lexicographic
-// tiebreak, so a dispatch whose arms span more than one function (e.g. a sub-dispatch
-// in a helper) does not make the choice depend on map-iteration order. Returns ""
-// when no branch resolves — the caller then degrades to the pre-009 behavior
-// (non-method conditionals excluded).
-func splitRouteFnKey(meta *metadata.Metadata, methodResponses map[string]map[string]*ResponseInfo) string {
-	counts := make(map[string]int)
+// primaryDispatch returns the function key and dispatch-group id that the most method
+// responses belong to (deterministic, tiebroken by fnKey then group). The dispatch
+// root is then computed over exactly that one dispatch's arms (metadata.DispatchArms),
+// so a dispatch whose arms span more than one function, or one that coexists with a
+// SEPARATE dispatch, does not perturb the choice. Returns "" / 0 when no method branch
+// resolves to a function — the caller then excludes non-method conditionals (pre-009).
+func primaryDispatch(meta *metadata.Metadata, methodResponses map[string]map[string]*ResponseInfo) (string, int) {
+	type fnGroup struct {
+		fn  string
+		grp int
+	}
+	counts := make(map[fnGroup]int)
 	for _, resps := range methodResponses {
 		for _, r := range resps {
 			if r.Branch == nil {
 				continue
 			}
-			if k := meta.FnKeyForPos(meta.StringPool.GetString(r.Branch.ParentStmtPos)); k != "" {
-				counts[k]++
+			fn := meta.FnKeyForPos(meta.StringPool.GetString(r.Branch.ParentStmtPos))
+			if fn == "" {
+				continue
 			}
+			counts[fnGroup{fn, r.Branch.DispatchGroup}]++
 		}
 	}
-	best, bestN := "", 0
+	best, bestN := fnGroup{}, 0
 	for k, n := range counts {
-		if n > bestN || (n == bestN && k < best) {
+		if n > bestN || (n == bestN && (k.fn < best.fn || (k.fn == best.fn && k.grp < best.grp))) {
 			best, bestN = k, n
 		}
 	}
-	return best
-}
-
-// dispatchRootBlocks returns the blocks whose common dominator is the dispatch tag.
-// It starts from the responding arms and adds any recorded method arm that is a
-// SIBLING of them — mutually exclusive with them, i.e. of the same switch/if-chain.
-// That covers an arm which dropped out of the responses (its success lost to an
-// early-return) WITHOUT pulling in arms of a SEPARATE dispatch that runs in SEQUENCE
-// (a second `switch r.Method`, or a value-switch with method-named cases): those are
-// reachable-together with the responding arms, not exclusive, so they are left out.
-//
-// Limitation: two method dispatches in MUTUALLY EXCLUSIVE branches
-// (`if c { switch r.Method } else { switch r.Method }`) are exclusive, so the other
-// branch's arms ARE pulled in and the root can inflate toward the function entry; an
-// independent conditional in one branch is then over-excluded. This matches the
-// pre-CFG behavior (such a conditional was dropped anyway) and is a rare shape;
-// pinning it precisely needs per-dispatch grouping (a reaching-defs follow-up).
-func dispatchRootBlocks(meta *metadata.Metadata, fnKey string, armBlocks []int32) []int32 {
-	roots := append([]int32(nil), armBlocks...)
-	for _, ma := range meta.MethodArms(fnKey) {
-		if !slices.Contains(roots, ma) && mutuallyExclusiveWithArms(meta, fnKey, ma, armBlocks) {
-			roots = append(roots, ma)
-		}
-	}
-	return roots
+	return best.fn, best.grp
 }
 
 // dispatchArms returns the sorted method-arm branch blocks and each block → the
