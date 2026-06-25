@@ -236,7 +236,7 @@ func annotateBranches(graph *cfg.CFG, fset *token.FileSet, info *types.Info, met
 			ParentStmtPos: parentStmtPos,
 		}
 		if branchKind == "switch-case" && block.Stmt != nil {
-			ctx.CaseValues = extractCaseValues(block.Stmt)
+			ctx.CaseValues = extractCaseValues(block.Stmt, info)
 			ctx.CaseTypeRefs = extractCaseTypeRefs(block.Stmt, info)
 			ctx.SwitchOperand = tsOperands[block.Stmt.Pos()]
 		}
@@ -271,22 +271,32 @@ func annotateBranches(graph *cfg.CFG, fset *token.FileSet, info *types.Info, met
 	meta.FunctionCFGs[fnKey] = fc
 }
 
-// extractCaseValues extracts string literal values from a case clause statement.
-// For example, `case "GET", "HEAD":` returns ["GET", "HEAD"].
-func extractCaseValues(stmt ast.Stmt) []string {
+// extractCaseValues extracts the case values of a case clause. String literals are
+// returned verbatim (`case "GET", "active":` → ["GET", "active"]); an `http.MethodXxx`
+// selector constant is resolved to its method name (`case http.MethodGet:` → "GET"),
+// type-gated to net/http via httpMethodName. So a `switch r.Method` dispatch splits
+// the same whether its cases are string literals or net/http constants — matching the
+// `if r.Method == http.MethodGet` guard (spec 009, US2/FR-003). Needs type info to
+// resolve constants; without it only string literals are returned.
+func extractCaseValues(stmt ast.Stmt, info *types.Info) []string {
 	cc, ok := stmt.(*ast.CaseClause)
 	if !ok || cc == nil {
 		return nil
 	}
 	var values []string
 	for _, expr := range cc.List {
-		if lit, ok := expr.(*ast.BasicLit); ok {
-			// Strip quotes from string literals
-			val := lit.Value
+		switch v := expr.(type) {
+		case *ast.BasicLit:
+			// Strip quotes from string literals.
+			val := v.Value
 			if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
 				val = val[1 : len(val)-1]
 			}
 			values = append(values, val)
+		case *ast.SelectorExpr:
+			if m := httpMethodName(v, info); m != "" {
+				values = append(values, m)
+			}
 		}
 	}
 	return values

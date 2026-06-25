@@ -1063,11 +1063,11 @@ func TestMapBlockKind_AllKnownKinds(t *testing.T) {
 func TestExtractCaseValues_NonCaseClause(t *testing.T) {
 	// Not a CaseClause
 	stmt := &ast.ExprStmt{X: &ast.Ident{Name: "x"}}
-	assert.Nil(t, extractCaseValues(stmt))
+	assert.Nil(t, extractCaseValues(stmt, nil))
 }
 
 func TestExtractCaseValues_NilStmt(t *testing.T) {
-	assert.Nil(t, extractCaseValues(nil))
+	assert.Nil(t, extractCaseValues(nil, nil))
 }
 
 func TestExtractCaseValues_IntLiterals(t *testing.T) {
@@ -1077,7 +1077,7 @@ func TestExtractCaseValues_IntLiterals(t *testing.T) {
 			&ast.BasicLit{Kind: token.INT, Value: "99"},
 		},
 	}
-	values := extractCaseValues(cc)
+	values := extractCaseValues(cc, nil)
 	assert.Equal(t, []string{"42", "99"}, values)
 }
 
@@ -1088,26 +1088,28 @@ func TestExtractCaseValues_StringLiterals(t *testing.T) {
 			&ast.BasicLit{Kind: token.STRING, Value: `"POST"`},
 		},
 	}
-	values := extractCaseValues(cc)
+	values := extractCaseValues(cc, nil)
 	assert.Equal(t, []string{"GET", "POST"}, values)
 }
 
 func TestExtractCaseValues_MixedExprs(t *testing.T) {
-	// Non-BasicLit expressions should be skipped
+	// A bare Ident is skipped; a SelectorExpr without type info resolves to nothing
+	// (httpMethodName needs *types.Info to confirm an http.MethodXxx constant).
 	cc := &ast.CaseClause{
 		List: []ast.Expr{
 			&ast.BasicLit{Kind: token.STRING, Value: `"A"`},
-			&ast.Ident{Name: "SomeConst"}, // not a BasicLit
+			&ast.Ident{Name: "SomeConst"},
+			&ast.SelectorExpr{X: &ast.Ident{Name: "http"}, Sel: &ast.Ident{Name: "MethodGet"}},
 		},
 	}
-	values := extractCaseValues(cc)
+	values := extractCaseValues(cc, nil)
 	assert.Equal(t, []string{"A"}, values)
 }
 
 func TestExtractCaseValues_DefaultCase(t *testing.T) {
 	// Default case has nil List
 	cc := &ast.CaseClause{List: nil}
-	values := extractCaseValues(cc)
+	values := extractCaseValues(cc, nil)
 	assert.Nil(t, values)
 }
 

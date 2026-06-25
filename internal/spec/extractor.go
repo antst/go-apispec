@@ -1147,13 +1147,19 @@ func commonDominator(meta *metadata.Metadata, fnKey string, blocks []int32) (int
 }
 
 // isDispatchFallback reports whether a non-method conditional response (branch br)
-// must be EXCLUDED from the handled methods: either a `switch r.Method` `default:`
-// arm (recognised structurally by its empty case values, so a stray `fallthrough`
-// into it cannot leak its 405 onto a method), or a fallback that descends from the
+// must be EXCLUDED from the handled methods: either a `switch` `default:` arm
+// (recognised structurally by its empty case values, so a stray `fallthrough` into
+// it cannot leak its 405 onto a method), or a fallback that descends from the
 // dispatch root yet shares no control-flow path with any arm (the bare `else` of an
 // `if r.Method ==` chain). A conditional outside the dispatch (root does not
-// dominate it, e.g. a pre-dispatch `if bad { … return }`) or one reachable
-// together with the arms is NOT a fallback — it is independent and shared.
+// dominate it, e.g. a pre-dispatch `if bad { … return }`) or one reachable together
+// with the arms is NOT a fallback — it is independent and shared.
+//
+// Limitation: the structural `default:` rule also matches the default arm of an
+// UNRELATED switch dominated by the dispatch root (e.g. an orthogonal
+// `switch mode { default: … }` after the dispatch); such a response is excluded
+// rather than shared. This is conservative, not a regression — the pre-CFG split
+// dropped every non-unconditional response here regardless.
 func isDispatchFallback(meta *metadata.Metadata, fnKey string, br *metadata.BranchContext, dispatchRoot int32, haveRoot bool, armBlocks []int32) bool {
 	if !haveRoot || !meta.Dominates(fnKey, dispatchRoot, br.BlockIndex) {
 		return false

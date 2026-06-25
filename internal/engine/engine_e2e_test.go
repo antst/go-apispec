@@ -72,13 +72,21 @@ func allFrameworks(t *testing.T) []frameworkTestCase {
 		// spec 009 US2: an `if r.Method == …` dispatch splits into one operation per
 		// method, the same as a `switch r.Method` (FR-003).
 		{name: "cfg_method_if_dispatch", inputDir: "../../testdata/cfg_method_if_dispatch", configFn: spec.DefaultHTTPConfig},
+		// spec 009 US2 (FR-003): the switch-form mirror of cfg_method_if_dispatch, with
+		// net/http CONSTANT cases (`case http.MethodGet:`). Must split identically —
+		// extractCaseValues resolves the constants the same way extractMethodGuard does.
+		{name: "cfg_method_switch_dispatch", inputDir: "../../testdata/cfg_method_switch_dispatch", configFn: spec.DefaultHTTPConfig},
 		// spec 009 US2: a method dispatch combined with an INDEPENDENT pre-dispatch
 		// conditional — the independent 500 is carried onto every method operation
 		// (CFG: orthogonal to the dispatch), not dropped as the pre-CFG split did.
 		{name: "cfg_method_if_independent", inputDir: "../../testdata/cfg_method_if_independent", configFn: spec.DefaultHTTPConfig},
-		// #27 regression guard: a sub-handler reached via `switch r.Method` keeps its
-		// own direct 4xx (POST /users/ → [200,204,400]). classifyHelperWrites scans
+		// #27/#5 regression guard: a sub-handler reached via `switch r.Method` keeps
+		// its own direct 4xx (POST /users/ → [200,204,400]). classifyHelperWrites scans
 		// DIRECT children only; recursing here would drop the sub-handler's 400.
+		// NOTE: the operations are NOT split per method here — the switch dispatches to
+		// sub-handler METHODS whose responses are interprocedural, so the method context
+		// does not reach them (a known limitation, separate from this guard and from the
+		// inline-dispatch FR-003 case covered by cfg_method_switch_dispatch).
 		{name: "enum_validation", inputDir: "../../testdata/enum_validation", configFn: spec.DefaultHTTPConfig},
 		// spec 009 US3: branch-dependent response bodies are attributed to the status
 		// on which they are written — 200/FullUser vs 404/ErrorBody, not merged (FR-005).
