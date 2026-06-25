@@ -314,12 +314,12 @@ func annotateBranches(graph *cfg.CFG, fset *token.FileSet, info *types.Info, met
 		if branchKind == "if-then" && block.Stmt != nil {
 			ctx.CaseValues = extractMethodGuard(block.Stmt, info)
 		}
-		// Record this arm under its method-dispatch group (a `switch r.Method` or a
-		// chained `if r.Method ==`), INCLUDING the default / bare-else, so a consumer can
-		// recover the exact dispatch — its tag (the common dominator of the group's arms)
-		// and every arm, even one whose response was lost to an early-return. Detected
-		// from the dispatch TAG (methodDispatchGroups), not the case values, so a
-		// value-switch with method-named cases is correctly NOT recorded (spec 009, US2).
+		// Record this arm under its method-dispatch group (a method `switch` or a chained
+		// `if r.Method ==`), INCLUDING the switch `default`, so a consumer can recover the
+		// exact dispatch — its tag (the common dominator of the group's arms) and every arm,
+		// even one whose response was lost to an early-return. methodDispatchGroups detects a
+		// dispatch switch by its case values (switchHasMethodCase) — the same test the route
+		// splitter uses — so grouping stays consistent with the split (spec 009, US2).
 		if block.Stmt != nil {
 			if g, ok := dispatchGroups[block.Stmt.Pos()]; ok {
 				ctx.DispatchGroup = g

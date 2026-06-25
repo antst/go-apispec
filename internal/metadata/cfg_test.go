@@ -293,8 +293,8 @@ func simple() {
 
 // TestBuildFunctionCFGs_DispatchArms drives the full build with real type info over a
 // `switch r.Method` handler, asserting the per-function CFG records every arm of the
-// method dispatch (incl. the default) under one group — the data primaryDispatch /
-// commonDominator consume to scope a method split.
+// method dispatch (incl. the default) under one group — the data contributingDispatchArms
+// / commonDominator consume to scope a method split.
 func TestBuildFunctionCFGs_DispatchArms(t *testing.T) {
 	src := `package main
 import "net/http"

@@ -1009,9 +1009,14 @@ func (e *Extractor) splitByConditionalMethods(route *RouteInfo) []*RouteInfo {
 	// dispatch → its exact tag (covering a combined `case "GET","POST"` whose default is in
 	// the same group, and an arm whose success was lost to an early-return). Responses split
 	// across an `if r.Method` AND a `switch r.Method` → the dominator spanning both, so the
-	// non-primary dispatch's default is still excluded; a dispatch that wrote no response
-	// (a per-method header switch ahead of the responding one) is left out, so an
-	// independent conditional between two dispatches is not over-excluded.
+	// second dispatch's default is still excluded. A dispatch that wrote no response (a
+	// per-method header switch ahead of the responding one) is left out, so the independent
+	// conditional in the cfg_method_two_dispatch shape stays shared.
+	//
+	// Limitation (pre-existing, == the pre-CFG behavior; needs reaching-defs to fix): when
+	// TWO dispatches both respond, their union's common dominator can be the function entry,
+	// which dominates everything — so an independent conditional sequenced between them that
+	// is mutually exclusive with all arms (e.g. it early-returns) is over-excluded.
 	dispatchRoot, haveRoot := commonDominator(meta, fnKey, contributingDispatchArms(meta, fnKey, methodResponses))
 
 	shared := make(map[string]*ResponseInfo)
@@ -1129,9 +1134,12 @@ func primaryDispatchFn(meta *metadata.Metadata, methodResponses map[string]map[s
 // The common dominator of this union is the dispatch root: for one contributing dispatch
 // it is that dispatch's tag; for responses split across an `if r.Method` and a
 // `switch r.Method` it spans both, so the second dispatch's `default` is still dominated
-// (and excluded) rather than leaked. A dispatch that wrote no response (its group never
-// appears in methodResponses) is left out, so an independent conditional sequenced between
-// two dispatches is not swept under an over-wide root. Group 0 (a response in a
+// (and excluded) rather than leaked. A dispatch that wrote NO response (its group never
+// appears in methodResponses — e.g. a per-method header switch ahead of the responding one)
+// is left out, so it does not widen the root (the cfg_method_two_dispatch independent stays
+// shared). When two dispatches BOTH respond, the union root can be the function entry — an
+// independent between them that is mutually exclusive with all arms is then over-excluded, a
+// pre-existing limitation (see splitByConditionalMethods). Group 0 (a response in a
 // post-dispatch merge block, not an arm) and foreign-function branches are skipped.
 func contributingDispatchArms(meta *metadata.Metadata, fnKey string, methodResponses map[string]map[string]*ResponseInfo) []int32 {
 	seen := make(map[int]bool)

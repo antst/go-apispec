@@ -32,7 +32,7 @@ func scExtractor(meta *metadata.Metadata) *Extractor {
 }
 
 // scBranch builds a method-arm BranchContext at the given block, in dispatch group 1,
-// whose ParentStmtPos (pos) resolves to a function's CFG (so primaryDispatch finds it).
+// whose ParentStmtPos (pos) resolves to a function's CFG (so primaryDispatchFn finds it).
 func scBranch(meta *metadata.Metadata, block int32, pos string, methods ...string) *metadata.BranchContext {
 	return &metadata.BranchContext{
 		BlockKind:     "switch-case",
@@ -127,6 +127,9 @@ func TestSplit_ResponsesCopiedPerRoute(t *testing.T) {
 		Response: map[string]*ResponseInfo{
 			"200": scResp(200, "List", scBranch(meta, 2, "get:1", "GET")),
 			"201": scResp(201, "Made", scBranch(meta, 3, "post:1", "POST")),
+			// a COMBINED case response shared across GET+POST via the method-specific
+			// (responses) map — exercises that copy site too, not just `shared`.
+			"204": scResp(204, "Both", scBranch(meta, 2, "get:1", "GET", "POST")),
 			"500": scResp(500, "Err", nil), // unconditional → shared onto every method
 		},
 	}
@@ -138,15 +141,17 @@ func TestSplit_ResponsesCopiedPerRoute(t *testing.T) {
 	assert.Equal(t, "POST", routes[1].Method)
 
 	getR, postR := routes[0], routes[1]
-	require.NotNil(t, getR.Response["500"])
-	require.NotNil(t, postR.Response["500"])
-	assert.NotSame(t, getR.Response["500"], postR.Response["500"],
-		"a shared response must be COPIED per route, not aliased")
-
-	// Mutating one route's copy must not touch the other's.
-	getR.Response["500"].BodyType = "MUTATED"
-	assert.Equal(t, "Err", postR.Response["500"].BodyType,
-		"a per-route mutation must not leak across methods")
+	// Both the shared (500) and the combined-case method-specific (204) responses are
+	// COPIED per route — distinct pointers, and a per-route mutation does not leak.
+	for _, code := range []string{"500", "204"} {
+		require.NotNil(t, getR.Response[code], "GET missing %s", code)
+		require.NotNil(t, postR.Response[code], "POST missing %s", code)
+		assert.NotSame(t, getR.Response[code], postR.Response[code],
+			"%s must be COPIED per route, not aliased", code)
+		getR.Response[code].BodyType = "MUTATED"
+		assert.NotEqual(t, "MUTATED", postR.Response[code].BodyType,
+			"a per-route mutation of %s must not leak across methods", code)
+	}
 }
 
 // TestSplit_AfterMergeIndependentShared: a conditional after the switch merge (B7,
@@ -554,19 +559,27 @@ func TestContributingDispatchArms(t *testing.T) {
 	meta := newTestMeta()
 	const fn = "fn"
 	meta.InstallFunctionCFGForTest(fn, switchCFG(), map[string]metadata.BlockLoc{"x": {Block: 2}})
-	meta.FunctionCFGs[fn].DispatchArms = map[int][]int32{1: {2, 3}, 2: {5, 6}}
+	// fn records arms for groups 1, 2 (contributing), 0 and 7 (which MUST be skipped — the
+	// arms below let the test catch a removed skip: a leak would add 98 or 88/99).
+	meta.FunctionCFGs[fn].DispatchArms = map[int][]int32{1: {2, 3}, 2: {5, 6}, 0: {98}, 7: {88, 99}}
+	// A separate function owns the foreign branch's position.
+	meta.InstallFunctionCFGForTest("other", [][]int32{{}}, map[string]metadata.BlockLoc{"foreign:9": {Block: 0}})
 
 	mr := map[string]map[string]*ResponseInfo{
 		// two responses in group 1 (same group → arms counted once) + one in group 2.
 		"GET":  {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("x"), DispatchGroup: 1})},
 		"HEAD": {"200": scResp(200, "L", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("x"), DispatchGroup: 1})},
 		"POST": {"201": scResp(201, "M", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("x"), DispatchGroup: 2})},
-		// group 0 (a post-dispatch merge response) and a foreign-function branch are skipped.
-		"PUT":    {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("x"), DispatchGroup: 0})},
-		"DELETE": {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("foreign:9"), DispatchGroup: 9})},
+		// group 0 (a post-dispatch merge response): the group-0 guard must skip it, so fn's
+		// DispatchArms[0]={98} is NOT unioned in.
+		"PUT": {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("x"), DispatchGroup: 0})},
+		// a branch in a FOREIGN function naming group 7 (which also exists in fn's arms): the
+		// FnKeyForPos guard must skip it, so fn's DispatchArms[7]={88,99} is NOT unioned in.
+		"DELETE": {"204": scResp(204, "", &metadata.BranchContext{ParentStmtPos: meta.StringPool.Get("foreign:9"), DispatchGroup: 7})},
 	}
 	got := contributingDispatchArms(meta, fn, mr)
-	assert.ElementsMatch(t, []int32{2, 3, 5, 6}, got, "union of group 1 and group 2 arms, each group once")
+	assert.ElementsMatch(t, []int32{2, 3, 5, 6}, got,
+		"union of contributing groups 1 and 2; group-0 arms {98} and the foreign-fn group-7 arms {88,99} excluded")
 
 	assert.Empty(t, contributingDispatchArms(meta, "absent", mr), "unknown fn → no arms")
 }
