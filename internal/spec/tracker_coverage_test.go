@@ -339,10 +339,20 @@ func TestDetachChild_SingleChild(t *testing.T) {
 	assert.Len(t, parent.Children, 0)
 }
 
-func TestDetachChild_NilParent(_ *testing.T) {
+func TestDetachChild_NilParent(t *testing.T) {
 	child := &TrackerNode{key: "c"}
 	// Should not panic
-	detachChild(child)
+	assert.NotPanics(t, func() { detachChild(child) })
+}
+
+func TestDetachChild_EmptyParentChildren(t *testing.T) {
+	// Regression test: parent.Children is empty but child.Parent is set.
+	// Previously caused makeslice: cap out of range panic because the else
+	// branch computed make(..., 0-1) == make(..., -1).
+	parent := &TrackerNode{key: "p"}
+	child := &TrackerNode{key: "c", Parent: parent}
+	// parent.Children is deliberately left empty (not populated)
+	assert.NotPanics(t, func() { detachChild(child) })
 }
 
 // ---------------------------------------------------------------------------

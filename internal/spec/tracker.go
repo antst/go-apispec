@@ -263,7 +263,7 @@ func (nd *TrackerNode) AddChildren(children []*TrackerNode) {
 
 func detachChild(child *TrackerNode) {
 	if child.Parent != nil {
-		if len(child.Parent.Children) == 1 {
+		if len(child.Parent.Children) <= 1 {
 			child.Parent.Children = child.Parent.Children[:0]
 		} else {
 			// Should retain the order of the children
